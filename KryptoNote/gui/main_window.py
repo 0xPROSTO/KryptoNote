@@ -1,28 +1,30 @@
 import sys
 import os
 from PyQt6.QtWidgets import (QMainWindow, QGraphicsView, QGraphicsScene, QLabel,
-                             QToolBar, QFileDialog, QInputDialog, QLineEdit, QMessageBox)
+                             QToolBar, QFileDialog, QInputDialog, QLineEdit, QMessageBox, QApplication)
 from PyQt6.QtGui import QAction, QColor, QBrush
 from PyQt6.QtCore import Qt
 
 from ..core.crypto import CryptoManager
-from ..core.storage import Storage
+from ..core.database import NodeRepository, DatabaseConnection
 from ..utils.media_proc import create_thumbnail
+from ..config import Config
 
-from .nodes import TextNode, MediaNode
-from .nodes.ConnectionLine import ConnectionLine
+from .nodes import TextNode, MediaNode, ConnectionLine, NodeFactory
 from .canvas_view import InfiniteCanvasView
 
 
 class ZeroXXWindow(QMainWindow):
     def __init__(self, db_path):
         super().__init__()
-        self.setWindowTitle(f"ZeroXX-KryptoNote [{os.path.basename(db_path)}]")
+        self.setWindowTitle(f"{Config.APP_NAME} [{os.path.basename(db_path)}]")
         self.resize(1200, 800)
 
-        self.is_linking = False
+        self.setStyleSheet(Config.STYLE_MAIN_WINDOW)
+
         self.link_start_node = None
         self.nodes_map = {}
+        self.pending_commits = False
 
         self._init_core(db_path)
         self._setup_canvas()
@@ -31,164 +33,197 @@ class ZeroXXWindow(QMainWindow):
         try:
             self.load_from_db()
         except Exception as e:
+            print(e)
             QMessageBox.critical(self, "Error", f"Failed to decrypt/load DB.\nError: {e}")
-            sys.exit()
 
     def _init_core(self, db_path):
-        self.storage = Storage(db_path, None)
-        salt = self.storage.get_salt()
-
-        pwd, ok = QInputDialog.getText(self, "Login", f"Password for {os.path.basename(db_path)}:",
-                                       QLineEdit.EchoMode.Password)
-        if not ok or not pwd:
-            sys.exit()
-
+        self.db_conn = DatabaseConnection(db_path)
         self.crypto = CryptoManager()
+        salt = self.db_conn.get_salt()
 
         if not salt:
-            salt = os.urandom(16)
-            self.storage.set_salt(salt)
-            print("New DB initialized. Salt generated.")
+            while True:
+                pwd1, ok1 = QInputDialog.getText(self, "Create Password",
+                                                 f"Set password for new project:\n{os.path.basename(db_path)}",
+                                                 QLineEdit.EchoMode.Password)
+                if not ok1 or not pwd1: sys.exit()
 
-        self.crypto.derive_key(pwd, salt)
-        self.storage = Storage(db_path, self.crypto)
+                pwd2, ok2 = QInputDialog.getText(self, "Confirm Password",
+                                                 "Repeat password:",
+                                                 QLineEdit.EchoMode.Password)
+                if not ok2: sys.exit()
+
+                if pwd1 == pwd2:
+                    salt = os.urandom(16)
+                    self.db_conn.set_salt(salt)
+                    self.crypto.derive_key(pwd1, salt)
+                    break
+                else:
+                    QMessageBox.warning(self, "Mismatch", "Passwords do not match! Try again.")
+        else:
+            pwd, ok = QInputDialog.getText(self, "Login", f"Password for {os.path.basename(db_path)}:",
+                                           QLineEdit.EchoMode.Password)
+            if not ok or not pwd:
+                sys.exit()
+            self.crypto.derive_key(pwd, salt)
+
+        self.repo = NodeRepository(self.db_conn, self.crypto)
 
     def _setup_canvas(self):
         self.scene = QGraphicsScene()
-        self.scene.setSceneRect(-5000, -5000, 10000, 10000)
-        self.scene.setBackgroundBrush(QBrush(QColor("#121212")))
-
-        self.scene.selectionChanged.connect(self.handle_selection_change)
+        self.scene.setSceneRect(-25000, -25000, 50000, 50000)
+        self.scene.setBackgroundBrush(QBrush(QColor(Config.BACKGROUND_COLOR)))
 
         self.view = InfiniteCanvasView(self.scene)
+        self.view.mouse_moved.connect(self.update_coords)
+        self.view.node_clicked_signal.connect(self.handle_link_click)
+        self.view.connection_right_clicked_signal.connect(self.quick_delete_connection)
+
         self.setCentralWidget(self.view)
+        self.view.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
     def _setup_toolbar(self):
         toolbar = QToolBar("Tools")
         toolbar.setMovable(False)
         self.addToolBar(toolbar)
 
-        self.setStyleSheet("""
-            QToolBar { background: #1e1e1e; border-bottom: 1px solid #333; }
-            QToolButton { color: #ddd; padding: 5px; }
-            QToolButton:hover { background: #333; }
-            QToolButton:checked { background: #440000; border: 1px solid red; }
-        """)
+        actions = [
+            ("Add Note", self.add_text_node),
+            ("Add Image", lambda: self.add_media_node("image")),
+            ("Add Video", lambda: self.add_media_node("video"))
+        ]
 
-        btn_text = QAction("Add Text", self)
-        btn_text.triggered.connect(self.add_text_node)
-        toolbar.addAction(btn_text)
-
-        btn_img = QAction("Add Image", self)
-        btn_img.triggered.connect(lambda *args: self.add_media_node("image"))
-        toolbar.addAction(btn_img)
-
-        btn_vid = QAction("Add Video", self)
-        btn_vid.triggered.connect(lambda *args: self.add_media_node("video"))
-        toolbar.addAction(btn_vid)
+        for name, slot in actions:
+            act = QAction(name, self)
+            act.triggered.connect(slot)
+            toolbar.addAction(act)
 
         toolbar.addSeparator()
 
-        self.btn_link = QAction("🔗 Link Mode", self)
-        self.btn_link.setCheckable(True)
-        self.btn_link.triggered.connect(self.toggle_link_mode)
-        toolbar.addAction(self.btn_link)
+        self.status_label = QLabel("Hold [SHIFT] to Link Nodes")
+        self.status_label.setStyleSheet("padding-left: 10px;")
+        self.coords_label = QLabel("X: 0 Y: 0")
+        self.statusBar().addWidget(self.status_label, 1)
+        self.statusBar().addPermanentWidget(self.coords_label)
 
-        self.status_label = QLabel("Ready")
-        self.status_label.setStyleSheet("color: #777; padding-left: 10px;")
-        self.statusBar().addWidget(self.status_label)
+    def update_coords(self, pos):
+        self.coords_label.setText(f"X: {int(pos.x())} Y: {int(pos.y())}")
 
-    def toggle_link_mode(self):
-        self.is_linking = self.btn_link.isChecked()
-        self.link_start_node = None
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Shift:
+            self.status_label.setText("LINK MODE ACTIVE: Select start node...")
+            self.status_label.setStyleSheet(
+                f"color: {Config.COLOR_SECURE_LABEL}; font-weight: bold; padding-left: 10px;")
+        super().keyPressEvent(event)
 
-        if self.is_linking:
-            self.view.setDragMode(QGraphicsView.DragMode.NoDrag)
-            self.setCursor(Qt.CursorShape.CrossCursor)
-            self.status_label.setText("LINK MODE: Select FIRST node")
-        else:
-            self.view.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
-            self.setCursor(Qt.CursorShape.ArrowCursor)
-            self.status_label.setText("Ready")
+    def keyReleaseEvent(self, event):
+        if event.key() == Qt.Key.Key_Shift:
+            if self.link_start_node:
+                self.link_start_node.setSelected(False)
+                self.link_start_node = None
 
-    def handle_selection_change(self):
-        if not self.is_linking: return
+            if self.pending_commits:
+                self.status_label.setText("Saving changes to database...")
+                self.status_label.setStyleSheet(f"color: {Config.COLOR_ACCENT}; font-weight: bold; padding-left: 10px;")
 
-        selected = self.scene.selectedItems()
-        if not selected: return
+                QApplication.processEvents()
 
-        item = selected[0]
-        if not hasattr(item, 'item_id'): return
+                self.repo.commit_changes()
+                self.pending_commits = False
+                print("Bulk connection insert committed.")
 
+            self.status_label.setText("Hold [SHIFT] to Link Nodes")
+            self.status_label.setStyleSheet("color: #777; padding-left: 10px;")
+
+        super().keyReleaseEvent(event)
+
+    def handle_link_click(self, node):
         if self.link_start_node is None:
-            self.link_start_node = item
-            self.status_label.setText(f"LINK MODE: First selected. Now select SECOND node.")
-            item.setSelected(False)
+            self.link_start_node = node
+            node.setSelected(True)
+            self.status_label.setText(f"LINKING: Chain started. Click next...")
         else:
-            node_a = self.link_start_node
-            node_b = item
+            if self.link_start_node != node:
+                created = self.create_connection(self.link_start_node, node)
+                if created:
+                    self.status_label.setText(f"LINKED! Chain moves to new node.")
+                    self.link_start_node.setSelected(False)
+                    self.link_start_node = node
+                    self.link_start_node.setSelected(True)
 
-            if node_a == node_b: return
-
-            self.create_connection(node_a, node_b)
-
-            self.link_start_node = None
-            self.status_label.setText("LINK MODE: Link created! Select next FIRST node or Disable Link Mode.")
-            node_b.setSelected(False)
+    def quick_delete_connection(self, connection_item):
+        connection_item.delete_connection()
+        self.status_label.setText("Link deleted.")
 
     def create_connection(self, node_a, node_b):
-        conn_id = self.storage.add_connection(node_a.item_id, node_b.item_id)
-        line = ConnectionLine(conn_id, node_a, node_b, self.storage)
+        existing_conns = [c for c in node_a.connections if c.end_node == node_b or c.start_node == node_b]
+        if existing_conns: return False
+
+        conn_id = self.repo.add_connection(node_a.item_id, node_b.item_id, commit=False)
+        self.pending_commits = True
+
+        line = ConnectionLine(conn_id, node_a, node_b, self.repo)
         self.scene.addItem(line)
         node_a.add_connection(line)
         node_b.add_connection(line)
+        return True
 
     def load_from_db(self):
-        items = self.storage.get_all_items()
-        for item in items:
-            w, h = item['w'], item['h']
+        items = self.repo.get_all_items()
+        for item_data in items:
+            try:
+                node = NodeFactory.create_node_from_db(item_data, self.repo)
+                self.scene.addItem(node)
+                self.nodes_map[item_data['id']] = node
+            except Exception as e:
+                print(f"Skipping broken node {item_data.get('id')}: {e}")
 
-            if item['type'] == 'text':
-                node = TextNode(item['id'], item['x'], item['y'], w, h, item['text'], self.storage)
-            elif item['type'] in ['image', 'video']:
-                node = MediaNode(item['id'], item['x'], item['y'], w, h, item['thumbnail'],
-                                 self.storage, item['type'])
-
-            self.scene.addItem(node)
-            self.nodes_map[item['id']] = node
-
-        conns = self.storage.get_all_connections()
+        conns = self.repo.get_all_connections()
         for c in conns:
-            start_node = self.nodes_map.get(c['start_id'])
-            end_node = self.nodes_map.get(c['end_id'])
-
-            if start_node and end_node:
-                line = ConnectionLine(c['id'], start_node, end_node, self.storage)
+            n1 = self.nodes_map.get(c['start_id'])
+            n2 = self.nodes_map.get(c['end_id'])
+            if n1 and n2:
+                line = ConnectionLine(c['id'], n1, n2, self.repo)
                 self.scene.addItem(line)
-                start_node.add_connection(line)
-                end_node.add_connection(line)
+                n1.add_connection(line)
+                n2.add_connection(line)
 
     def get_center_pos(self):
         return self.view.mapToScene(self.view.viewport().rect().center())
 
     def add_text_node(self):
-        pos = self.get_center_pos()
-        text, ok = QInputDialog.getText(self, "New Note", "Текст заметки:")
-        if ok and text:
-            rid = self.storage.add_item("text", pos.x(), pos.y(), 200, 150, text=text)
-            node = TextNode(rid, pos.x(), pos.y(), 200, 150, text, self.storage)
+        title, ok = QInputDialog.getText(self, "New Note", "Title:")
+        if ok:
+            title = title.strip() or "Untitled"
+
+            pos = self.get_center_pos()
+            node = NodeFactory.create_new_text(self.repo, pos.x(), pos.y(), title)
+
             self.scene.addItem(node)
-            self.nodes_map[rid] = node
+            self.nodes_map[node.item_id] = node
+            node.mouseDoubleClickEvent(None)
 
     def add_media_node(self, mtype):
         path, _ = QFileDialog.getOpenFileName(self, "Select Media")
         if path:
             pos = self.get_center_pos()
             thumb_bytes = create_thumbnail(path)
-            with open(path, "rb") as f: full_data = f.read()
+            title = os.path.basename(path)
 
-            rid = self.storage.add_item(mtype, pos.x(), pos.y(), 220, 220,
-                                        thumb=thumb_bytes, data=full_data)
-            node = MediaNode(rid, pos.x(), pos.y(), 220, 220, thumb_bytes, self.storage, mtype)
+            full_data = None
+            if mtype != "video":
+                with open(path, "rb") as f:
+                    full_data = f.read()
+
+            if mtype == "video":
+                self.status_label.setText("Encrypting video...")
+                QApplication.processEvents()
+
+            node = NodeFactory.create_new_media(
+                self.repo, pos.x(), pos.y(), mtype, title, thumb_bytes,
+                full_data=full_data, file_path=path
+            )
+
+            self.status_label.setText("")
             self.scene.addItem(node)
-            self.nodes_map[rid] = node
+            self.nodes_map[node.item_id] = node

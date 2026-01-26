@@ -1,31 +1,21 @@
 import os
-import sys
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QListWidget, QPushButton,
-                             QLineEdit, QLabel, QHBoxLayout, QMessageBox, QWidget)
-from PyQt6.QtCore import Qt
+                             QLineEdit, QLabel, QHBoxLayout, QMessageBox, QWidget, QInputDialog)
+from KryptoNote.config import Config
 
 
 class ProjectLauncher(QDialog):
-    def __init__(self, base_dir="cases"):
+    def __init__(self, base_dir=None):
         super().__init__()
-        self.setWindowTitle("ZeroXX Case Manager")
-        self.resize(400, 500)
-        self.base_dir = base_dir
+        self.setWindowTitle(Config.APP_NAME)
+        self.resize(450, 550)
+        self.base_dir = base_dir if base_dir else Config.DB_PATH
         self.selected_file = None
 
         if not os.path.exists(self.base_dir):
             os.makedirs(self.base_dir)
 
-        self.setStyleSheet("""
-            QDialog { background-color: #1e1e1e; color: white; }
-            QListWidget { background-color: #252525; color: #ddd; border: 1px solid #333; font-size: 14px; }
-            QListWidget::item { padding: 5px; }
-            QListWidget::item:selected { background-color: #3d3d3d; }
-            QLineEdit { background-color: #252525; color: white; border: 1px solid #333; padding: 5px; }
-            QPushButton { background-color: #333; color: white; border: none; padding: 8px; }
-            QPushButton:hover { background-color: #444; }
-            QLabel { color: #aaa; }
-        """)
+        self.setStyleSheet(Config.STYLE_LAUNCHER)
 
         layout = QVBoxLayout(self)
 
@@ -37,6 +27,11 @@ class ProjectLauncher(QDialog):
         self.refresh_list()
         self.list_widget.itemDoubleClicked.connect(self.accept_selection)
         layout.addWidget(self.list_widget)
+
+        btn_del = QPushButton("Delete Selected Project")
+        btn_del.setStyleSheet("background-color: #550000; color: #ffaaaa; margin: 5px 0;")
+        btn_del.clicked.connect(self.delete_project)
+        layout.addWidget(btn_del)
 
         input_layout = QHBoxLayout()
         self.new_name_input = QLineEdit()
@@ -55,14 +50,33 @@ class ProjectLauncher(QDialog):
 
     def refresh_list(self):
         self.list_widget.clear()
-        files = [f for f in os.listdir(self.base_dir) if f.endswith('.zrx')]
-        for f in files:
-            self.list_widget.addItem(f)
+        if os.path.exists(self.base_dir):
+            files = [f for f in os.listdir(self.base_dir) if f.endswith('.zrx')]
+            for f in files:
+                self.list_widget.addItem(f)
+
+    def delete_project(self):
+        item = self.list_widget.currentItem()
+        if not item: return
+
+        filename = item.text()
+        text, ok = QInputDialog.getText(self, "Delete Confirmation",
+                                        f"Type the full filename '{filename}' to confirm deletion:")
+
+        if ok and text == filename:
+            full_path = os.path.join(self.base_dir, filename)
+            try:
+                os.remove(full_path)
+                QMessageBox.information(self, "Success", "Project deleted.")
+                self.refresh_list()
+            except Exception as e:
+                QMessageBox.critical(self, "Error", str(e))
+        elif ok:
+            QMessageBox.warning(self, "Error", "Filename did not match. Deletion cancelled.")
 
     def create_project(self):
         name = self.new_name_input.text().strip()
         if not name: return
-
         if not name.endswith(".zrx"):
             name += ".zrx"
 

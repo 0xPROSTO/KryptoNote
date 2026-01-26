@@ -1,17 +1,18 @@
 from PyQt6.QtWidgets import QGraphicsLineItem, QMenu, QGraphicsItem
-from PyQt6.QtGui import QPen, QColor, QPainter
-from PyQt6.QtCore import Qt, QPointF
+from PyQt6.QtGui import QPen, QColor
+
+from ...config import Config
 
 
 class ConnectionLine(QGraphicsLineItem):
-    def __init__(self, conn_id, start_node, end_node, storage):
+    def __init__(self, conn_id, start_node, end_node, repo):
         super().__init__()
         self.conn_id = conn_id
         self.start_node = start_node
         self.end_node = end_node
-        self.storage = storage
+        self.repo = repo
 
-        pen = QPen(QColor("#ff4444"), 2)
+        pen = QPen(QColor(Config.COLOR_LINK_LINE), 2)
         pen.setCosmetic(True)
         self.setPen(pen)
 
@@ -35,7 +36,7 @@ class ConnectionLine(QGraphicsLineItem):
             self.delete_connection()
 
     def delete_connection(self):
-        self.storage.delete_connection(self.conn_id)
+        self.repo.delete_connection(self.conn_id)
 
         if self.start_node: self.start_node.remove_connection(self)
         if self.end_node: self.end_node.remove_connection(self)

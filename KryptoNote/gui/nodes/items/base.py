@@ -1,21 +1,23 @@
-from .ResizeHandle import ResizeHandle
+from ..handles import ResizeHandle
 
 from PyQt6.QtWidgets import QGraphicsRectItem, QMenu, QGraphicsItem
 from PyQt6.QtGui import QColor, QBrush, QPen
 from PyQt6.QtCore import Qt
 
+from KryptoNote.config import Config
+
 
 class BaseNode(QGraphicsRectItem):
-    def __init__(self, item_id, x, y, w, h, storage):
+    def __init__(self, item_id, x, y, w, h, repo):
         super().__init__(0, 0, w, h)
         self.setPos(x, y)
-        self.setBrush(QBrush(QColor("#2d2d2d")))
+        self.setBrush(QBrush(QColor(Config.COLOR_NODE_BG)))
         self.setPen(QPen(Qt.PenStyle.NoPen))
         self.setFlags(QGraphicsItem.GraphicsItemFlag.ItemIsMovable |
                       QGraphicsItem.GraphicsItemFlag.ItemIsSelectable |
                       QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges)
         self.item_id = item_id
-        self.storage = storage
+        self.repo = repo
 
         self.resizer = ResizeHandle(self)
         self.update_resizer_pos()
@@ -54,14 +56,14 @@ class BaseNode(QGraphicsRectItem):
 
     def finalize_resize(self):
         r = self.rect()
-        self.storage.update_size(self.item_id, r.width(), r.height())
+        self.repo.update_size(self.item_id, r.width(), r.height())
 
     def update_content_layout(self):
         pass
 
     def mouseReleaseEvent(self, event):
         super().mouseReleaseEvent(event)
-        self.storage.update_pos(self.item_id, self.x(), self.y())
+        self.repo.update_pos(self.item_id, self.x(), self.y())
         for line in self.connections:
             line.update_position()
 
@@ -82,7 +84,7 @@ class BaseNode(QGraphicsRectItem):
         for line in list(self.connections):
             line.remove_from_scene_only()
 
-        self.storage.delete_node_cascade(self.item_id)
+        self.repo.delete_node_cascade(self.item_id)
 
         if self.scene():
             self.scene().removeItem(self)
