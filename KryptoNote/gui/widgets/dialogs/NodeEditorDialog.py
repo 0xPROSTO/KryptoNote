@@ -1,5 +1,5 @@
 from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTextEdit, QDialogButtonBox, QLineEdit, QLabel
-from PyQt6.QtGui import QColor, QPalette
+
 
 class NoteEditorDialog(QDialog):
     def __init__(self, current_title, current_text, parent=None):

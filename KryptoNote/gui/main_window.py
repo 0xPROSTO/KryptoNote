@@ -1,17 +1,18 @@
-import sys
 import os
-from PyQt6.QtWidgets import (QMainWindow, QGraphicsView, QGraphicsScene, QLabel,
-                             QToolBar, QFileDialog, QInputDialog, QLineEdit, QMessageBox, QApplication)
-from PyQt6.QtGui import QAction, QColor, QBrush
-from PyQt6.QtCore import Qt
+import sys
 
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QAction, QColor, QBrush, QShortcut, QKeySequence
+from PyQt6.QtWidgets import (QMainWindow, QGraphicsScene, QLabel,
+                             QToolBar, QFileDialog, QInputDialog, QLineEdit, QMessageBox, QApplication)
+
+from .canvas_view import InfiniteCanvasView
+from .nodes import ConnectionLine, NodeFactory
+from .widgets.dialogs.SearchDialog import SearchDialog
+from ..config import Config
 from ..core.crypto import CryptoManager
 from ..core.database import NodeRepository, DatabaseConnection
 from ..utils.media_proc import create_thumbnail
-from ..config import Config
-
-from .nodes import TextNode, MediaNode, ConnectionLine, NodeFactory
-from .canvas_view import InfiniteCanvasView
 
 
 class ZeroXXWindow(QMainWindow):
@@ -35,6 +36,10 @@ class ZeroXXWindow(QMainWindow):
         except Exception as e:
             print(e)
             QMessageBox.critical(self, "Error", f"Failed to decrypt/load DB.\nError: {e}")
+
+        self.search_dialog = None
+        self.search_shortcut = QShortcut(QKeySequence("Ctrl+F"), self)
+        self.search_shortcut.activated.connect(self.open_search)
 
     def _init_core(self, db_path):
         self.db_conn = DatabaseConnection(db_path)
@@ -61,7 +66,7 @@ class ZeroXXWindow(QMainWindow):
                 else:
                     QMessageBox.warning(self, "Mismatch", "Passwords do not match! Try again.")
         else:
-            pwd, ok = QInputDialog.getText(self, "Login", f"Password for {os.path.basename(db_path)}:",
+            pwd, ok = QInputDialog.getText(self, "Enter password", f"Password for {os.path.basename(db_path)}:",
                                            QLineEdit.EchoMode.Password)
             if not ok or not pwd:
                 sys.exit()
@@ -90,7 +95,8 @@ class ZeroXXWindow(QMainWindow):
         actions = [
             ("Add Note", self.add_text_node),
             ("Add Image", lambda: self.add_media_node("image")),
-            ("Add Video", lambda: self.add_media_node("video"))
+            ("Add Video", lambda: self.add_media_node("video")),
+            ("Search", self.open_search),
         ]
 
         for name, slot in actions:
@@ -105,6 +111,18 @@ class ZeroXXWindow(QMainWindow):
         self.coords_label = QLabel("X: 0 Y: 0")
         self.statusBar().addWidget(self.status_label, 1)
         self.statusBar().addPermanentWidget(self.coords_label)
+
+    def open_search(self):
+        query, ok = QInputDialog.getText(self, "Search", "Find node:")
+        if ok and query:
+            results = self.repo.search_items(query)
+            if results:
+                target = results[0]
+                self.view.centerOn(target['x'], target['y'])
+                if target['id'] in self.nodes_map:
+                    self.nodes_map[target['id']].setSelected(True)
+            else:
+                QMessageBox.information(self, "Info", "Nothing found.")
 
     def update_coords(self, pos):
         self.coords_label.setText(f"X: {int(pos.x())} Y: {int(pos.y())}")
@@ -227,3 +245,13 @@ class ZeroXXWindow(QMainWindow):
             self.status_label.setText("")
             self.scene.addItem(node)
             self.nodes_map[node.item_id] = node
+
+    def open_search(self):
+        if not self.search_dialog:
+            self.search_dialog = SearchDialog(self)
+
+        self.search_dialog.show()
+        self.search_dialog.raise_()
+        self.search_dialog.activateWindow()
+        self.search_dialog.search_input.setFocus()
+        self.search_dialog.search_input.selectAll()

@@ -9,6 +9,10 @@ class DatabaseConnection:
         self._init_db()
 
     def _init_db(self):
+        self.cursor.execute("PRAGMA journal_mode=WAL;")
+        self.cursor.execute("PRAGMA synchronous=NORMAL;")
+        self.cursor.execute("PRAGMA temp_store=MEMORY;")
+
         self.cursor.execute("CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value BLOB)")
 
         self.cursor.execute("""

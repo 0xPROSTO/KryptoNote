@@ -72,7 +72,7 @@ class BaseNode(QGraphicsRectItem):
         menu.setStyleSheet("QMenu { background-color: #333; color: white; }")
         self.extend_context_menu(menu)
         menu.addSeparator()
-        delete_action = menu.addAction("Удалить")
+        delete_action = menu.addAction("Delete")
         action = menu.exec(event.screenPos())
         if action == delete_action:
             self.delete_node()

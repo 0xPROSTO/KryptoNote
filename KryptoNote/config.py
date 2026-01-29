@@ -1,10 +1,20 @@
+import os
+import sys
+
+
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+
 class Config:
     # System
     APP_NAME = "ZeroXX-KryptoNote"
     VERSION = "1.2.0"
     CHUNK_SIZE = 4 * 1024 * 1024
+    if getattr(sys, 'frozen', False):
+        BASE_DIR = os.path.dirname(sys.executable)
+    else:
+        BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     DB_PATH = "cases/"
-    ICON_PATH = "KryptoNote/gui/assets/icon.png"
+    ICON_PATH = os.path.join(CURRENT_DIR, "gui", "assets", "icon.png")
 
     # Visuals
     GRID_SIZE = 100

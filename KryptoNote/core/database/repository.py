@@ -1,4 +1,3 @@
-import sqlite3
 from ..crypto import CryptoManager
 from ...config import Config
 
@@ -134,11 +133,38 @@ class NodeRepository:
         self.conn.commit()
 
     def delete_node_cascade(self, item_id):
+        self.cursor.execute("SELECT type, total_size FROM items WHERE id=?", (item_id,))
+        row = self.cursor.fetchone()
+
+        should_vacuum = False
+        if row:
+            item_type, total_size = row
+            if item_type == 'video' or (total_size and total_size > 10 * 1024 * 1024):
+                should_vacuum = True
+
         try:
             self.cursor.execute("DELETE FROM connections WHERE start_id=? OR end_id=?", (item_id, item_id))
             self.cursor.execute("DELETE FROM media_chunks WHERE item_id=?", (item_id,))
             self.cursor.execute("DELETE FROM items WHERE id=?", (item_id,))
             self.conn.commit()
+
+            if should_vacuum:
+                print("Vacuuming database...")
+                self.conn.execute("VACUUM")
+                print("Vacuum complete.")
+
         except Exception as e:
             self.conn.rollback()
             raise e
+
+    def search_items(self, query):
+        all_items = self.get_all_items()
+        results = []
+        q = query.lower()
+        for item in all_items:
+            title_match = q in item['title'].lower()
+            text_match = item['text'] and q in item['text'].lower()
+
+            if title_match or text_match:
+                results.append(item)
+        return results

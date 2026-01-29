@@ -29,7 +29,7 @@ class ConnectionLine(QGraphicsLineItem):
     def contextMenuEvent(self, event):
         menu = QMenu()
         menu.setStyleSheet("QMenu { background-color: #333; color: white; }")
-        delete_action = menu.addAction("Разорвать связь")
+        delete_action = menu.addAction("Remove Link")
         action = menu.exec(event.screenPos())
 
         if action == delete_action:

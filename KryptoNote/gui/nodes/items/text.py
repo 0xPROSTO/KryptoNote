@@ -8,7 +8,7 @@ class TextNode(BaseNode):
     def __init__(self, item_id, x, y, w, h, title, text, repo):
         super().__init__(item_id, x, y, w, h, repo)
         self.title = title
-        self.text_content = text if text else "Double click to edit..."
+        self.text_content = text if text else ""
 
         self.title_item = QGraphicsTextItem(self.title, self)
         self.title_item.setDefaultTextColor(QColor(Config.COLOR_TEXT_TITLE))
@@ -45,5 +45,5 @@ class TextNode(BaseNode):
             self.repo.update_text_content(self.item_id, self.title, self.text_content)
 
     def extend_context_menu(self, menu):
-        edit_action = menu.addAction("Редактировать")
+        edit_action = menu.addAction("Edit")
         edit_action.triggered.connect(lambda: self.mouseDoubleClickEvent(None))

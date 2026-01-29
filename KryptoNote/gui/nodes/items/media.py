@@ -66,18 +66,18 @@ class MediaNode(BaseNode):
         self.open_content()
 
     def extend_context_menu(self, menu):
-        open_action = menu.addAction("Открыть")
+        open_action = menu.addAction("Open")
         open_action.triggered.connect(self.open_content)
 
-        rename_action = menu.addAction("Переименовать")
+        rename_action = menu.addAction("Rename")
         rename_action.triggered.connect(self.rename_node)
 
         menu.addSeparator()
-        save_action = menu.addAction(f"Экспорт на диск")
+        save_action = menu.addAction(f"Export to Disk")
         save_action.triggered.connect(self.export_file)
 
     def rename_node(self):
-        new_title, ok = QInputDialog.getText(None, "Rename", "Новое название:", text=self.node_title)
+        new_title, ok = QInputDialog.getText(None, "Rename", "New Title:", text=self.node_title)
         if ok:
             self.node_title = new_title.strip() or "Untitled"
             self.title_item.setPlainText(self.node_title)
@@ -103,7 +103,7 @@ class MediaNode(BaseNode):
 
     def export_file(self):
         default_ext = ".jpg" if self.media_type == "image" else ".mp4"
-        path, _ = QFileDialog.getSaveFileName(None, "Сохранить файл", self.node_title + default_ext)
+        path, _ = QFileDialog.getSaveFileName(None, "Save File", self.node_title + default_ext)
         if path:
             if self.is_chunked:
                 with open(path, "wb") as f:

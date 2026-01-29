@@ -9,8 +9,8 @@ from ..config import Config
 
 class InfiniteCanvasView(QGraphicsView):
     mouse_moved = pyqtSignal(QPointF)
-    node_clicked_signal = pyqtSignal(object)  # Передает саму ноду
-    connection_right_clicked_signal = pyqtSignal(object)  # Передает связь
+    node_clicked_signal = pyqtSignal(object)
+    connection_right_clicked_signal = pyqtSignal(object)
 
     def __init__(self, scene):
         super().__init__(scene)
@@ -20,20 +20,24 @@ class InfiniteCanvasView(QGraphicsView):
         self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        self.setOptimizationFlag(QGraphicsView.OptimizationFlag.DontAdjustForAntialiasing, True)
 
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setMouseTracking(True)
 
+        self.is_erasing = False
+
     def drawBackground(self, painter, rect):
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
         super().drawBackground(painter, rect)
         grid_size = Config.GRID_SIZE
         left = int(rect.left()) - (int(rect.left()) % grid_size)
         top = int(rect.top()) - (int(rect.top()) % grid_size)
 
         pen = QPen(QColor(Config.GRID_COLOR))
-        pen.setWidth(1)
+        pen.setWidth(0)
         pen.setStyle(Qt.PenStyle.DotLine)
         painter.setPen(pen)
 
@@ -45,27 +49,51 @@ class InfiniteCanvasView(QGraphicsView):
     def mouseMoveEvent(self, event):
         scene_pos = self.mapToScene(event.pos())
         self.mouse_moved.emit(scene_pos)
-        super().mouseMoveEvent(event)
+        if self.is_erasing:
+            self.erase_under_mouse(event.pos())
+        else:
+            super().mouseMoveEvent(event)
 
     def mousePressEvent(self, event: QMouseEvent):
+        if event.button() == Qt.MouseButton.RightButton:
+            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                self.is_erasing = True
+                self.setDragMode(QGraphicsView.DragMode.NoDrag)
+                self.viewport().setCursor(Qt.CursorShape.ForbiddenCursor)
+                self.erase_under_mouse(event.pos())
+                event.accept()
+                return
+            else:
+                super().mousePressEvent(event)
+                return
+
         if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
             item = self.itemAt(event.pos())
-
             if event.button() == Qt.MouseButton.LeftButton:
                 if isinstance(item, BaseNode):
                     self.node_clicked_signal.emit(item)
                     return
-
                 if item and item.parentItem() and isinstance(item.parentItem(), BaseNode):
                     self.node_clicked_signal.emit(item.parentItem())
                     return
 
-            elif event.button() == Qt.MouseButton.RightButton:
-                if isinstance(item, ConnectionLine):
-                    self.connection_right_clicked_signal.emit(item)
-                    return
-
         super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if self.is_erasing:
+            self.is_erasing = False
+            self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+            self.viewport().unsetCursor()
+            return
+
+        super().mouseReleaseEvent(event)
+
+    def erase_under_mouse(self, pos):
+        items = self.items(pos)
+        for item in items:
+            if isinstance(item, ConnectionLine):
+                item.delete_connection()
+                break
 
     def wheelEvent(self, event):
         if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
