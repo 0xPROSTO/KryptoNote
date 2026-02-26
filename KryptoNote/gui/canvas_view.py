@@ -3,7 +3,6 @@ from PyQt6.QtGui import QPainter, QColor, QPen, QMouseEvent
 from PyQt6.QtCore import Qt, pyqtSignal, QPointF
 
 from .nodes import BaseNode, ConnectionLine
-
 from ..config import Config
 
 
@@ -46,13 +45,12 @@ class InfiniteCanvasView(QGraphicsView):
         for y in range(top, int(rect.bottom()), grid_size):
             painter.drawLine(int(rect.left()), y, int(rect.right()), y)
 
-    def mouseMoveEvent(self, event):
-        scene_pos = self.mapToScene(event.pos())
-        self.mouse_moved.emit(scene_pos)
-        if self.is_erasing:
-            self.erase_under_mouse(event.pos())
-        else:
-            super().mouseMoveEvent(event)
+    def _strip_ctrl(self, event: QMouseEvent) -> QMouseEvent:
+        mods = event.modifiers() & ~Qt.KeyboardModifier.ControlModifier
+        return QMouseEvent(
+            event.type(), event.position(), event.globalPosition(),
+            event.button(), event.buttons(), mods
+        )
 
     def mousePressEvent(self, event: QMouseEvent):
         if event.button() == Qt.MouseButton.RightButton:
@@ -77,14 +75,39 @@ class InfiniteCanvasView(QGraphicsView):
                     self.node_clicked_signal.emit(item.parentItem())
                     return
 
+        if self.dragMode() == QGraphicsView.DragMode.RubberBandDrag and event.button() == Qt.MouseButton.LeftButton:
+            if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                super().mousePressEvent(self._strip_ctrl(event))
+                return
+
         super().mousePressEvent(event)
 
-    def mouseReleaseEvent(self, event):
+    def mouseMoveEvent(self, event: QMouseEvent):
+        scene_pos = self.mapToScene(event.pos())
+        self.mouse_moved.emit(scene_pos)
+
+        if self.is_erasing:
+            self.erase_under_mouse(event.pos())
+            return
+
+        if self.dragMode() == QGraphicsView.DragMode.RubberBandDrag:
+            if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                super().mouseMoveEvent(self._strip_ctrl(event))
+                return
+
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent):
         if self.is_erasing:
             self.is_erasing = False
             self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
             self.viewport().unsetCursor()
             return
+
+        if self.dragMode() == QGraphicsView.DragMode.RubberBandDrag:
+            if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                super().mouseReleaseEvent(self._strip_ctrl(event))
+                return
 
         super().mouseReleaseEvent(event)
 
@@ -112,7 +135,10 @@ class InfiniteCanvasView(QGraphicsView):
             super().wheelEvent(event)
 
     def keyPressEvent(self, event):
-        if event.key() == Qt.Key.Key_Delete:
+        if event.key() == Qt.Key.Key_Control:
+            self.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
+            super().keyPressEvent(event)
+        elif event.key() == Qt.Key.Key_Delete:
             items = self.scene().selectedItems()
             if items:
                 confirm = QMessageBox.question(self, "Delete",
@@ -127,3 +153,14 @@ class InfiniteCanvasView(QGraphicsView):
                             item.delete_connection()
         else:
             super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event):
+        if event.key() == Qt.Key.Key_Control:
+            if not self.is_erasing:
+                self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+        super().keyReleaseEvent(event)
+
+    def focusOutEvent(self, event):
+        if not self.is_erasing:
+            self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+        super().focusOutEvent(event)

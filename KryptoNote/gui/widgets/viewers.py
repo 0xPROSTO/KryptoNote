@@ -8,6 +8,18 @@ from ...config import Config
 from ...core.io.stream import BlockEncryptedStream
 
 
+class ClickableSlider(QSlider):
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            if self.orientation() == Qt.Orientation.Horizontal:
+                val = self.minimum() + ((self.maximum() - self.minimum()) * event.pos().x()) / self.width()
+            else:
+                val = self.minimum() + ((self.maximum() - self.minimum()) * (self.height() - event.pos().y())) / self.height()
+            self.setValue(int(val))
+            self.sliderMoved.emit(int(val))
+        super().mousePressEvent(event)
+
+
 class SecureVideoPlayer(QDialog):
     def __init__(self, repo, item_id, total_size, chunk_size, title="Secure Video"):
         super().__init__()
@@ -33,41 +45,47 @@ class SecureVideoPlayer(QDialog):
         self.controls_container.setFixedHeight(50)
 
         ctrl_layout = QHBoxLayout(self.controls_container)
-        ctrl_layout.setContentsMargins(10, 5, 10, 5)
+        ctrl_layout.setContentsMargins(15, 0, 15, 0)
         ctrl_layout.setSpacing(15)
+        ctrl_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
         self.btn_play = QPushButton()
         self.icon_play = self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay)
         self.icon_pause = self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPause)
         self.btn_play.setIcon(self.icon_play)
         self.btn_play.setFlat(True)
+        self.btn_play.setFixedSize(30, 30)
         self.btn_play.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_play.clicked.connect(self.toggle_play)
         ctrl_layout.addWidget(self.btn_play)
 
-        self.seek_slider = QSlider(Qt.Orientation.Horizontal)
+        self.seek_slider = ClickableSlider(Qt.Orientation.Horizontal)
         self.seek_slider.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.seek_slider.setFixedHeight(20)
         self.seek_slider.sliderMoved.connect(self.set_position)
         self.seek_slider.sliderPressed.connect(self.pause_on_seek)
         self.seek_slider.sliderReleased.connect(self.play_on_seek)
         ctrl_layout.addWidget(self.seek_slider)
 
         self.lbl_time = QLabel("00:00 / 00:00")
-        self.lbl_time.setFixedWidth(90)
+        self.lbl_time.setFixedWidth(100)
         self.lbl_time.setAlignment(Qt.AlignmentFlag.AlignCenter)
         ctrl_layout.addWidget(self.lbl_time)
 
         vol_layout = QHBoxLayout()
         vol_layout.setSpacing(5)
+        vol_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
         btn_vol_icon = QPushButton()
         btn_vol_icon.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaVolume))
         btn_vol_icon.setFlat(True)
+        btn_vol_icon.setFixedSize(30, 30)
         btn_vol_icon.setEnabled(False)
         vol_layout.addWidget(btn_vol_icon)
 
-        self.vol_slider = QSlider(Qt.Orientation.Horizontal)
+        self.vol_slider = ClickableSlider(Qt.Orientation.Horizontal)
         self.vol_slider.setFixedWidth(80)
+        self.vol_slider.setFixedHeight(20)
         self.vol_slider.setRange(0, 100)
         self.vol_slider.setValue(10)
         self.vol_slider.setCursor(Qt.CursorShape.PointingHandCursor)

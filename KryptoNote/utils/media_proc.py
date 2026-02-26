@@ -1,6 +1,6 @@
 import io
 import cv2
-from PIL import Image
+from PIL import Image, ImageOps
 
 
 def create_thumbnail(file_path, size=(800, 800)):
@@ -15,6 +15,7 @@ def create_thumbnail(file_path, size=(800, 800)):
                 return None
         else:
             img = Image.open(file_path)
+            img = ImageOps.exif_transpose(img)
 
         if img.mode in ('RGBA', 'LA'):
             background = Image.new('RGB', img.size, (45, 45, 45))

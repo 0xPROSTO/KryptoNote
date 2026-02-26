@@ -2,7 +2,7 @@ from ..handles import ResizeHandle
 
 from PyQt6.QtWidgets import QGraphicsRectItem, QMenu, QGraphicsItem
 from PyQt6.QtGui import QColor, QBrush, QPen
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QPointF
 
 from KryptoNote.config import Config
 
@@ -24,7 +24,6 @@ class BaseNode(QGraphicsRectItem):
 
         self.connections = []
 
-
     def add_connection(self, line):
         if line not in self.connections:
             self.connections.append(line)
@@ -35,10 +34,15 @@ class BaseNode(QGraphicsRectItem):
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange:
+            if Config.SNAP_TO_GRID:
+                new_x = round(value.x() / Config.GRID_SIZE) * Config.GRID_SIZE
+                new_y = round(value.y() / Config.GRID_SIZE) * Config.GRID_SIZE
+                value = QPointF(new_x, new_y)
+
             for line in self.connections:
                 line.update_position()
+            return value
         return super().itemChange(change, value)
-
 
     def update_resizer_pos(self):
         r = self.rect()
@@ -47,6 +51,10 @@ class BaseNode(QGraphicsRectItem):
     def handle_resize(self, new_pos):
         new_w = max(100, new_pos.x())
         new_h = max(50, new_pos.y())
+        if Config.SNAP_TO_GRID:
+            new_w = round(new_w / Config.GRID_SIZE) * Config.GRID_SIZE
+            new_h = round(new_h / Config.GRID_SIZE) * Config.GRID_SIZE
+
         self.setRect(0, 0, new_w, new_h)
         self.update_resizer_pos()
         self.update_content_layout()

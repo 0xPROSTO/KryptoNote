@@ -28,13 +28,15 @@ class NodeRepository:
         self.conn.commit()
         return item_id
 
-    def add_streamed_video(self, item_type, x, y, w, h, title, thumb, file_path):
+    def add_streamed_video(self, item_type, x, y, w, h, title, thumb, file_path, progress_callback=None):
         enc_title = self.crypto.encrypt(title.encode())
         enc_thumb = self.crypto.encrypt(thumb) if thumb else None
-        file_size = 0
+
         with open(file_path, 'rb') as f:
             f.seek(0, 2)
             file_size = f.tell()
+
+        total_chunks = (file_size + Config.CHUNK_SIZE - 1) // Config.CHUNK_SIZE if file_size > 0 else 1
 
         self.cursor.execute("""
                             INSERT INTO items (type, title, x, y, width, height, thumbnail, is_chunked, total_size)
@@ -47,10 +49,22 @@ class NodeRepository:
             while True:
                 chunk = f.read(Config.CHUNK_SIZE)
                 if not chunk: break
+
+                if progress_callback:
+                    progress_callback(index + 1, total_chunks, "Encrypting")
+
                 enc_chunk = self.crypto.encrypt(chunk)
                 self.cursor.execute("INSERT INTO media_chunks (item_id, chunk_index, data) VALUES (?, ?, ?)",
                                     (item_id, index, enc_chunk))
                 index += 1
+
+                if index % 25 == 0:
+                    if progress_callback:
+                        progress_callback(index, total_chunks, "Writing to disk")
+                    self.conn.commit()
+
+        if progress_callback:
+            progress_callback(total_chunks, total_chunks, "Finalizing")
         self.conn.commit()
         return item_id
 

@@ -1,10 +1,11 @@
+import datetime
 import os
-import sys
+import sqlite3
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QAction, QColor, QBrush, QShortcut, QKeySequence
 from PyQt6.QtWidgets import (QMainWindow, QGraphicsScene, QLabel,
-                             QToolBar, QFileDialog, QInputDialog, QLineEdit, QMessageBox, QApplication)
+                             QFileDialog, QInputDialog, QLineEdit, QMessageBox, QApplication)
 
 from .canvas_view import InfiniteCanvasView
 from .nodes import ConnectionLine, NodeFactory
@@ -27,19 +28,26 @@ class ZeroXXWindow(QMainWindow):
         self.nodes_map = {}
         self.pending_commits = False
 
+        self.default_status = "Ready | Hold [SHIFT] to Link | Hold [CTRL] to Multi-Select"
+
         self._init_core(db_path)
         self._setup_canvas()
-        self._setup_toolbar()
+        self._setup_menubar()
 
         try:
             self.load_from_db()
         except Exception as e:
             print(e)
-            QMessageBox.critical(self, "Error", f"Failed to decrypt/load DB.\nError: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to decrypt/load DB. Incorrect password?\nError: {e}")
+            self.db_conn.conn.close()
+            raise RuntimeError("Failed to load DB")
 
         self.search_dialog = None
         self.search_shortcut = QShortcut(QKeySequence("Ctrl+F"), self)
         self.search_shortcut.activated.connect(self.open_search)
+
+        self.snap_shortcut = QShortcut(QKeySequence("G"), self)
+        self.snap_shortcut.activated.connect(self.toggle_snap_to_grid)
 
     def _init_core(self, db_path):
         self.db_conn = DatabaseConnection(db_path)
@@ -51,17 +59,20 @@ class ZeroXXWindow(QMainWindow):
                 pwd1, ok1 = QInputDialog.getText(self, "Create Password",
                                                  f"Set password for new project:\n{os.path.basename(db_path)}",
                                                  QLineEdit.EchoMode.Password)
-                if not ok1 or not pwd1: sys.exit()
+                if not ok1 or not pwd1: raise RuntimeError("Password entry cancelled")
 
                 pwd2, ok2 = QInputDialog.getText(self, "Confirm Password",
                                                  "Repeat password:",
                                                  QLineEdit.EchoMode.Password)
-                if not ok2: sys.exit()
+                if not ok2: raise RuntimeError("Password entry cancelled")
 
                 if pwd1 == pwd2:
                     salt = os.urandom(16)
                     self.db_conn.set_salt(salt)
                     self.crypto.derive_key(pwd1, salt)
+
+                    check_bytes = self.crypto.encrypt(b"KryptoNote_Auth_OK")
+                    self.db_conn.set_auth_check(check_bytes)
                     break
                 else:
                     QMessageBox.warning(self, "Mismatch", "Passwords do not match! Try again.")
@@ -69,8 +80,20 @@ class ZeroXXWindow(QMainWindow):
             pwd, ok = QInputDialog.getText(self, "Enter password", f"Password for {os.path.basename(db_path)}:",
                                            QLineEdit.EchoMode.Password)
             if not ok or not pwd:
-                sys.exit()
+                raise RuntimeError("Password entry cancelled")
+
             self.crypto.derive_key(pwd, salt)
+
+            auth_check = self.db_conn.get_auth_check()
+            if auth_check:
+                try:
+                    dec = self.crypto.decrypt(auth_check)
+                    if dec != b"KryptoNote_Auth_OK":
+                        raise Exception("Verification failed")
+                except Exception:
+                    QMessageBox.critical(self, "Error", "Incorrect password!")
+                    self.db_conn.conn.close()
+                    raise RuntimeError("Incorrect password")
 
         self.repo = NodeRepository(self.db_conn, self.crypto)
 
@@ -87,51 +110,108 @@ class ZeroXXWindow(QMainWindow):
         self.setCentralWidget(self.view)
         self.view.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
-    def _setup_toolbar(self):
-        toolbar = QToolBar("Tools")
-        toolbar.setMovable(False)
-        self.addToolBar(toolbar)
+    def _setup_menubar(self):
+        menubar = self.menuBar()
+        menubar.setStyleSheet("""
+            QMenuBar { background-color: #1e1e1e; color: #dddddd; border-bottom: 1px solid #333; }
+            QMenuBar::item { background-color: transparent; padding: 4px 10px; margin: 2px; }
+            QMenuBar::item:selected { background-color: #3a3a3a; border-radius: 4px; }
+            QMenu { background-color: #2b2b2b; color: #dddddd; border: 1px solid #444; }
+            QMenu::item { padding: 6px 30px 6px 20px; }
+            QMenu::item:selected { background-color: #444444; }
+        """)
 
-        actions = [
-            ("Add Note", self.add_text_node),
-            ("Add Image", lambda: self.add_media_node("image")),
-            ("Add Video", lambda: self.add_media_node("video")),
-            ("Search", self.open_search),
-        ]
+        file_menu = menubar.addMenu("File")
 
-        for name, slot in actions:
-            act = QAction(name, self)
-            act.triggered.connect(slot)
-            toolbar.addAction(act)
+        act_close = QAction("Close", self)
+        act_close.triggered.connect(self.close)
+        file_menu.addAction(act_close)
 
-        toolbar.addSeparator()
+        act_backup = QAction("Backup", self)
+        act_backup.triggered.connect(self.create_backup)
+        file_menu.addAction(act_backup)
 
-        self.status_label = QLabel("Hold [SHIFT] to Link Nodes")
-        self.status_label.setStyleSheet("padding-left: 10px;")
+        add_menu = menubar.addMenu("Add")
+
+        act_note = QAction("Note", self)
+        act_note.triggered.connect(self.add_text_node)
+        add_menu.addAction(act_note)
+
+        act_img = QAction("Image", self)
+        act_img.triggered.connect(lambda: self.add_media_node("image"))
+        add_menu.addAction(act_img)
+
+        act_vid = QAction("Video", self)
+        act_vid.triggered.connect(lambda: self.add_media_node("video"))
+        add_menu.addAction(act_vid)
+
+        tools_menu = menubar.addMenu("Tools")
+
+        act_search = QAction("Search\t[Ctrl+F]", self)
+        act_search.triggered.connect(self.open_search)
+        tools_menu.addAction(act_search)
+
+        snap_state = "ON" if getattr(Config, 'SNAP_TO_GRID', False) else "OFF"
+        self.act_snap = QAction(f"Snap to Grid: {snap_state}\t[G]", self)
+        self.act_snap.triggered.connect(self.toggle_snap_to_grid)
+        tools_menu.addAction(self.act_snap)
+
+        self.status_label = QLabel(self.default_status)
+        self.status_label.setStyleSheet("padding-left: 10px; color: #999;")
         self.coords_label = QLabel("X: 0 Y: 0")
         self.statusBar().addWidget(self.status_label, 1)
         self.statusBar().addPermanentWidget(self.coords_label)
 
+    def toggle_snap_to_grid(self):
+        Config.SNAP_TO_GRID = not getattr(Config, 'SNAP_TO_GRID', False)
+        self.act_snap.setText("Snap to Grid: ON\t[G]" if Config.SNAP_TO_GRID else "Snap to Grid: OFF\t[G]")
+        msg = "Snap to grid enabled." if Config.SNAP_TO_GRID else "Snap to grid disabled."
+        self.status_label.setText(msg)
+
+    def create_backup(self):
+        db_path = self.db_conn.db_path
+        base_name = os.path.basename(db_path)
+        name, ext = os.path.splitext(base_name)
+
+        backup_dir = os.path.join(os.path.dirname(db_path), "backup")
+        os.makedirs(backup_dir, exist_ok=True)
+
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_name = f"{name}_{timestamp}{ext}"
+        backup_path = os.path.join(backup_dir, backup_name)
+
+        self.repo.commit_changes()
+
+        try:
+            backup_conn = sqlite3.connect(backup_path)
+            self.db_conn.conn.backup(backup_conn)
+            backup_conn.close()
+            QMessageBox.information(self, "Backup", f"Backup created successfully:\n{backup_path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Backup Error", f"Failed to create backup:\n{e}")
+
     def open_search(self):
-        query, ok = QInputDialog.getText(self, "Search", "Find node:")
-        if ok and query:
-            results = self.repo.search_items(query)
-            if results:
-                target = results[0]
-                self.view.centerOn(target['x'], target['y'])
-                if target['id'] in self.nodes_map:
-                    self.nodes_map[target['id']].setSelected(True)
-            else:
-                QMessageBox.information(self, "Info", "Nothing found.")
+        if not self.search_dialog:
+            self.search_dialog = SearchDialog(self)
+
+        self.search_dialog.show()
+        self.search_dialog.raise_()
+        self.search_dialog.activateWindow()
+        self.search_dialog.search_input.setFocus()
+        self.search_dialog.search_input.selectAll()
 
     def update_coords(self, pos):
         self.coords_label.setText(f"X: {int(pos.x())} Y: {int(pos.y())}")
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Shift:
-            self.status_label.setText("LINK MODE ACTIVE: Select start node...")
+            self.status_label.setText("LINK MODE ACTIVE: Select start node to link...")
             self.status_label.setStyleSheet(
                 f"color: {Config.COLOR_SECURE_LABEL}; font-weight: bold; padding-left: 10px;")
+        elif event.key() == Qt.Key.Key_Control:
+            self.status_label.setText("SELECTION ACTIVE: Drag mouse to select multiple objects.")
+            self.status_label.setStyleSheet(f"color: {Config.COLOR_ACCENT}; font-weight: bold; padding-left: 10px;")
+
         super().keyPressEvent(event)
 
     def keyReleaseEvent(self, event):
@@ -143,15 +223,16 @@ class ZeroXXWindow(QMainWindow):
             if self.pending_commits:
                 self.status_label.setText("Saving changes to database...")
                 self.status_label.setStyleSheet(f"color: {Config.COLOR_ACCENT}; font-weight: bold; padding-left: 10px;")
-
                 QApplication.processEvents()
-
                 self.repo.commit_changes()
                 self.pending_commits = False
-                print("Bulk connection insert committed.")
 
-            self.status_label.setText("Hold [SHIFT] to Link Nodes")
-            self.status_label.setStyleSheet("color: #777; padding-left: 10px;")
+            self.status_label.setText(self.default_status)
+            self.status_label.setStyleSheet("color: #999; padding-left: 10px;")
+
+        elif event.key() == Qt.Key.Key_Control:
+            self.status_label.setText(self.default_status)
+            self.status_label.setStyleSheet("color: #999; padding-left: 10px;")
 
         super().keyReleaseEvent(event)
 
@@ -222,36 +303,58 @@ class ZeroXXWindow(QMainWindow):
             node.mouseDoubleClickEvent(None)
 
     def add_media_node(self, mtype):
-        path, _ = QFileDialog.getOpenFileName(self, "Select Media")
-        if path:
+        paths, _ = QFileDialog.getOpenFileNames(self, "Select Media")
+        if not paths: return
+
+        for i, path in enumerate(paths):
             pos = self.get_center_pos()
+            offset = i * 25
+            x, y = pos.x() + offset, pos.y() + offset
+
+            if getattr(Config, 'SNAP_TO_GRID', False):
+                x = round(x / Config.GRID_SIZE) * Config.GRID_SIZE
+                y = round(y / Config.GRID_SIZE) * Config.GRID_SIZE
+
             thumb_bytes = create_thumbnail(path)
             title = os.path.basename(path)
 
             full_data = None
+
+            def progress_cb(current, total, status="Encrypting"):
+                self.status_label.setText(f"{status} video {i + 1}/{len(paths)} (Chunk {current}/{total})...")
+                QApplication.processEvents()
+
             if mtype != "video":
-                with open(path, "rb") as f:
-                    full_data = f.read()
+                from PIL import Image, ImageOps
+                import io
+                try:
+                    orig_img = Image.open(path)
+                    fmt = orig_img.format or "JPEG"
+                    img = ImageOps.exif_transpose(orig_img)
+                    if img.mode in ('RGBA', 'LA') and fmt == "JPEG":
+                        background = Image.new('RGB', img.size, (45, 45, 45))
+                        background.paste(img, mask=img.split()[-1])
+                        img = background
+                    elif img.mode != 'RGB' and fmt == "JPEG":
+                        img = img.convert('RGB')
+
+                    byte_arr = io.BytesIO()
+                    img.save(byte_arr, format=fmt)
+                    full_data = byte_arr.getvalue()
+                except Exception as e:
+                    print(f"Error correcting image orientation: {e}")
+                    with open(path, "rb") as f:
+                        full_data = f.read()
 
             if mtype == "video":
-                self.status_label.setText("Encrypting video...")
+                self.status_label.setText(f"Preparing video {i + 1}/{len(paths)}...")
                 QApplication.processEvents()
 
             node = NodeFactory.create_new_media(
-                self.repo, pos.x(), pos.y(), mtype, title, thumb_bytes,
-                full_data=full_data, file_path=path
+                self.repo, x, y, mtype, title, thumb_bytes,
+                full_data=full_data, file_path=path, progress_callback=progress_cb
             )
 
-            self.status_label.setText("")
+            self.status_label.setText(self.default_status)
             self.scene.addItem(node)
             self.nodes_map[node.item_id] = node
-
-    def open_search(self):
-        if not self.search_dialog:
-            self.search_dialog = SearchDialog(self)
-
-        self.search_dialog.show()
-        self.search_dialog.raise_()
-        self.search_dialog.activateWindow()
-        self.search_dialog.search_input.setFocus()
-        self.search_dialog.search_input.selectAll()

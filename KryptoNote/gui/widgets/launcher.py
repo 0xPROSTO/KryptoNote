@@ -30,14 +30,19 @@ class ProjectLauncher(QDialog):
 
         btn_del = QPushButton("Delete Selected Project")
         btn_del.setStyleSheet("background-color: #550000; color: #ffaaaa; margin: 5px 0;")
+        btn_del.setAutoDefault(False)
         btn_del.clicked.connect(self.delete_project)
         layout.addWidget(btn_del)
 
         input_layout = QHBoxLayout()
         self.new_name_input = QLineEdit()
         self.new_name_input.setPlaceholderText("New case name...")
+
         btn_create = QPushButton("+ Create")
+        btn_create.setAutoDefault(False)
         btn_create.clicked.connect(self.create_project)
+
+        self.new_name_input.returnPressed.connect(self.create_project)
 
         input_layout.addWidget(self.new_name_input)
         input_layout.addWidget(btn_create)
@@ -45,6 +50,8 @@ class ProjectLauncher(QDialog):
 
         btn_open = QPushButton("Open Selected Case")
         btn_open.setStyleSheet("background-color: #005500; font-weight: bold; margin-top: 10px;")
+        btn_open.setDefault(True)
+        btn_open.setAutoDefault(True)
         btn_open.clicked.connect(self.accept_selection)
         layout.addWidget(btn_open)
 

@@ -44,11 +44,11 @@ class NodeFactory:
         return TextNode(rid, x, y, w, h, title, "", repo)
 
     @staticmethod
-    def create_new_media(repo, x, y, mtype, title, thumb_bytes, full_data=None, file_path=None):
+    def create_new_media(repo, x, y, mtype, title, thumb_bytes, full_data=None, file_path=None, progress_callback=None):
         w, h = Config.NODE_MEDIA_SIZE, Config.NODE_MEDIA_SIZE
 
         if mtype == "video" and file_path:
-            rid = repo.add_streamed_video(mtype, x, y, w, h, title, thumb_bytes, file_path)
+            rid = repo.add_streamed_video(mtype, x, y, w, h, title, thumb_bytes, file_path, progress_callback)
             import os
             total_size = os.path.getsize(file_path)
             return MediaNode(rid, x, y, w, h, title, thumb_bytes, repo, mtype, 1, total_size)

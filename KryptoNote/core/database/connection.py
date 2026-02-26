@@ -62,3 +62,12 @@ class DatabaseConnection:
     def set_salt(self, salt_bytes):
         self.cursor.execute("INSERT OR REPLACE INTO metadata (key, value) VALUES ('auth_salt', ?)", (salt_bytes,))
         self.conn.commit()
+
+    def get_auth_check(self):
+        self.cursor.execute("SELECT value FROM metadata WHERE key='auth_check'")
+        row = self.cursor.fetchone()
+        return row[0] if row else None
+
+    def set_auth_check(self, check_bytes):
+        self.cursor.execute("INSERT OR REPLACE INTO metadata (key, value) VALUES ('auth_check', ?)", (check_bytes,))
+        self.conn.commit()

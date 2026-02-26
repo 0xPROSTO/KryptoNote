@@ -25,6 +25,7 @@ class Config:
     NODE_DEFAULT_WIDTH = 200
     NODE_DEFAULT_HEIGHT = 150
     NODE_MEDIA_SIZE = 220
+    SNAP_TO_GRID = False
 
     # Colors
     COLOR_NODE_BG = "#2d2d2d"
