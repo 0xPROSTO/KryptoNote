@@ -7,7 +7,7 @@ CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 class Config:
     # System
     APP_NAME = "ZeroXX-KryptoNote"
-    VERSION = "1.2.0"
+    VERSION = "1.2.2"
     CHUNK_SIZE = 4 * 1024 * 1024
     if getattr(sys, 'frozen', False):
         BASE_DIR = os.path.dirname(sys.executable)

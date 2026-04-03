@@ -133,15 +133,18 @@ class ZeroXXWindow(QMainWindow):
 
         add_menu = menubar.addMenu("Add")
 
-        act_note = QAction("Note", self)
+        act_note = QAction("Note\t[Ctrl+N]", self)
+        act_note.setShortcut(QKeySequence("Ctrl+N"))
         act_note.triggered.connect(self.add_text_node)
         add_menu.addAction(act_note)
 
-        act_img = QAction("Image", self)
+        act_img = QAction("Image\t[Ctrl+M]", self)
+        act_img.setShortcut(QKeySequence("Ctrl+M"))
         act_img.triggered.connect(lambda: self.add_media_node("image"))
         add_menu.addAction(act_img)
 
-        act_vid = QAction("Video", self)
+        act_vid = QAction("Video\t[Ctrl+Shift+M]", self)
+        act_vid.setShortcut(QKeySequence("Ctrl+Shift+M"))
         act_vid.triggered.connect(lambda: self.add_media_node("video"))
         add_menu.addAction(act_vid)
 
@@ -167,6 +170,7 @@ class ZeroXXWindow(QMainWindow):
         self.act_snap.setText("Snap to Grid: ON\t[G]" if Config.SNAP_TO_GRID else "Snap to Grid: OFF\t[G]")
         msg = "Snap to grid enabled." if Config.SNAP_TO_GRID else "Snap to grid disabled."
         self.status_label.setText(msg)
+        self.view._update_overlay()
 
     def create_backup(self):
         db_path = self.db_conn.db_path
@@ -291,22 +295,37 @@ class ZeroXXWindow(QMainWindow):
         return self.view.mapToScene(self.view.viewport().rect().center())
 
     def add_text_node(self):
-        title, ok = QInputDialog.getText(self, "New Note", "Title:")
-        if ok:
-            title = title.strip() or "Untitled"
+        title = "New Note"
+        pos = self.get_center_pos()
+        node = NodeFactory.create_new_text(self.repo, pos.x(), pos.y(), title)
 
-            pos = self.get_center_pos()
-            node = NodeFactory.create_new_text(self.repo, pos.x(), pos.y(), title)
-
-            self.scene.addItem(node)
-            self.nodes_map[node.item_id] = node
-            node.mouseDoubleClickEvent(None)
+        self.scene.addItem(node)
+        self.nodes_map[node.item_id] = node
+        node.mouseDoubleClickEvent(None)
 
     def add_media_node(self, mtype):
-        paths, _ = QFileDialog.getOpenFileNames(self, "Select Media")
+        if mtype == "image":
+            file_filter = "Images (*.png *.jpg *.jpeg *.bmp *.gif *.webp)"
+        elif mtype == "video":
+            file_filter = "Videos (*.mp4 *.avi *.mkv *.mov *.webm)"
+        else:
+            file_filter = "All Files (*)"
+
+        paths, _ = QFileDialog.getOpenFileNames(self, f"Select {mtype.capitalize()}s", "", file_filter)
         if not paths: return
 
+        valid_img_exts = {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp"}
+        valid_vid_exts = {".mp4", ".avi", ".mkv", ".mov", ".webm"}
+
         for i, path in enumerate(paths):
+            ext = os.path.splitext(path)[1].lower()
+            
+            if mtype == "image" and ext not in valid_img_exts:
+                QMessageBox.critical(self, "Invalid File", f"The file '{os.path.basename(path)}' is not a valid image format.")
+                continue
+            elif mtype == "video" and ext not in valid_vid_exts:
+                QMessageBox.critical(self, "Invalid File", f"The file '{os.path.basename(path)}' is not a valid video format.")
+                continue
             pos = self.get_center_pos()
             offset = i * 25
             x, y = pos.x() + offset, pos.y() + offset

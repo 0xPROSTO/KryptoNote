@@ -16,6 +16,7 @@ class BaseNode(QGraphicsRectItem):
         self.setFlags(QGraphicsItem.GraphicsItemFlag.ItemIsMovable |
                       QGraphicsItem.GraphicsItemFlag.ItemIsSelectable |
                       QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges)
+        self.setCacheMode(QGraphicsItem.CacheMode.DeviceCoordinateCache)
         self.item_id = item_id
         self.repo = repo
 

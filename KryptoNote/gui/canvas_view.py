@@ -1,6 +1,6 @@
-from PyQt6.QtWidgets import QGraphicsView, QMessageBox
+from PyQt6.QtWidgets import QGraphicsView, QMessageBox, QLabel
 from PyQt6.QtGui import QPainter, QColor, QPen, QMouseEvent
-from PyQt6.QtCore import Qt, pyqtSignal, QPointF
+from PyQt6.QtCore import Qt, pyqtSignal, QPointF, QLineF
 
 from .nodes import BaseNode, ConnectionLine
 from ..config import Config
@@ -27,30 +27,63 @@ class InfiniteCanvasView(QGraphicsView):
         self.setMouseTracking(True)
 
         self.is_erasing = False
+        self._last_emitted_coords = (None, None)
+        
+        self.overlay_label = QLabel(self)
+        self.overlay_label.setStyleSheet("""
+            background-color: rgba(35, 35, 35, 180);
+            color: #aaaaaa; 
+            font-family: Segoe UI, sans-serif; 
+            font-size: 12px;
+            padding: 5px 10px;
+            border-radius: 4px;
+            border: 1px solid #444444;
+        """)
+        self.overlay_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._update_overlay()
+        
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_overlay()
 
+    def _update_overlay(self):
+        snap_state = "ON" if getattr(Config, 'SNAP_TO_GRID', False) else "OFF"
+        self.overlay_label.setText(f"Snap: {snap_state}")
+        self.overlay_label.adjustSize()
+        x = self.viewport().width() - self.overlay_label.width() - 15
+        y = self.viewport().height() - self.overlay_label.height() - 15
+        self.overlay_label.move(x, y)
+        
     def drawBackground(self, painter, rect):
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
-        super().drawBackground(painter, rect)
+        painter.fillRect(rect, QColor(Config.BACKGROUND_COLOR))
+        
+        scale = self.transform().m11()
+        if scale < 0.15:
+            return
+
         grid_size = Config.GRID_SIZE
         left = int(rect.left()) - (int(rect.left()) % grid_size)
         top = int(rect.top()) - (int(rect.top()) % grid_size)
 
-        pen = QPen(QColor(Config.GRID_COLOR))
+        lines = []
+        for x in range(left, int(rect.right()), grid_size):
+            lines.append(QLineF(x, rect.top(), x, rect.bottom()))
+        for y in range(top, int(rect.bottom()), grid_size):
+            lines.append(QLineF(rect.left(), y, rect.right(), y))
+
+        grid_color = QColor(Config.GRID_COLOR)
+        if scale < 0.5:
+            alpha = int(max(0, min(255, (scale - 0.15) / 0.35 * 255)))
+            grid_color.setAlpha(alpha)
+
+        pen = QPen(grid_color)
         pen.setWidth(0)
         pen.setStyle(Qt.PenStyle.DotLine)
         painter.setPen(pen)
 
-        for x in range(left, int(rect.right()), grid_size):
-            painter.drawLine(x, int(rect.top()), x, int(rect.bottom()))
-        for y in range(top, int(rect.bottom()), grid_size):
-            painter.drawLine(int(rect.left()), y, int(rect.right()), y)
+        painter.drawLines(lines)
 
-    def _strip_ctrl(self, event: QMouseEvent) -> QMouseEvent:
-        mods = event.modifiers() & ~Qt.KeyboardModifier.ControlModifier
-        return QMouseEvent(
-            event.type(), event.position(), event.globalPosition(),
-            event.button(), event.buttons(), mods
-        )
+
 
     def mousePressEvent(self, event: QMouseEvent):
         if event.button() == Qt.MouseButton.RightButton:
@@ -75,25 +108,19 @@ class InfiniteCanvasView(QGraphicsView):
                     self.node_clicked_signal.emit(item.parentItem())
                     return
 
-        if self.dragMode() == QGraphicsView.DragMode.RubberBandDrag and event.button() == Qt.MouseButton.LeftButton:
-            if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-                super().mousePressEvent(self._strip_ctrl(event))
-                return
-
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent):
         scene_pos = self.mapToScene(event.pos())
-        self.mouse_moved.emit(scene_pos)
+
+        ix, iy = int(scene_pos.x()), int(scene_pos.y())
+        if (ix, iy) != self._last_emitted_coords:
+            self._last_emitted_coords = (ix, iy)
+            self.mouse_moved.emit(scene_pos)
 
         if self.is_erasing:
             self.erase_under_mouse(event.pos())
             return
-
-        if self.dragMode() == QGraphicsView.DragMode.RubberBandDrag:
-            if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-                super().mouseMoveEvent(self._strip_ctrl(event))
-                return
 
         super().mouseMoveEvent(event)
 
@@ -103,11 +130,6 @@ class InfiniteCanvasView(QGraphicsView):
             self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
             self.viewport().unsetCursor()
             return
-
-        if self.dragMode() == QGraphicsView.DragMode.RubberBandDrag:
-            if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-                super().mouseReleaseEvent(self._strip_ctrl(event))
-                return
 
         super().mouseReleaseEvent(event)
 
