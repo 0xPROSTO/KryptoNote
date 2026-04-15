@@ -1,6 +1,6 @@
-from PySide6.QtWidgets import QGraphicsView, QMessageBox, QLabel
-from PySide6.QtGui import QPainter, QColor, QPen, QMouseEvent
 from PySide6.QtCore import Qt, Signal, QPointF, QLineF
+from PySide6.QtGui import QPainter, QColor, QPen, QMouseEvent
+from PySide6.QtWidgets import QGraphicsView, QMessageBox, QLabel
 
 from ..nodes import BaseNode, ConnectionLine
 from ...config import Config
@@ -16,10 +16,9 @@ class InfiniteCanvasView(QGraphicsView):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
-        self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
+        self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.BoundingRectViewportUpdate)
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        self.setOptimizationFlag(QGraphicsView.OptimizationFlag.DontAdjustForAntialiasing, True)
 
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
@@ -28,7 +27,7 @@ class InfiniteCanvasView(QGraphicsView):
 
         self.is_erasing = False
         self._last_emitted_coords = (None, None)
-        
+
         self.overlay_label = QLabel(self)
         self.overlay_label.setStyleSheet("""
             background-color: rgba(35, 35, 35, 180);
@@ -41,7 +40,7 @@ class InfiniteCanvasView(QGraphicsView):
         """)
         self.overlay_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self._update_overlay()
-        
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._update_overlay()
@@ -53,13 +52,19 @@ class InfiniteCanvasView(QGraphicsView):
         x = self.viewport().width() - self.overlay_label.width() - 15
         y = self.viewport().height() - self.overlay_label.height() - 15
         self.overlay_label.move(x, y)
-        
+
     def drawBackground(self, painter, rect):
-        painter.fillRect(rect, QColor(Config.BACKGROUND_COLOR))
-        
+        painter.save()
+
+        fill_rect = rect.adjusted(-5, -5, 5, 5)
+        painter.fillRect(fill_rect, QColor(Config.BACKGROUND_COLOR))
+
         scale = self.transform().m11()
         if scale < 0.15:
+            painter.restore()
             return
+
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
 
         grid_size = Config.GRID_SIZE
         grid_main = Config.GRID_SIZE_MAIN
@@ -75,39 +80,42 @@ class InfiniteCanvasView(QGraphicsView):
         lines = []
         lines_main = []
 
-        for x in range(left_grid, right, grid_size):
-            if x % grid_main == 0:
-                lines_main.append(QLineF(x, top, x, bottom))
-            else:
-                lines.append(QLineF(x, top, x, bottom))
+        fixed_lim = 1000000
 
-        for y in range(top_grid, bottom, grid_size):
+        for x in range(left_grid, right + grid_size, grid_size):
+            if x % grid_main == 0:
+                lines_main.append(QLineF(x, -fixed_lim, x, fixed_lim))
+            elif scale >= 0.5:
+                lines.append(QLineF(x, -fixed_lim, x, fixed_lim))
+
+        for y in range(top_grid, bottom + grid_size, grid_size):
             if y % grid_main == 0:
-                lines_main.append(QLineF(left, y, right, y))
-            else:
-                lines.append(QLineF(left, y, right, y))
+                lines_main.append(QLineF(-fixed_lim, y, fixed_lim, y))
+            elif scale >= 0.5:
+                lines.append(QLineF(-fixed_lim, y, fixed_lim, y))
 
         grid_color = QColor(Config.GRID_COLOR)
         grid_color_main = QColor(Config.GRID_COLOR_MAIN)
 
         if scale < 0.5:
             alpha = int(max(0, min(255, (scale - 0.15) / 0.35 * 255)))
-            grid_color.setAlpha(alpha)
             grid_color_main.setAlpha(alpha)
 
-        pen = QPen(grid_color)
-        pen.setWidth(0)
-        pen.setStyle(Qt.PenStyle.DotLine)
-        painter.setPen(pen)
-        painter.drawLines(lines)
+        if lines:
+            pen = QPen(grid_color)
+            pen.setWidth(0)
+            pen.setStyle(Qt.PenStyle.DotLine)
+            painter.setPen(pen)
+            painter.drawLines(lines)
 
-        pen_main = QPen(grid_color_main)
-        pen_main.setWidth(0)
-        pen_main.setStyle(Qt.PenStyle.SolidLine)
-        painter.setPen(pen_main)
-        painter.drawLines(lines_main)
+        if lines_main:
+            pen_main = QPen(grid_color_main)
+            pen_main.setWidth(0)
+            pen_main.setStyle(Qt.PenStyle.SolidLine)
+            painter.setPen(pen_main)
+            painter.drawLines(lines_main)
 
-
+        painter.restore()
 
     def mousePressEvent(self, event: QMouseEvent):
         if event.button() == Qt.MouseButton.RightButton:

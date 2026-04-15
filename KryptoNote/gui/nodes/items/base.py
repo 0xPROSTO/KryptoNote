@@ -94,10 +94,12 @@ class BaseNode(QGraphicsRectItem):
                 new_x = round(value.x() / Config.GRID_SIZE) * Config.GRID_SIZE
                 new_y = round(value.y() / Config.GRID_SIZE) * Config.GRID_SIZE
                 value = QPointF(new_x, new_y)
+            return value
 
+        elif change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
             for line in self.connections:
                 line.update_position()
-            return value
+
         elif change == QGraphicsItem.GraphicsItemChange.ItemSelectedHasChanged:
             self.update_pen()
             for line in self.connections:
