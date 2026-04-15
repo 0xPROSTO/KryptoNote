@@ -1,7 +1,7 @@
 import sys
 
 from PySide6.QtCore import QEventLoop, Qt
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QIcon, QImageReader
 from PySide6.QtWidgets import QApplication, QDialog
 
 from KryptoNote.config import Config
@@ -11,6 +11,7 @@ from KryptoNote.gui.widgets.launcher import ProjectLauncher
 
 def main():
     app = QApplication(sys.argv)
+    QImageReader.setAllocationLimit(0)
     app.setStyle("Fusion")
 
     app_icon = QIcon(Config.ICON_PATH)

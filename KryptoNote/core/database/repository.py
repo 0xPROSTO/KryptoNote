@@ -13,7 +13,7 @@ class NodeRepository:
         enc_title = self.crypto.encrypt(title.encode()) if title else self.crypto.encrypt(b"Untitled")
         enc_text = self.crypto.encrypt(text.encode()) if text else None
         enc_thumb = self.crypto.encrypt(thumb) if thumb else None
-        enc_data = self.crypto.encrypt(data) if data and len(data) < Config.CHUNK_SIZE * 2 else None
+        enc_data = self.crypto.encrypt(data) if data else None
 
         is_chunked = 0
         total_size = len(data) if data else 0

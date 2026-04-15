@@ -1,7 +1,7 @@
 from PySide6.QtWidgets import (QGraphicsPixmapItem, QDialog, QVBoxLayout,
-                             QGraphicsView, QGraphicsScene, QPushButton)
-from PySide6.QtGui import QColor, QBrush, QPainter
-from PySide6.QtCore import Qt, QTimer
+                             QGraphicsView, QGraphicsScene, QPushButton, QGraphicsItem)
+from PySide6.QtGui import QColor, QBrush, QPainter, QImage, QPixmap
+from PySide6.QtCore import Qt, QTimer, QRectF
 
 
 class ZoomableView(QGraphicsView):
@@ -29,8 +29,31 @@ class ZoomableView(QGraphicsView):
         event.accept()
 
 
+class LargeImageItem(QGraphicsItem):
+    """Custom item for very large images that exceed GPU texture limits (rendering on CPU)."""
+    def __init__(self, image, parent=None):
+        super().__init__(parent)
+        self.image = image
+        self._rect = QRectF(0, 0, image.width(), image.height())
+
+    def boundingRect(self):
+        return self._rect
+
+    def paint(self, painter, option, widget):
+        if self.image.isNull():
+            return
+        
+        # Optimization: Only draw the area currently exposed/visible
+        # This prevents performance hits when zoomed into a 200MP image
+        exposed = option.exposedRect.intersected(self._rect)
+        if not exposed.isEmpty():
+            # Enable high-quality smoothing for the software-rendered image
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+            painter.drawImage(exposed, self.image, exposed)
+
+
 class MediaViewerDialog(QDialog):
-    def __init__(self, pixmap, parent=None):
+    def __init__(self, image, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Secure Viewer")
         self.resize(1000, 800)
@@ -61,9 +84,22 @@ class MediaViewerDialog(QDialog):
         self.view.setStyleSheet("border: none;")
         layout.addWidget(self.view)
 
-        self.pixmap = pixmap
-        self.pix_item = QGraphicsPixmapItem(self.pixmap)
-        self.pix_item.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
+        self.image = image
+        self.pix_item = None
+        
+        # Adaptive Selection: GPU vs Software rendering
+        # Threshold 8192 is a safe target for most GPUs texture limits
+        if self.image.width() > 8192 or self.image.height() > 8192:
+            self.pix_item = LargeImageItem(self.image)
+        else:
+            pixmap = QPixmap.fromImage(self.image)
+            if not pixmap.isNull():
+                self.pix_item = QGraphicsPixmapItem(pixmap)
+                self.pix_item.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
+            else:
+                # Fallback if conversion failed for other reasons
+                self.pix_item = LargeImageItem(self.image)
+
         self.scene.addItem(self.pix_item)
 
         self.current_rotation = 0

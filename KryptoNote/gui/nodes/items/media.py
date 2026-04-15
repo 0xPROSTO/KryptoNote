@@ -1,11 +1,12 @@
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QPixmap, QImage, QFont
-from PySide6.QtWidgets import QGraphicsTextItem, QGraphicsPixmapItem, QFileDialog, QInputDialog
-
-from KryptoNote.config import Config
+from .base import BaseNode
 from KryptoNote.gui.widgets.dialogs.MediaViewerDialog import MediaViewerDialog
 from KryptoNote.gui.widgets.viewers import SecureVideoPlayer
-from .base import BaseNode
+
+from PySide6.QtWidgets import QGraphicsTextItem, QGraphicsPixmapItem, QFileDialog, QInputDialog
+from PySide6.QtGui import QColor, QPixmap, QImage, QFont, QImageReader
+from PySide6.QtCore import Qt, QBuffer, QIODevice
+
+from KryptoNote.config import Config
 
 
 class MediaNode(BaseNode):
@@ -87,16 +88,23 @@ class MediaNode(BaseNode):
         if self.media_type == "image":
             data = self.repo.get_full_data(self.item_id)
             if data:
-                image = QImage.fromData(data)
-                pixmap = QPixmap.fromImage(image)
-                viewer = MediaViewerDialog(pixmap)
-                viewer.exec()
+                # Use QImageReader with setAutoTransform to respect EXIF orientation
+                buffer = QBuffer()
+                buffer.setData(data)
+                buffer.open(QIODevice.OpenModeFlag.ReadOnly)
+                
+                reader = QImageReader(buffer)
+                reader.setAutoTransform(True)
+                image = reader.read()
+                
+                if not image.isNull():
+                    viewer = MediaViewerDialog(image)
+                    viewer.exec()
 
         elif self.media_type == "video":
             if self.is_chunked:
                 try:
-                    player = SecureVideoPlayer(self.repo, self.item_id, self.total_size, Config.CHUNK_SIZE,
-                                               self.node_title)
+                    player = SecureVideoPlayer(self.repo, self.item_id, self.total_size, Config.CHUNK_SIZE, self.node_title)
                     player.exec()
                 except Exception as e:
                     print(e)
@@ -113,5 +121,6 @@ class MediaNode(BaseNode):
                         if data: f.write(data)
             else:
                 data = self.repo.get_full_data(self.item_id)
-                with open(path, "wb") as f:
-                    f.write(data)
+                if data is not None:
+                    with open(path, "wb") as f:
+                        f.write(data)

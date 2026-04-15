@@ -1,6 +1,7 @@
 import io
 import cv2
 from PIL import Image, ImageOps
+Image.MAX_IMAGE_PIXELS = None
 
 
 def create_thumbnail(file_path, size=(800, 800)):

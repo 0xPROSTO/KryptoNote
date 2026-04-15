@@ -370,26 +370,11 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
                 QApplication.processEvents()
 
             if mtype != "video":
-                from PIL import Image, ImageOps
-                import io
                 try:
-                    orig_img = Image.open(path)
-                    fmt = orig_img.format or "JPEG"
-                    img = ImageOps.exif_transpose(orig_img)
-                    if img.mode in ('RGBA', 'LA') and fmt == "JPEG":
-                        background = Image.new('RGB', img.size, (45, 45, 45))
-                        background.paste(img, mask=img.split()[-1])
-                        img = background
-                    elif img.mode != 'RGB' and fmt == "JPEG":
-                        img = img.convert('RGB')
-
-                    byte_arr = io.BytesIO()
-                    img.save(byte_arr, format=fmt)
-                    full_data = byte_arr.getvalue()
-                except Exception as e:
-                    print(f"Error correcting image orientation: {e}")
                     with open(path, "rb") as f:
                         full_data = f.read()
+                except Exception as e:
+                    print(f"Error reading image file: {e}")
 
             if mtype == "video":
                 self.status_label.setText(f"Preparing video {i + 1}/{len(paths)}...")
