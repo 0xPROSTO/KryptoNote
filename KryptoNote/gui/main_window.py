@@ -3,16 +3,16 @@ import os
 import sqlite3
 import sys
 
-from PySide6.QtCore import Qt, QPoint, QRect
-from PySide6.QtGui import QAction, QColor, QBrush, QShortcut, QKeySequence
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QAction, QColor, QBrush, QShortcut, QKeySequence, QGuiApplication
 from PySide6.QtWidgets import (QMainWindow, QGraphicsScene, QLabel, QWidget, QVBoxLayout,
-                             QFileDialog, QInputDialog, QLineEdit, QMessageBox, QApplication)
+                               QFileDialog, QInputDialog, QLineEdit, QMessageBox, QApplication)
 
 from .canvas_view import InfiniteCanvasView
+from .native_window import NativeWindowMixin
 from .nodes import ConnectionLine, NodeFactory
 from .widgets.dialogs.SearchDialog import SearchDialog
 from .widgets.title_bar import CustomTitleBar
-from .native_window import NativeWindowMixin
 from ..config import Config
 from ..core.crypto import CryptoManager
 from ..core.database import NodeRepository, DatabaseConnection
@@ -25,6 +25,9 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         QMainWindow.__init__(self)
         self.is_windows = sys.platform == "win32"
 
+        self.resize(1280, 800)
+        self.setMinimumSize(600, 450)
+
         if self.is_windows:
             self.title_bar = CustomTitleBar(self)
             self.title_bar.set_title(f"{Config.APP_NAME} [{os.path.basename(db_path)}]")
@@ -33,8 +36,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             self.setWindowTitle(f"{Config.APP_NAME} [{os.path.basename(db_path)}]")
             self.title_bar = None
 
-        self.resize(1200, 800)
-        self.setMinimumSize(600, 400)
+        self._adjust_initial_window_size()
 
         self.setStyleSheet(Config.STYLE_MAIN_WINDOW)
 
@@ -63,6 +65,24 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self.snap_shortcut = QShortcut(QKeySequence("G"), self)
         self.snap_shortcut.activated.connect(self.toggle_snap_to_grid)
 
+    def _adjust_initial_window_size(self):
+        screen = QGuiApplication.primaryScreen()
+        if not screen: return
+
+        available = screen.availableGeometry()
+        target_w = 1440
+        target_h = 900
+
+        if target_w > available.width() * 0.9:
+            target_w = available.width() * 0.9
+        if target_h > available.height() * 0.9:
+            target_h = available.height() * 0.9
+
+        x = available.x() + (available.width() - target_w) // 2
+        y = available.y() + (available.height() - target_h) // 2
+
+        self.setGeometry(int(x), int(y), int(target_w), int(target_h))
+
     def _init_core(self, db_path):
         self.db_conn = DatabaseConnection(db_path)
         self.crypto = CryptoManager()
@@ -70,14 +90,14 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
 
         if not salt:
             while True:
-                pwd1, ok1 = QInputDialog.getText(self, "Create Password",
-                                                 f"Set password for new project:\n{os.path.basename(db_path)}",
-                                                 QLineEdit.EchoMode.Password)
+                pwd1, ok1 = self._get_centered_input("Create Password",
+                                                     f"Set password for new project:\n{os.path.basename(db_path)}",
+                                                     QLineEdit.EchoMode.Password)
                 if not ok1 or not pwd1: raise RuntimeError("Password entry cancelled")
 
-                pwd2, ok2 = QInputDialog.getText(self, "Confirm Password",
-                                                 "Repeat password:",
-                                                 QLineEdit.EchoMode.Password)
+                pwd2, ok2 = self._get_centered_input("Confirm Password",
+                                                     "Repeat password:",
+                                                     QLineEdit.EchoMode.Password)
                 if not ok2: raise RuntimeError("Password entry cancelled")
 
                 if pwd1 == pwd2:
@@ -91,8 +111,8 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
                 else:
                     QMessageBox.warning(self, "Mismatch", "Passwords do not match! Try again.")
         else:
-            pwd, ok = QInputDialog.getText(self, "Enter password", f"Password for {os.path.basename(db_path)}:",
-                                           QLineEdit.EchoMode.Password)
+            pwd, ok = self._get_centered_input("Enter password", f"Password for {os.path.basename(db_path)}:",
+                                               QLineEdit.EchoMode.Password)
             if not ok or not pwd:
                 raise RuntimeError("Password entry cancelled")
 
@@ -125,10 +145,10 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         vbox = QVBoxLayout(central)
         vbox.setContentsMargins(0, 0, 0, 0)
         vbox.setSpacing(0)
-        
+
         if getattr(self, 'title_bar', None):
             vbox.addWidget(self.title_bar)
-            
+
         vbox.addWidget(self.view, 1)
         self.setCentralWidget(central)
         self.view.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -345,12 +365,14 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
 
         for i, path in enumerate(paths):
             ext = os.path.splitext(path)[1].lower()
-            
+
             if mtype == "image" and ext not in valid_img_exts:
-                QMessageBox.critical(self, "Invalid File", f"The file '{os.path.basename(path)}' is not a valid image format.")
+                QMessageBox.critical(self, "Invalid File",
+                                     f"The file '{os.path.basename(path)}' is not a valid image format.")
                 continue
             elif mtype == "video" and ext not in valid_vid_exts:
-                QMessageBox.critical(self, "Invalid File", f"The file '{os.path.basename(path)}' is not a valid video format.")
+                QMessageBox.critical(self, "Invalid File",
+                                     f"The file '{os.path.basename(path)}' is not a valid video format.")
                 continue
             pos = self.get_center_pos()
             offset = i * 25
@@ -388,3 +410,21 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             self.status_label.setText(self.default_status)
             self.scene.addItem(node)
             self.nodes_map[node.item_id] = node
+
+    def _get_centered_input(self, title, label, echo_mode=QLineEdit.EchoMode.Normal):
+        dialog = QInputDialog(self)
+        dialog.setWindowTitle(title)
+        dialog.setLabelText(label)
+        dialog.setTextEchoMode(echo_mode)
+        dialog.resize(400, 150)
+
+        screen = QGuiApplication.primaryScreen()
+        screen_geom = screen.availableGeometry()
+
+        x = screen_geom.x() + (screen_geom.width() - dialog.width()) // 2
+        y = screen_geom.y() + (screen_geom.height() - dialog.height()) // 2
+        dialog.move(x, y)
+
+        if dialog.exec() == QInputDialog.DialogCode.Accepted:
+            return dialog.textValue(), True
+        return "", False
