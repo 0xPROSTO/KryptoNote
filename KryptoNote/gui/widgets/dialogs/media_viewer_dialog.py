@@ -1,7 +1,7 @@
-from PySide6.QtCore import Qt, QTimer, QRectF
-from PySide6.QtGui import QColor, QBrush, QPainter, QPixmap, QGuiApplication
 from PySide6.QtWidgets import (QGraphicsPixmapItem, QDialog, QVBoxLayout,
-                               QGraphicsView, QGraphicsScene, QPushButton, QGraphicsItem)
+                             QGraphicsView, QGraphicsScene, QPushButton, QGraphicsItem)
+from PySide6.QtGui import QColor, QBrush, QPainter, QImage, QPixmap, QGuiApplication
+from PySide6.QtCore import Qt, QTimer, QRectF
 
 
 class ZoomableView(QGraphicsView):
@@ -31,7 +31,6 @@ class ZoomableView(QGraphicsView):
 
 class LargeImageItem(QGraphicsItem):
     """Custom item for very large images that exceed GPU texture limits (rendering on CPU)."""
-
     def __init__(self, image, parent=None):
         super().__init__(parent)
         self.image = image
@@ -43,7 +42,7 @@ class LargeImageItem(QGraphicsItem):
     def paint(self, painter, option, widget):
         if self.image.isNull():
             return
-
+        
         exposed = option.exposedRect.intersected(self._rect)
         if not exposed.isEmpty():
             painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
@@ -55,31 +54,31 @@ class MediaViewerDialog(QDialog):
         super().__init__(parent)
         self.image = image
         self.setWindowTitle("Secure Viewer")
-
+        
         screen = QGuiApplication.primaryScreen()
         screen_geom = screen.availableGeometry()
-
+        
         limit_w = screen_geom.width() * 0.8
         limit_h = screen_geom.height() * 0.8
-
+        
         img_w = image.width()
         img_h = image.height()
         aspect_ratio = img_w / img_h
-
+        
         target_w = img_w
         target_h = img_h
-
+        
         if target_w > limit_w:
             target_w = limit_w
             target_h = target_w / aspect_ratio
-
+            
         if target_h > limit_h:
             target_h = limit_h
             target_w = target_h * aspect_ratio
-
+            
         x = screen_geom.x() + (screen_geom.width() - target_w) // 2
         y = screen_geom.y() + (screen_geom.height() - target_h) // 2
-
+        
         self.setGeometry(int(x), int(y), int(target_w), int(target_h))
 
         self.setStyleSheet("""
@@ -109,7 +108,7 @@ class MediaViewerDialog(QDialog):
         layout.addWidget(self.view)
 
         self.pix_item = None
-
+        
         if self.image.width() > 8192 or self.image.height() > 8192:
             self.pix_item = LargeImageItem(self.image)
         else:

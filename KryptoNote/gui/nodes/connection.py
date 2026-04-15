@@ -6,12 +6,12 @@ from ...config import Config
 
 
 class ConnectionLine(QGraphicsLineItem):
-    def __init__(self, conn_id, start_node, end_node, repo):
+    def __init__(self, conn_id, start_node, end_node, service):
         super().__init__()
         self.conn_id = conn_id
         self.start_node = start_node
         self.end_node = end_node
-        self.repo = repo
+        self.service = service
 
         self.currentColor = QColor(Config.COLOR_LINK_LINE)
         pen = QPen(self.currentColor, 2)
@@ -91,7 +91,7 @@ class ConnectionLine(QGraphicsLineItem):
             self.delete_connection()
 
     def delete_connection(self):
-        self.repo.delete_connection(self.conn_id)
+        self.service.delete_connection(self.conn_id)
 
         if self.start_node: self.start_node.remove_connection(self)
         if self.end_node: self.end_node.remove_connection(self)

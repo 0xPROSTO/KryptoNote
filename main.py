@@ -5,7 +5,7 @@ from PySide6.QtGui import QIcon, QImageReader
 from PySide6.QtWidgets import QApplication, QDialog
 
 from KryptoNote.config import Config
-from KryptoNote.gui.main_window import ZeroXXWindow
+from KryptoNote.gui.windows.main_window import ZeroXXWindow
 from KryptoNote.gui.widgets.launcher import ProjectLauncher
 
 

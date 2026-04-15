@@ -3,20 +3,21 @@ import os
 import sqlite3
 import sys
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QPoint, QRect
 from PySide6.QtGui import QAction, QColor, QBrush, QShortcut, QKeySequence, QGuiApplication
 from PySide6.QtWidgets import (QMainWindow, QGraphicsScene, QLabel, QWidget, QVBoxLayout,
-                               QFileDialog, QInputDialog, QLineEdit, QMessageBox, QApplication)
+                             QFileDialog, QInputDialog, QLineEdit, QMessageBox, QApplication)
 
-from .canvas_view import InfiniteCanvasView
+from ..views.canvas_view import InfiniteCanvasView
+from ..nodes import ConnectionLine, NodeFactory
+from ..widgets.dialogs.search_dialog import SearchDialog
+from ..widgets.title_bar import CustomTitleBar
 from .native_window import NativeWindowMixin
-from .nodes import ConnectionLine, NodeFactory
-from .widgets.dialogs.SearchDialog import SearchDialog
-from .widgets.title_bar import CustomTitleBar
-from ..config import Config
-from ..core.crypto import CryptoManager
-from ..core.database import NodeRepository, DatabaseConnection
-from ..utils.media_proc import create_thumbnail
+from ...config import Config
+from ...core.crypto import CryptoManager
+from ...core.database import NodeRepository, DatabaseConnection
+from ...utils.media_proc import create_thumbnail
+from ...services.node_service import NodeService
 
 
 class ZeroXXWindow(NativeWindowMixin, QMainWindow):
@@ -24,7 +25,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
     def __init__(self, db_path):
         QMainWindow.__init__(self)
         self.is_windows = sys.platform == "win32"
-
+        
         self.resize(1280, 800)
         self.setMinimumSize(600, 450)
 
@@ -68,19 +69,19 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
     def _adjust_initial_window_size(self):
         screen = QGuiApplication.primaryScreen()
         if not screen: return
-
+        
         available = screen.availableGeometry()
         target_w = 1440
         target_h = 900
-
+        
         if target_w > available.width() * 0.9:
             target_w = available.width() * 0.9
         if target_h > available.height() * 0.9:
             target_h = available.height() * 0.9
-
+            
         x = available.x() + (available.width() - target_w) // 2
         y = available.y() + (available.height() - target_h) // 2
-
+        
         self.setGeometry(int(x), int(y), int(target_w), int(target_h))
 
     def _init_core(self, db_path):
@@ -91,13 +92,13 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         if not salt:
             while True:
                 pwd1, ok1 = self._get_centered_input("Create Password",
-                                                     f"Set password for new project:\n{os.path.basename(db_path)}",
-                                                     QLineEdit.EchoMode.Password)
+                                                 f"Set password for new project:\n{os.path.basename(db_path)}",
+                                                 QLineEdit.EchoMode.Password)
                 if not ok1 or not pwd1: raise RuntimeError("Password entry cancelled")
 
                 pwd2, ok2 = self._get_centered_input("Confirm Password",
-                                                     "Repeat password:",
-                                                     QLineEdit.EchoMode.Password)
+                                                 "Repeat password:",
+                                                 QLineEdit.EchoMode.Password)
                 if not ok2: raise RuntimeError("Password entry cancelled")
 
                 if pwd1 == pwd2:
@@ -112,7 +113,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
                     QMessageBox.warning(self, "Mismatch", "Passwords do not match! Try again.")
         else:
             pwd, ok = self._get_centered_input("Enter password", f"Password for {os.path.basename(db_path)}:",
-                                               QLineEdit.EchoMode.Password)
+                                           QLineEdit.EchoMode.Password)
             if not ok or not pwd:
                 raise RuntimeError("Password entry cancelled")
 
@@ -130,6 +131,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
                     raise RuntimeError("Incorrect password")
 
         self.repo = NodeRepository(self.db_conn, self.crypto)
+        self.service = NodeService(self.repo)
 
     def _setup_canvas(self):
         self.scene = QGraphicsScene()
@@ -145,10 +147,10 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         vbox = QVBoxLayout(central)
         vbox.setContentsMargins(0, 0, 0, 0)
         vbox.setSpacing(0)
-
+        
         if getattr(self, 'title_bar', None):
             vbox.addWidget(self.title_bar)
-
+            
         vbox.addWidget(self.view, 1)
         self.setCentralWidget(central)
         self.view.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -230,7 +232,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         backup_name = f"{name}_{timestamp}{ext}"
         backup_path = os.path.join(backup_dir, backup_name)
 
-        self.repo.commit_changes()
+        self.service.commit_changes()
 
         try:
             backup_conn = sqlite3.connect(backup_path)
@@ -274,7 +276,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
                 self.status_label.setText("Saving changes to database...")
                 self.status_label.setStyleSheet(f"color: {Config.COLOR_ACCENT}; font-weight: bold; padding-left: 10px;")
                 QApplication.processEvents()
-                self.repo.commit_changes()
+                self.service.commit_changes()
                 self.pending_commits = False
 
             self.status_label.setText(self.default_status)
@@ -308,31 +310,31 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         existing_conns = [c for c in node_a.connections if c.end_node == node_b or c.start_node == node_b]
         if existing_conns: return False
 
-        conn_id = self.repo.add_connection(node_a.item_id, node_b.item_id, commit=False)
+        conn_id = self.service.add_connection(node_a.item_id, node_b.item_id, commit=False)
         self.pending_commits = True
 
-        line = ConnectionLine(conn_id, node_a, node_b, self.repo)
+        line = ConnectionLine(conn_id, node_a, node_b, self.service)
         self.scene.addItem(line)
         node_a.add_connection(line)
         node_b.add_connection(line)
         return True
 
     def load_from_db(self):
-        items = self.repo.get_all_items()
+        items = self.service.get_all_items()
         for item_data in items:
             try:
-                node = NodeFactory.create_node_from_db(item_data, self.repo)
+                node = NodeFactory.create_node_from_db(item_data, self.service)
                 self.scene.addItem(node)
-                self.nodes_map[item_data['id']] = node
+                self.nodes_map[item_data.id] = node
             except Exception as e:
-                print(f"Skipping broken node {item_data.get('id')}: {e}")
+                print(f"Skipping broken node {item_data.id}: {e}")
 
-        conns = self.repo.get_all_connections()
+        conns = self.service.get_all_connections()
         for c in conns:
-            n1 = self.nodes_map.get(c['start_id'])
-            n2 = self.nodes_map.get(c['end_id'])
+            n1 = self.nodes_map.get(c.start_id)
+            n2 = self.nodes_map.get(c.end_id)
             if n1 and n2:
-                line = ConnectionLine(c['id'], n1, n2, self.repo)
+                line = ConnectionLine(c.id, n1, n2, self.service)
                 self.scene.addItem(line)
                 n1.add_connection(line)
                 n2.add_connection(line)
@@ -343,7 +345,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
     def add_text_node(self):
         title = "New Note"
         pos = self.get_center_pos()
-        node = NodeFactory.create_new_text(self.repo, pos.x(), pos.y(), title)
+        node = NodeFactory.create_new_text(self.service, pos.x(), pos.y(), title)
 
         self.scene.addItem(node)
         self.nodes_map[node.item_id] = node
@@ -365,14 +367,12 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
 
         for i, path in enumerate(paths):
             ext = os.path.splitext(path)[1].lower()
-
+            
             if mtype == "image" and ext not in valid_img_exts:
-                QMessageBox.critical(self, "Invalid File",
-                                     f"The file '{os.path.basename(path)}' is not a valid image format.")
+                QMessageBox.critical(self, "Invalid File", f"The file '{os.path.basename(path)}' is not a valid image format.")
                 continue
             elif mtype == "video" and ext not in valid_vid_exts:
-                QMessageBox.critical(self, "Invalid File",
-                                     f"The file '{os.path.basename(path)}' is not a valid video format.")
+                QMessageBox.critical(self, "Invalid File", f"The file '{os.path.basename(path)}' is not a valid video format.")
                 continue
             pos = self.get_center_pos()
             offset = i * 25
@@ -403,7 +403,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
                 QApplication.processEvents()
 
             node = NodeFactory.create_new_media(
-                self.repo, x, y, mtype, title, thumb_bytes,
+                self.service, x, y, mtype, title, thumb_bytes,
                 full_data=full_data, file_path=path, progress_callback=progress_cb
             )
 
@@ -417,14 +417,14 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         dialog.setLabelText(label)
         dialog.setTextEchoMode(echo_mode)
         dialog.resize(400, 150)
-
+        
         screen = QGuiApplication.primaryScreen()
         screen_geom = screen.availableGeometry()
-
+        
         x = screen_geom.x() + (screen_geom.width() - dialog.width()) // 2
         y = screen_geom.y() + (screen_geom.height() - dialog.height()) // 2
         dialog.move(x, y)
-
+        
         if dialog.exec() == QInputDialog.DialogCode.Accepted:
             return dialog.textValue(), True
         return "", False

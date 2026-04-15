@@ -1,5 +1,5 @@
 from .base import BaseNode
-from KryptoNote.gui.widgets.dialogs.MediaViewerDialog import MediaViewerDialog
+from KryptoNote.gui.widgets.dialogs.media_viewer_dialog import MediaViewerDialog
 from KryptoNote.gui.widgets.viewers import SecureVideoPlayer
 
 from PySide6.QtWidgets import QGraphicsTextItem, QGraphicsPixmapItem, QFileDialog, QInputDialog
@@ -10,8 +10,8 @@ from KryptoNote.config import Config
 
 
 class MediaNode(BaseNode):
-    def __init__(self, item_id, x, y, w, h, title, thumbnail_bytes, repo, media_type, is_chunked, total_size):
-        super().__init__(item_id, x, y, w, h, repo)
+    def __init__(self, item_id, x, y, w, h, title, thumbnail_bytes, service, media_type, is_chunked, total_size):
+        super().__init__(item_id, x, y, w, h, service)
         self.media_type = media_type
         self.is_chunked = is_chunked
         self.total_size = total_size
@@ -81,12 +81,12 @@ class MediaNode(BaseNode):
         if ok:
             self.node_title = new_title.strip() or "Untitled"
             self.title_item.setPlainText(self.node_title)
-            self.repo.update_item_title(self.item_id, self.node_title)
+            self.service.update_item_title(self.item_id, self.node_title)
             self.update_content_layout()
 
     def open_content(self):
         if self.media_type == "image":
-            data = self.repo.get_full_data(self.item_id)
+            data = self.service.get_full_data(self.item_id)
             if data:
                 # Use QImageReader with setAutoTransform to respect EXIF orientation
                 buffer = QBuffer()
@@ -104,7 +104,7 @@ class MediaNode(BaseNode):
         elif self.media_type == "video":
             if self.is_chunked:
                 try:
-                    player = SecureVideoPlayer(self.repo, self.item_id, self.total_size, Config.CHUNK_SIZE, self.node_title)
+                    player = SecureVideoPlayer(self.service, self.item_id, self.total_size, Config.CHUNK_SIZE, self.node_title)
                     player.exec()
                 except Exception as e:
                     print(e)
@@ -117,10 +117,10 @@ class MediaNode(BaseNode):
                 with open(path, "wb") as f:
                     num_chunks = (self.total_size // Config.CHUNK_SIZE) + 1
                     for i in range(num_chunks):
-                        data = self.repo.get_chunk(self.item_id, i)
+                        data = self.service.get_chunk(self.item_id, i)
                         if data: f.write(data)
             else:
-                data = self.repo.get_full_data(self.item_id)
+                data = self.service.get_full_data(self.item_id)
                 if data is not None:
                     with open(path, "wb") as f:
                         f.write(data)

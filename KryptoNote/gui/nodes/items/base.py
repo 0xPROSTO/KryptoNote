@@ -1,17 +1,18 @@
-from PySide6.QtCore import QPointF, QVariantAnimation
-from PySide6.QtGui import QColor, QBrush, QPen
+from ..handles import ResizeHandle
+
 from PySide6.QtWidgets import QGraphicsRectItem, QMenu, QGraphicsItem
+from PySide6.QtGui import QColor, QBrush, QPen
+from PySide6.QtCore import Qt, QPointF, QVariantAnimation
 
 from KryptoNote.config import Config
-from ..handles import ResizeHandle
 
 
 class BaseNode(QGraphicsRectItem):
-    def __init__(self, item_id, x, y, w, h, repo):
+    def __init__(self, item_id, x, y, w, h, service):
         super().__init__(0, 0, w, h)
         self.setPos(x, y)
         self.setBrush(QBrush(QColor(Config.COLOR_NODE_BG)))
-
+        
         self.currentColor = QColor("#404040")
         pen = QPen(self.currentColor, 1)
         pen.setCosmetic(True)
@@ -23,14 +24,14 @@ class BaseNode(QGraphicsRectItem):
         self.setAcceptHoverEvents(True)
         self.setCacheMode(QGraphicsItem.CacheMode.DeviceCoordinateCache)
         self.item_id = item_id
-        self.repo = repo
+        self.service = service
 
         self.resizer = ResizeHandle(self)
         self.update_resizer_pos()
 
         self.connections = []
         self._is_hovered = False
-
+        
         self.color_anim = QVariantAnimation()
         self.color_anim.setDuration(120)
         self.color_anim.valueChanged.connect(self._on_color_changed)
@@ -44,14 +45,21 @@ class BaseNode(QGraphicsRectItem):
     def update_pen(self):
         is_hovered = self._is_hovered
         is_selected = self.isSelected()
-
-        target_color = QColor(Config.COLOR_LINK_HIGHLIGHT) if (is_hovered or is_selected) else QColor("#404040")
-
+        
+        highlighted = is_hovered or is_selected
+        target_color = QColor(Config.COLOR_LINK_HIGHLIGHT) if highlighted else QColor("#404040")
+        target_width = 2.5 if highlighted else 1.0
+        
         if self.currentColor != target_color:
             self.color_anim.stop()
             self.color_anim.setStartValue(self.currentColor)
             self.color_anim.setEndValue(target_color)
             self.color_anim.start()
+            
+        pen = self.pen()
+        if pen.width() != target_width:
+            pen.setWidthF(target_width)
+            self.setPen(pen)
 
     def hoverEnterEvent(self, event):
         self._is_hovered = True
@@ -114,14 +122,14 @@ class BaseNode(QGraphicsRectItem):
 
     def finalize_resize(self):
         r = self.rect()
-        self.repo.update_size(self.item_id, r.width(), r.height())
+        self.service.update_size(self.item_id, r.width(), r.height())
 
     def update_content_layout(self):
         pass
 
     def mouseReleaseEvent(self, event):
         super().mouseReleaseEvent(event)
-        self.repo.update_pos(self.item_id, self.x(), self.y())
+        self.service.update_pos(self.item_id, self.x(), self.y())
         for line in self.connections:
             line.update_position()
 
@@ -142,7 +150,7 @@ class BaseNode(QGraphicsRectItem):
         for line in list(self.connections):
             line.remove_from_scene_only()
 
-        self.repo.delete_node_cascade(self.item_id)
+        self.service.delete_node_cascade(self.item_id)
 
         if self.scene():
             self.scene().removeItem(self)

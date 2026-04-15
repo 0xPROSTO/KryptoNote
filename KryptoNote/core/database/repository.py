@@ -1,5 +1,6 @@
 from ..crypto import CryptoManager
 from ...config import Config
+from .models import NodeItemDTO, ConnectionDTO
 
 
 class NodeRepository:
@@ -91,10 +92,10 @@ class NodeRepository:
                 dtext = ""
                 dthumb = None
 
-            decrypted_rows.append({
-                'id': rid, 'type': rtype, 'title': dtitle, 'x': x, 'y': y, 'width': w, 'height': h,
-                'text': dtext, 'thumbnail': dthumb, 'is_chunked': chunked, 'total_size': tsize
-            })
+            decrypted_rows.append(NodeItemDTO(
+                id=rid, type=rtype, title=dtitle, x=x, y=y, width=w, height=h,
+                text_content=dtext, thumbnail=dthumb, is_chunked=bool(chunked), total_size=tsize
+            ))
         return decrypted_rows
 
     def get_full_data(self, item_id):
@@ -140,7 +141,7 @@ class NodeRepository:
     def get_all_connections(self):
         self.cursor.execute("SELECT id, start_id, end_id FROM connections")
         rows = self.cursor.fetchall()
-        return [{'id': r[0], 'start_id': r[1], 'end_id': r[2]} for r in rows]
+        return [ConnectionDTO(id=r[0], start_id=r[1], end_id=r[2]) for r in rows]
 
     def delete_connection(self, conn_id):
         self.cursor.execute("DELETE FROM connections WHERE id=?", (conn_id,))
@@ -176,8 +177,8 @@ class NodeRepository:
         results = []
         q = query.lower()
         for item in all_items:
-            title_match = q in item['title'].lower()
-            text_match = item['text'] and q in item['text'].lower()
+            title_match = q in item.title.lower() if item.title else False
+            text_match = q in item.text_content.lower() if item.text_content else False
 
             if title_match or text_match:
                 results.append(item)

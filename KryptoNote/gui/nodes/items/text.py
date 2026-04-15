@@ -1,14 +1,12 @@
-from PySide6.QtGui import QColor, QFont
-from PySide6.QtWidgets import QGraphicsTextItem
-
-from KryptoNote.config import Config
-from KryptoNote.gui.widgets.dialogs.NodeEditorDialog import NoteEditorDialog
+from KryptoNote.gui.widgets.dialogs.node_editor_dialog import NoteEditorDialog
 from .base import BaseNode
-
+from PySide6.QtWidgets import QGraphicsTextItem
+from PySide6.QtGui import QColor, QFont
+from KryptoNote.config import Config
 
 class TextNode(BaseNode):
-    def __init__(self, item_id, x, y, w, h, title, text, repo):
-        super().__init__(item_id, x, y, w, h, repo)
+    def __init__(self, item_id, x, y, w, h, title, text, service):
+        super().__init__(item_id, x, y, w, h, service)
         self.title = title
         self.text_content = text if text else ""
 
@@ -44,7 +42,7 @@ class TextNode(BaseNode):
             self.title_item.setPlainText(self.title)
             self.body_item.setPlainText(self.text_content)
 
-            self.repo.update_text_content(self.item_id, self.title, self.text_content)
+            self.service.update_text_content(self.item_id, self.title, self.text_content)
 
     def extend_context_menu(self, menu):
         edit_action = menu.addAction("Edit")

@@ -2,8 +2,8 @@ from PySide6.QtWidgets import QGraphicsView, QMessageBox, QLabel
 from PySide6.QtGui import QPainter, QColor, QPen, QMouseEvent
 from PySide6.QtCore import Qt, Signal, QPointF, QLineF
 
-from .nodes import BaseNode, ConnectionLine
-from ..config import Config
+from ..nodes import BaseNode, ConnectionLine
+from ...config import Config
 
 
 class InfiniteCanvasView(QGraphicsView):
