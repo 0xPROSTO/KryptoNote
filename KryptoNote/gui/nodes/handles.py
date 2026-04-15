@@ -1,6 +1,6 @@
-from PyQt6.QtWidgets import QGraphicsRectItem, QGraphicsItem
-from PyQt6.QtGui import QColor, QBrush, QPen, QCursor
-from PyQt6.QtCore import Qt
+from PySide6.QtWidgets import QGraphicsRectItem, QGraphicsItem
+from PySide6.QtGui import QColor, QBrush, QPen, QCursor
+from PySide6.QtCore import Qt
 
 
 class ResizeHandle(QGraphicsRectItem):

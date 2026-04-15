@@ -17,8 +17,10 @@ class Config:
     ICON_PATH = os.path.join(CURRENT_DIR, "gui", "assets", "icon.png")
 
     # Visuals
+    GRID_SIZE_MAIN = 500
     GRID_SIZE = 100
     GRID_COLOR = "#3c3c3c"
+    GRID_COLOR_MAIN = "#4c4c4c"
     BACKGROUND_COLOR = "#121212"
 
     # Nodes
@@ -33,7 +35,8 @@ class Config:
     COLOR_TEXT_BODY = "#eeeeee"
     COLOR_ACCENT = "#ffaa00"
     COLOR_SECURE_LABEL = "#00FF00"
-    COLOR_LINK_LINE = "#ff4444"
+    COLOR_LINK_LINE = "#666666"
+    COLOR_LINK_HIGHLIGHT = "#e6158b"
 
     STYLE_MAIN_WINDOW = """
         QToolBar { background: #1e1e1e; border-bottom: 1px solid #333; } 

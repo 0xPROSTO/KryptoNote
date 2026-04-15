@@ -1,6 +1,6 @@
 import sqlite3
 
-from PyQt6.QtCore import QIODevice
+from PySide6.QtCore import QIODevice
 
 
 class BlockEncryptedStream(QIODevice):

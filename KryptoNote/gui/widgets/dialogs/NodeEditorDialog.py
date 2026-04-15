@@ -1,4 +1,4 @@
-from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTextEdit, QDialogButtonBox, QLineEdit, QLabel
+from PySide6.QtWidgets import QDialog, QVBoxLayout, QTextEdit, QDialogButtonBox, QLineEdit, QLabel
 
 
 class NoteEditorDialog(QDialog):

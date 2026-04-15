@@ -1,12 +1,11 @@
-from .base import BaseNode
-from KryptoNote.gui.widgets.dialogs.MediaViewerDialog import MediaViewerDialog
-from KryptoNote.gui.widgets.viewers import SecureVideoPlayer
-
-from PyQt6.QtWidgets import QGraphicsTextItem, QGraphicsPixmapItem, QFileDialog, QInputDialog
-from PyQt6.QtGui import QColor, QPixmap, QImage, QFont
-from PyQt6.QtCore import Qt
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QPixmap, QImage, QFont
+from PySide6.QtWidgets import QGraphicsTextItem, QGraphicsPixmapItem, QFileDialog, QInputDialog
 
 from KryptoNote.config import Config
+from KryptoNote.gui.widgets.dialogs.MediaViewerDialog import MediaViewerDialog
+from KryptoNote.gui.widgets.viewers import SecureVideoPlayer
+from .base import BaseNode
 
 
 class MediaNode(BaseNode):
@@ -96,7 +95,8 @@ class MediaNode(BaseNode):
         elif self.media_type == "video":
             if self.is_chunked:
                 try:
-                    player = SecureVideoPlayer(self.repo, self.item_id, self.total_size, Config.CHUNK_SIZE, self.node_title)
+                    player = SecureVideoPlayer(self.repo, self.item_id, self.total_size, Config.CHUNK_SIZE,
+                                               self.node_title)
                     player.exec()
                 except Exception as e:
                     print(e)

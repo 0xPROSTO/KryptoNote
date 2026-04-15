@@ -1,7 +1,7 @@
-from PyQt6.QtWidgets import (QGraphicsPixmapItem, QDialog, QVBoxLayout,
+from PySide6.QtWidgets import (QGraphicsPixmapItem, QDialog, QVBoxLayout,
                              QGraphicsView, QGraphicsScene, QPushButton)
-from PyQt6.QtGui import QColor, QBrush, QPainter
-from PyQt6.QtCore import Qt, QTimer
+from PySide6.QtGui import QColor, QBrush, QPainter
+from PySide6.QtCore import Qt, QTimer
 
 
 class ZoomableView(QGraphicsView):

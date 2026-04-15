@@ -1,10 +1,9 @@
-from ..handles import ResizeHandle
-
-from PyQt6.QtWidgets import QGraphicsRectItem, QMenu, QGraphicsItem
-from PyQt6.QtGui import QColor, QBrush, QPen
-from PyQt6.QtCore import Qt, QPointF
+from PySide6.QtCore import QPointF, QVariantAnimation
+from PySide6.QtGui import QColor, QBrush, QPen
+from PySide6.QtWidgets import QGraphicsRectItem, QMenu, QGraphicsItem
 
 from KryptoNote.config import Config
+from ..handles import ResizeHandle
 
 
 class BaseNode(QGraphicsRectItem):
@@ -12,10 +11,16 @@ class BaseNode(QGraphicsRectItem):
         super().__init__(0, 0, w, h)
         self.setPos(x, y)
         self.setBrush(QBrush(QColor(Config.COLOR_NODE_BG)))
-        self.setPen(QPen(Qt.PenStyle.NoPen))
+
+        self.currentColor = QColor("#404040")
+        pen = QPen(self.currentColor, 1)
+        pen.setCosmetic(True)
+        self.setPen(pen)
+
         self.setFlags(QGraphicsItem.GraphicsItemFlag.ItemIsMovable |
                       QGraphicsItem.GraphicsItemFlag.ItemIsSelectable |
                       QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges)
+        self.setAcceptHoverEvents(True)
         self.setCacheMode(QGraphicsItem.CacheMode.DeviceCoordinateCache)
         self.item_id = item_id
         self.repo = repo
@@ -24,6 +29,45 @@ class BaseNode(QGraphicsRectItem):
         self.update_resizer_pos()
 
         self.connections = []
+        self._is_hovered = False
+
+        self.color_anim = QVariantAnimation()
+        self.color_anim.setDuration(120)
+        self.color_anim.valueChanged.connect(self._on_color_changed)
+
+    def _on_color_changed(self, color):
+        self.currentColor = color
+        pen = self.pen()
+        pen.setColor(color)
+        self.setPen(pen)
+
+    def update_pen(self):
+        is_hovered = self._is_hovered
+        is_selected = self.isSelected()
+
+        target_color = QColor(Config.COLOR_LINK_HIGHLIGHT) if (is_hovered or is_selected) else QColor("#404040")
+
+        if self.currentColor != target_color:
+            self.color_anim.stop()
+            self.color_anim.setStartValue(self.currentColor)
+            self.color_anim.setEndValue(target_color)
+            self.color_anim.start()
+
+    def hoverEnterEvent(self, event):
+        self._is_hovered = True
+        super().hoverEnterEvent(event)
+        self.update_pen()
+        for line in self.connections:
+            if hasattr(line, 'update_pen'):
+                line.update_pen()
+
+    def hoverLeaveEvent(self, event):
+        self._is_hovered = False
+        super().hoverLeaveEvent(event)
+        self.update_pen()
+        for line in self.connections:
+            if hasattr(line, 'update_pen'):
+                line.update_pen()
 
     def add_connection(self, line):
         if line not in self.connections:
@@ -43,6 +87,11 @@ class BaseNode(QGraphicsRectItem):
             for line in self.connections:
                 line.update_position()
             return value
+        elif change == QGraphicsItem.GraphicsItemChange.ItemSelectedHasChanged:
+            self.update_pen()
+            for line in self.connections:
+                if hasattr(line, 'update_pen'):
+                    line.update_pen()
         return super().itemChange(change, value)
 
     def update_resizer_pos(self):

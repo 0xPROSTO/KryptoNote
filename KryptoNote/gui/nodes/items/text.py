@@ -1,8 +1,10 @@
+from PySide6.QtGui import QColor, QFont
+from PySide6.QtWidgets import QGraphicsTextItem
+
+from KryptoNote.config import Config
 from KryptoNote.gui.widgets.dialogs.NodeEditorDialog import NoteEditorDialog
 from .base import BaseNode
-from PyQt6.QtWidgets import QGraphicsTextItem
-from PyQt6.QtGui import QColor, QFont
-from KryptoNote.config import Config
+
 
 class TextNode(BaseNode):
     def __init__(self, item_id, x, y, w, h, title, text, repo):

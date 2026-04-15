@@ -1,5 +1,5 @@
 import os
-from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QListWidget, QPushButton,
+from PySide6.QtWidgets import (QDialog, QVBoxLayout, QListWidget, QPushButton,
                              QLineEdit, QLabel, QHBoxLayout, QMessageBox, QWidget, QInputDialog)
 from KryptoNote.config import Config
 

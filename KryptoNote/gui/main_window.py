@@ -1,26 +1,40 @@
 import datetime
 import os
 import sqlite3
+import sys
 
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QAction, QColor, QBrush, QShortcut, QKeySequence
-from PyQt6.QtWidgets import (QMainWindow, QGraphicsScene, QLabel,
+from PySide6.QtCore import Qt, QPoint, QRect
+from PySide6.QtGui import QAction, QColor, QBrush, QShortcut, QKeySequence
+from PySide6.QtWidgets import (QMainWindow, QGraphicsScene, QLabel, QWidget, QVBoxLayout,
                              QFileDialog, QInputDialog, QLineEdit, QMessageBox, QApplication)
 
 from .canvas_view import InfiniteCanvasView
 from .nodes import ConnectionLine, NodeFactory
 from .widgets.dialogs.SearchDialog import SearchDialog
+from .widgets.title_bar import CustomTitleBar
+from .native_window import NativeWindowMixin
 from ..config import Config
 from ..core.crypto import CryptoManager
 from ..core.database import NodeRepository, DatabaseConnection
 from ..utils.media_proc import create_thumbnail
 
 
-class ZeroXXWindow(QMainWindow):
+class ZeroXXWindow(NativeWindowMixin, QMainWindow):
+
     def __init__(self, db_path):
-        super().__init__()
-        self.setWindowTitle(f"{Config.APP_NAME} [{os.path.basename(db_path)}]")
+        QMainWindow.__init__(self)
+        self.is_windows = sys.platform == "win32"
+
+        if self.is_windows:
+            self.title_bar = CustomTitleBar(self)
+            self.title_bar.set_title(f"{Config.APP_NAME} [{os.path.basename(db_path)}]")
+            self.init_native_window()
+        else:
+            self.setWindowTitle(f"{Config.APP_NAME} [{os.path.basename(db_path)}]")
+            self.title_bar = None
+
         self.resize(1200, 800)
+        self.setMinimumSize(600, 400)
 
         self.setStyleSheet(Config.STYLE_MAIN_WINDOW)
 
@@ -107,19 +121,31 @@ class ZeroXXWindow(QMainWindow):
         self.view.node_clicked_signal.connect(self.handle_link_click)
         self.view.connection_right_clicked_signal.connect(self.quick_delete_connection)
 
-        self.setCentralWidget(self.view)
+        central = QWidget()
+        vbox = QVBoxLayout(central)
+        vbox.setContentsMargins(0, 0, 0, 0)
+        vbox.setSpacing(0)
+        
+        if getattr(self, 'title_bar', None):
+            vbox.addWidget(self.title_bar)
+            
+        vbox.addWidget(self.view, 1)
+        self.setCentralWidget(central)
         self.view.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
     def _setup_menubar(self):
-        menubar = self.menuBar()
-        menubar.setStyleSheet("""
-            QMenuBar { background-color: #1e1e1e; color: #dddddd; border-bottom: 1px solid #333; }
-            QMenuBar::item { background-color: transparent; padding: 4px 10px; margin: 2px; }
-            QMenuBar::item:selected { background-color: #3a3a3a; border-radius: 4px; }
-            QMenu { background-color: #2b2b2b; color: #dddddd; border: 1px solid #444; }
-            QMenu::item { padding: 6px 30px 6px 20px; }
-            QMenu::item:selected { background-color: #444444; }
-        """)
+        if getattr(self, 'title_bar', None):
+            menubar = self.title_bar.menu_bar
+        else:
+            menubar = self.menuBar()
+            menubar.setStyleSheet("""
+                QMenuBar { background-color: #1e1e1e; color: #dddddd; border-bottom: 1px solid #333; }
+                QMenuBar::item { background-color: transparent; padding: 4px 10px; margin: 2px; }
+                QMenuBar::item:selected { background-color: #3a3a3a; border-radius: 4px; }
+                QMenu { background-color: #2b2b2b; color: #dddddd; border: 1px solid #444; }
+                QMenu::item { padding: 6px 30px 6px 20px; }
+                QMenu::item:selected { background-color: #444444; }
+            """)
 
         file_menu = menubar.addMenu("File")
 

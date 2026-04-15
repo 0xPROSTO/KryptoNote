@@ -1,8 +1,8 @@
 import sys
 
-from PyQt6.QtCore import QEventLoop, Qt
-from PyQt6.QtGui import QIcon
-from PyQt6.QtWidgets import QApplication, QDialog
+from PySide6.QtCore import QEventLoop, Qt
+from PySide6.QtGui import QIcon
+from PySide6.QtWidgets import QApplication, QDialog
 
 from KryptoNote.config import Config
 from KryptoNote.gui.main_window import ZeroXXWindow

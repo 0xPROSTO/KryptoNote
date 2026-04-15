@@ -1,8 +1,8 @@
-from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
-from PyQt6.QtMultimediaWidgets import QVideoWidget
-from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
+from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
+from PySide6.QtMultimediaWidgets import QVideoWidget
+from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
                              QSlider, QLabel, QWidget, QSizePolicy, QStyle)
-from PyQt6.QtCore import Qt, QUrl, QTimer
+from PySide6.QtCore import Qt, QUrl, QTimer
 
 from ...config import Config
 from ...core.io.stream import BlockEncryptedStream

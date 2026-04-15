@@ -1,15 +1,15 @@
-from PyQt6.QtWidgets import QGraphicsView, QMessageBox, QLabel
-from PyQt6.QtGui import QPainter, QColor, QPen, QMouseEvent
-from PyQt6.QtCore import Qt, pyqtSignal, QPointF, QLineF
+from PySide6.QtWidgets import QGraphicsView, QMessageBox, QLabel
+from PySide6.QtGui import QPainter, QColor, QPen, QMouseEvent
+from PySide6.QtCore import Qt, Signal, QPointF, QLineF
 
 from .nodes import BaseNode, ConnectionLine
 from ..config import Config
 
 
 class InfiniteCanvasView(QGraphicsView):
-    mouse_moved = pyqtSignal(QPointF)
-    node_clicked_signal = pyqtSignal(object)
-    connection_right_clicked_signal = pyqtSignal(object)
+    mouse_moved = Signal(QPointF)
+    node_clicked_signal = Signal(object)
+    connection_right_clicked_signal = Signal(object)
 
     def __init__(self, scene):
         super().__init__(scene)
@@ -62,26 +62,50 @@ class InfiniteCanvasView(QGraphicsView):
             return
 
         grid_size = Config.GRID_SIZE
-        left = int(rect.left()) - (int(rect.left()) % grid_size)
-        top = int(rect.top()) - (int(rect.top()) % grid_size)
+        grid_main = Config.GRID_SIZE_MAIN
+
+        left = int(rect.left())
+        top = int(rect.top())
+        right = int(rect.right())
+        bottom = int(rect.bottom())
+
+        left_grid = left - (left % grid_size)
+        top_grid = top - (top % grid_size)
 
         lines = []
-        for x in range(left, int(rect.right()), grid_size):
-            lines.append(QLineF(x, rect.top(), x, rect.bottom()))
-        for y in range(top, int(rect.bottom()), grid_size):
-            lines.append(QLineF(rect.left(), y, rect.right(), y))
+        lines_main = []
+
+        for x in range(left_grid, right, grid_size):
+            if x % grid_main == 0:
+                lines_main.append(QLineF(x, top, x, bottom))
+            else:
+                lines.append(QLineF(x, top, x, bottom))
+
+        for y in range(top_grid, bottom, grid_size):
+            if y % grid_main == 0:
+                lines_main.append(QLineF(left, y, right, y))
+            else:
+                lines.append(QLineF(left, y, right, y))
 
         grid_color = QColor(Config.GRID_COLOR)
+        grid_color_main = QColor(Config.GRID_COLOR_MAIN)
+
         if scale < 0.5:
             alpha = int(max(0, min(255, (scale - 0.15) / 0.35 * 255)))
             grid_color.setAlpha(alpha)
+            grid_color_main.setAlpha(alpha)
 
         pen = QPen(grid_color)
         pen.setWidth(0)
         pen.setStyle(Qt.PenStyle.DotLine)
         painter.setPen(pen)
-
         painter.drawLines(lines)
+
+        pen_main = QPen(grid_color_main)
+        pen_main.setWidth(0)
+        pen_main.setStyle(Qt.PenStyle.SolidLine)
+        painter.setPen(pen_main)
+        painter.drawLines(lines_main)
 
 
 

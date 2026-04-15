@@ -1,5 +1,5 @@
-from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton, QLabel
-from PyQt6.QtCore import Qt
+from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton, QLabel
+from PySide6.QtCore import Qt
 
 
 class SearchDialog(QDialog):
