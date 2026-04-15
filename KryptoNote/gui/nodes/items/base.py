@@ -1,10 +1,9 @@
-from ..handles import ResizeHandle
-
-from PySide6.QtWidgets import QGraphicsRectItem, QMenu, QGraphicsItem
+from PySide6.QtCore import QPointF, QVariantAnimation
 from PySide6.QtGui import QColor, QBrush, QPen
-from PySide6.QtCore import Qt, QPointF, QVariantAnimation
+from PySide6.QtWidgets import QGraphicsRectItem, QMenu, QGraphicsItem, QStyle
 
 from KryptoNote.config import Config
+from ..handles import ResizeHandle
 
 
 class BaseNode(QGraphicsRectItem):
@@ -12,7 +11,7 @@ class BaseNode(QGraphicsRectItem):
         super().__init__(0, 0, w, h)
         self.setPos(x, y)
         self.setBrush(QBrush(QColor(Config.COLOR_NODE_BG)))
-        
+
         self.currentColor = QColor("#404040")
         pen = QPen(self.currentColor, 1)
         pen.setCosmetic(True)
@@ -31,7 +30,7 @@ class BaseNode(QGraphicsRectItem):
 
         self.connections = []
         self._is_hovered = False
-        
+
         self.color_anim = QVariantAnimation()
         self.color_anim.setDuration(120)
         self.color_anim.valueChanged.connect(self._on_color_changed)
@@ -42,20 +41,24 @@ class BaseNode(QGraphicsRectItem):
         pen.setColor(color)
         self.setPen(pen)
 
+    def paint(self, painter, option, widget):
+        option.state &= ~QStyle.State_Selected
+        super().paint(painter, option, widget)
+
     def update_pen(self):
         is_hovered = self._is_hovered
         is_selected = self.isSelected()
-        
+
         highlighted = is_hovered or is_selected
         target_color = QColor(Config.COLOR_LINK_HIGHLIGHT) if highlighted else QColor("#404040")
         target_width = 2.5 if highlighted else 1.0
-        
+
         if self.currentColor != target_color:
             self.color_anim.stop()
             self.color_anim.setStartValue(self.currentColor)
             self.color_anim.setEndValue(target_color)
             self.color_anim.start()
-            
+
         pen = self.pen()
         if pen.width() != target_width:
             pen.setWidthF(target_width)

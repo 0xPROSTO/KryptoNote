@@ -1,13 +1,14 @@
-from PySide6.QtWidgets import (QWidget, QHBoxLayout, QLabel, QPushButton,
-                             QSizePolicy, QMenuBar)
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
+from PySide6.QtWidgets import (QWidget, QHBoxLayout, QLabel, QPushButton,
+                               QSizePolicy, QMenuBar, QGridLayout)
 
 from KryptoNote.config import Config
 
 
 class TitleBarButton(QPushButton):
     """Minimal window control button."""
+
     def __init__(self, icon_text, hover_color="#3a3a3a", parent=None):
         super().__init__(icon_text, parent)
         self._hover_color = hover_color
@@ -45,11 +46,15 @@ class CustomTitleBar(QWidget):
             }
         """)
 
-        layout = QHBoxLayout(self)
+        layout = QGridLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # --- App icon ---
+        self.left_widget = QWidget()
+        self.left_layout = QHBoxLayout(self.left_widget)
+        self.left_layout.setContentsMargins(0, 0, 0, 0)
+        self.left_layout.setSpacing(0)
+
         self.icon_label = QLabel()
         pixmap = QPixmap(Config.ICON_PATH)
         if not pixmap.isNull():
@@ -60,9 +65,8 @@ class CustomTitleBar(QWidget):
             ))
         self.icon_label.setFixedSize(36, self.TITLE_BAR_HEIGHT)
         self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self.icon_label)
+        self.left_layout.addWidget(self.icon_label)
 
-        # --- Menu bar (embedded) ---
         self.menu_bar = QMenuBar()
         self.menu_bar.setFixedHeight(self.TITLE_BAR_HEIGHT)
         self.menu_bar.setSizePolicy(QSizePolicy.Policy.MinimumExpanding, QSizePolicy.Policy.Fixed)
@@ -104,12 +108,9 @@ class CustomTitleBar(QWidget):
                 margin: 4px 0;
             }
         """)
-        layout.addWidget(self.menu_bar)
+        self.left_layout.addWidget(self.menu_bar)
+        layout.addWidget(self.left_widget, 0, 0, Qt.AlignmentFlag.AlignLeft)
 
-        # --- Spacer ---
-        layout.addStretch(1)
-
-        # --- Title text ---
         self.title_label = QLabel("")
         self.title_label.setStyleSheet("""
             color: #888888;
@@ -117,12 +118,13 @@ class CustomTitleBar(QWidget):
             font-size: 12px;
         """)
         self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self.title_label)
+        layout.addWidget(self.title_label, 0, 1, Qt.AlignmentFlag.AlignCenter)
 
-        # --- Spacer ---
-        layout.addStretch(1)
+        self.right_widget = QWidget()
+        self.right_layout = QHBoxLayout(self.right_widget)
+        self.right_layout.setContentsMargins(0, 0, 0, 0)
+        self.right_layout.setSpacing(0)
 
-        # --- Window controls ---
         self.btn_minimize = TitleBarButton("\u2500")
         self.btn_maximize = TitleBarButton("\u25A1")
         self.btn_close = TitleBarButton("\u2715", hover_color="#c42b1c")
@@ -131,9 +133,15 @@ class CustomTitleBar(QWidget):
         self.btn_maximize.clicked.connect(self._on_maximize)
         self.btn_close.clicked.connect(self._on_close)
 
-        layout.addWidget(self.btn_minimize)
-        layout.addWidget(self.btn_maximize)
-        layout.addWidget(self.btn_close)
+        self.right_layout.addWidget(self.btn_minimize)
+        self.right_layout.addWidget(self.btn_maximize)
+        self.right_layout.addWidget(self.btn_close)
+
+        layout.addWidget(self.right_widget, 0, 2, Qt.AlignmentFlag.AlignRight)
+
+        layout.setColumnStretch(0, 1)
+        layout.setColumnStretch(1, 0)
+        layout.setColumnStretch(2, 1)
 
     def set_title(self, text: str):
         self.title_label.setText(text)

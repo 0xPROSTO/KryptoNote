@@ -1,6 +1,6 @@
-from PySide6.QtWidgets import QGraphicsLineItem, QMenu, QGraphicsItem
-from PySide6.QtGui import QPen, QColor
 from PySide6.QtCore import QVariantAnimation
+from PySide6.QtGui import QPen, QColor
+from PySide6.QtWidgets import QGraphicsLineItem, QMenu, QGraphicsItem, QStyle
 
 from ...config import Config
 
@@ -22,11 +22,11 @@ class ConnectionLine(QGraphicsLineItem):
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
         self.setAcceptHoverEvents(True)
         self._is_hovered = False
-        
+
         self.color_anim = QVariantAnimation()
         self.color_anim.setDuration(120)
         self.color_anim.valueChanged.connect(self._on_color_changed)
-        
+
         self.update_pen()
         self.update_position()
 
@@ -35,6 +35,10 @@ class ConnectionLine(QGraphicsLineItem):
         pen = self.pen()
         pen.setColor(color)
         self.setPen(pen)
+
+    def paint(self, painter, option, widget):
+        option.state &= ~QStyle.State_Selected
+        super().paint(painter, option, widget)
 
     def hoverEnterEvent(self, event):
         self._is_hovered = True
@@ -56,12 +60,14 @@ class ConnectionLine(QGraphicsLineItem):
         is_selected = self.isSelected()
         is_node_selected = (self.start_node and self.start_node.isSelected()) or \
                            (self.end_node and self.end_node.isSelected())
-        
+
         is_start_hovered = getattr(self.start_node, '_is_hovered', False) if self.start_node else False
         is_end_hovered = getattr(self.end_node, '_is_hovered', False) if self.end_node else False
         is_node_hovered = is_start_hovered or is_end_hovered
 
-        target_color = QColor(Config.COLOR_LINK_HIGHLIGHT) if (is_hovered or is_selected or is_node_selected or is_node_hovered) else QColor(Config.COLOR_LINK_LINE)
+        target_color = QColor(Config.COLOR_LINK_HIGHLIGHT) if (
+                is_hovered or is_selected or is_node_selected or is_node_hovered) else QColor(
+            Config.COLOR_LINK_LINE)
         target_width = 3 if (is_hovered or is_selected or is_node_selected or is_node_hovered) else 2
 
         if self.currentColor != target_color:
@@ -69,7 +75,7 @@ class ConnectionLine(QGraphicsLineItem):
             self.color_anim.setStartValue(self.currentColor)
             self.color_anim.setEndValue(target_color)
             self.color_anim.start()
-        
+
         pen = self.pen()
         if pen.width() != target_width:
             pen.setWidth(target_width)
