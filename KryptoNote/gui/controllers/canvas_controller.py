@@ -167,7 +167,10 @@ class CanvasController(QObject):
         return True
 
     def quick_delete_connection(self, connection_item):
-        connection_item.delete_connection()
+        if hasattr(connection_item, "animate_deletion"):
+            connection_item.animate_deletion()
+        else:
+            connection_item.delete_connection()
         self.status_message.emit("Link deleted.", "normal")
 
     def commit_changes(self):

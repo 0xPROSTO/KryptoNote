@@ -111,7 +111,10 @@ class InfiniteCanvasView(QGraphicsView):
         items = self.items(pos)
         for item in items:
             if isinstance(item, ConnectionLine):
-                item.delete_connection()
+                if hasattr(item, "animate_deletion"):
+                    item.animate_deletion()
+                else:
+                    item.delete_connection()
                 break
 
     def wheelEvent(self, event):
@@ -143,7 +146,9 @@ class InfiniteCanvasView(QGraphicsView):
                 )
                 if confirm == QMessageBox.StandardButton.Yes:
                     for item in items:
-                        if hasattr(item, "delete_node"):
+                        if hasattr(item, "animate_deletion"):
+                            item.animate_deletion()
+                        elif hasattr(item, "delete_node"):
                             item.delete_node()
                         elif hasattr(item, "delete_connection"):
                             item.delete_connection()

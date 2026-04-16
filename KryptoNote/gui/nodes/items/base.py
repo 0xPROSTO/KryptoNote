@@ -27,6 +27,9 @@ class BaseNode(QGraphicsRectItem):
         self.update_resizer_pos()
         self.connections = []
         self._is_hovered = False
+        self._is_deleting = False
+        self._deletion_progress = 0.0
+
         self.color_anim = QVariantAnimation()
         self.color_anim.setDuration(120)
         self.color_anim.valueChanged.connect(self._on_color_changed)
@@ -52,6 +55,18 @@ class BaseNode(QGraphicsRectItem):
         painter.setPen(pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRoundedRect(rec, radius, radius)
+
+        if self._is_deleting and self._deletion_progress > 0:
+            flash_opacity = 0
+            if self._deletion_progress < 0.33:
+                flash_opacity = int((self._deletion_progress / 0.33) * 180)
+            else:
+                flash_opacity = int(180 * (1.0 - (self._deletion_progress - 0.33) / 0.67))
+
+            painter.setBrush(QColor(90, 90, 90, max(0, min(255, flash_opacity))))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawRoundedRect(rec, radius, radius)
+
         if self.isSelected():
             highlight_pen = QPen(QColor(255, 255, 255, 15), 1)
             painter.setPen(highlight_pen)
@@ -157,10 +172,35 @@ class BaseNode(QGraphicsRectItem):
         delete_action = menu.addAction("Delete")
         action = menu.exec(event.screenPos())
         if action == delete_action:
-            self.delete_node()
+            self.animate_deletion()
 
     def extend_context_menu(self, menu):
         pass
+
+    def animate_deletion(self):
+        if self._is_deleting:
+            return
+        self._is_deleting = True
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
+
+        for line in list(self.connections):
+            if hasattr(line, "animate_deletion"):
+                line.animate_deletion()
+
+        self.del_anim = QVariantAnimation()
+        self.del_anim.setDuration(240)
+        self.del_anim.setStartValue(0.0)
+        self.del_anim.setEndValue(1.0)
+
+        def update_frame(val):
+            self._deletion_progress = val
+            self.setOpacity(1.0 - val)
+            self.update()
+
+        self.del_anim.valueChanged.connect(update_frame)
+        self.del_anim.finished.connect(self.delete_node)
+        self.del_anim.start()
 
     def delete_node(self):
         for line in list(self.connections):
