@@ -1,5 +1,6 @@
 from ..core.database.models import NodeItemDTO, ConnectionDTO
 
+
 class NodeService:
     def __init__(self, repo):
         self.repo = repo
@@ -10,11 +11,17 @@ class NodeService:
     def get_all_connections(self) -> list[ConnectionDTO]:
         return self.repo.get_all_connections()
 
-    def add_item(self, item_type, x, y, w, h, title="", text=None, thumb=None, data=None):
+    def add_item(
+            self, item_type, x, y, w, h, title="", text=None, thumb=None, data=None
+    ):
         return self.repo.add_item(item_type, x, y, w, h, title, text, thumb, data)
 
-    def add_streamed_video(self, item_type, x, y, w, h, title, thumb, file_path, progress_callback=None):
-        return self.repo.add_streamed_video(item_type, x, y, w, h, title, thumb, file_path, progress_callback)
+    def add_streamed_video(
+            self, item_type, x, y, w, h, title, thumb, file_path, progress_callback=None
+    ):
+        return self.repo.add_streamed_video(
+            item_type, x, y, w, h, title, thumb, file_path, progress_callback
+        )
 
     def add_connection(self, start_id, end_id, commit=True):
         return self.repo.add_connection(start_id, end_id, commit=commit)

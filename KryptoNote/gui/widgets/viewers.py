@@ -1,8 +1,17 @@
+from PySide6.QtCore import Qt, QUrl, QTimer
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtMultimediaWidgets import QVideoWidget
-from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
-                             QSlider, QLabel, QWidget, QSizePolicy, QStyle)
-from PySide6.QtCore import Qt, QUrl, QTimer
+from PySide6.QtWidgets import (
+    QDialog,
+    QVBoxLayout,
+    QHBoxLayout,
+    QPushButton,
+    QSlider,
+    QLabel,
+    QWidget,
+    QSizePolicy,
+    QStyle,
+)
 
 from ...config import Config
 from ...core.io.stream import BlockEncryptedStream
@@ -12,11 +21,25 @@ class ClickableSlider(QSlider):
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             if self.orientation() == Qt.Orientation.Horizontal:
-                val = self.minimum() + ((self.maximum() - self.minimum()) * event.pos().x()) / self.width()
+                val = (
+                        self.minimum()
+                        + ((self.maximum() - self.minimum()) * event.pos().x())
+                        / self.width()
+                )
+
             else:
-                val = self.minimum() + ((self.maximum() - self.minimum()) * (self.height() - event.pos().y())) / self.height()
+                val = (
+                        self.minimum()
+                        + (
+                                (self.maximum() - self.minimum())
+                                * (self.height() - event.pos().y())
+                        )
+                        / self.height()
+                )
+
             self.setValue(int(val))
             self.sliderMoved.emit(int(val))
+
         super().mousePressEvent(event)
 
 
@@ -26,9 +49,7 @@ class SecureVideoPlayer(QDialog):
         self.setWindowTitle(title)
         self.resize(1000, 700)
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowMinMaxButtonsHint)
-
         self.setStyleSheet(Config.STYLE_PLAYER)
-
         self.repo = repo
 
         layout = QVBoxLayout(self)
@@ -37,11 +58,15 @@ class SecureVideoPlayer(QDialog):
 
         self.video_widget = QVideoWidget()
         self.video_widget.setAspectRatioMode(Qt.AspectRatioMode.KeepAspectRatio)
-        self.video_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.video_widget.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
         layout.addWidget(self.video_widget)
 
         self.controls_container = QWidget()
-        self.controls_container.setStyleSheet("background-color: #1a1a1a; border-top: 1px solid #2a2a2a;")
+        self.controls_container.setStyleSheet(
+            "background-color: #1a1a1a; border-top: 1px solid #2a2a2a;"
+        )
         self.controls_container.setFixedHeight(50)
 
         ctrl_layout = QHBoxLayout(self.controls_container)
@@ -77,7 +102,9 @@ class SecureVideoPlayer(QDialog):
         vol_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
         btn_vol_icon = QPushButton()
-        btn_vol_icon.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaVolume))
+        btn_vol_icon.setIcon(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_MediaVolume)
+        )
         btn_vol_icon.setFlat(True)
         btn_vol_icon.setFixedSize(30, 30)
         btn_vol_icon.setEnabled(False)
@@ -110,7 +137,7 @@ class SecureVideoPlayer(QDialog):
             self.repo.crypto,
             item_id,
             total_size,
-            chunk_size
+            chunk_size,
         )
 
         self.player.setSourceDevice(self.io_device, QUrl("secure.mp4"))
@@ -125,6 +152,7 @@ class SecureVideoPlayer(QDialog):
         if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
             self.player.pause()
             self.btn_play.setIcon(self.icon_play)
+
         else:
             self.player.play()
             self.btn_play.setIcon(self.icon_pause)
@@ -135,6 +163,7 @@ class SecureVideoPlayer(QDialog):
     def position_changed(self, position):
         if not self.seek_slider.isSliderDown():
             self.seek_slider.setValue(position)
+
         self.update_label()
 
     def duration_changed(self, duration):
@@ -151,16 +180,19 @@ class SecureVideoPlayer(QDialog):
         self.player.play()
         if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
             self.btn_play.setIcon(self.icon_pause)
+
         else:
             self.btn_play.setIcon(self.icon_play)
 
     def update_label(self):
         def fmt(ms):
             seconds = (ms // 1000) % 60
-            minutes = (ms // 60000)
+            minutes = ms // 60000
             return f"{minutes:02}:{seconds:02}"
 
-        self.lbl_time.setText(f"{fmt(self.player.position())} / {fmt(self.player.duration())}")
+        self.lbl_time.setText(
+            f"{fmt(self.player.position())} / {fmt(self.player.duration())}"
+        )
 
     def handle_errors(self):
         self.btn_play.setEnabled(False)

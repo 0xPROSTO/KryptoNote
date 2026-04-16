@@ -1,5 +1,12 @@
-from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton, QLabel
 from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QDialog,
+    QVBoxLayout,
+    QHBoxLayout,
+    QLineEdit,
+    QPushButton,
+    QLabel,
+)
 
 
 class SearchDialog(QDialog):
@@ -53,8 +60,8 @@ class SearchDialog(QDialog):
 
     def perform_search(self):
         query = self.search_input.text()
-        if not query: return
-
+        if not query:
+            return
         if self.main_window:
             self.results = self.main_window.repo.search_items(query)
             self.current_index = 0
@@ -62,13 +69,15 @@ class SearchDialog(QDialog):
             self.jump_to_current()
 
     def next_result(self):
-        if not self.results: return
+        if not self.results:
+            return
         self.current_index = (self.current_index + 1) % len(self.results)
         self.update_ui_state()
         self.jump_to_current()
 
     def prev_result(self):
-        if not self.results: return
+        if not self.results:
+            return
         self.current_index = (self.current_index - 1) % len(self.results)
         self.update_ui_state()
         self.jump_to_current()
@@ -76,24 +85,23 @@ class SearchDialog(QDialog):
     def update_ui_state(self):
         count = len(self.results)
         self.lbl_count.setText(f"{count} results" if count != 1 else "1 result")
-
         if count > 0:
             self.lbl_count.setText(f"{self.current_index + 1} / {count}")
             self.btn_next.setEnabled(True)
             self.btn_prev.setEnabled(True)
+
         else:
             self.btn_next.setEnabled(False)
             self.btn_prev.setEnabled(False)
 
     def jump_to_current(self):
-        if not self.results: return
-
+        if not self.results:
+            return
         target = self.results[self.current_index]
         if self.main_window:
-            self.main_window.view.centerOn(target['x'], target['y'])
-
+            self.main_window.view.centerOn(target["x"], target["y"])
             self.main_window.scene.clearSelection()
-            node_id = target['id']
+            node_id = target["id"]
             if node_id in self.main_window.nodes_map:
                 node = self.main_window.nodes_map[node_id]
                 node.setSelected(True)

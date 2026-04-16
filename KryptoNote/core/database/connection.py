@@ -31,13 +31,11 @@ class DatabaseConnection:
                                 is_chunked   INTEGER DEFAULT 0,
                                 total_size   INTEGER DEFAULT 0
                             )
-
                             """)
 
         self.cursor.execute(
             "CREATE TABLE IF NOT EXISTS connections (id INTEGER PRIMARY KEY AUTOINCREMENT, start_id INTEGER, end_id INTEGER)"
         )
-
         self.cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS media_chunks
@@ -48,7 +46,8 @@ class DatabaseConnection:
                 data        BLOB,
                 FOREIGN KEY (item_id) REFERENCES items (id)
             )
-            """)
+            """
+        )
 
         self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunks ON media_chunks(item_id, chunk_index)")
 

@@ -23,13 +23,15 @@ class CryptoManager:
         return salt
 
     def encrypt(self, data: bytes) -> bytes:
-        if not self.key: raise Exception("Key not loaded")
+        if not self.key:
+            raise Exception("Key not loaded")
         nonce = os.urandom(12)
         aesgcm = AESGCM(self.key)
         return nonce + aesgcm.encrypt(nonce, data, None)
 
     def decrypt(self, data: bytes) -> bytes:
-        if not self.key: raise Exception("Key not loaded")
+        if not self.key:
+            raise Exception("Key not loaded")
         nonce = data[:12]
         ciphertext = data[12:]
         aesgcm = AESGCM(self.key)

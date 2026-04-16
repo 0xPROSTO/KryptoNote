@@ -1,37 +1,40 @@
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import (QWidget, QHBoxLayout, QLabel, QPushButton,
-                               QSizePolicy, QMenuBar, QGridLayout)
+from PySide6.QtWidgets import (
+    QWidget,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QSizePolicy,
+    QMenuBar,
+    QGridLayout,
+)
 
 from KryptoNote.config import Config
 
 
 class TitleBarButton(QPushButton):
-    """Minimal window control button."""
-
     def __init__(self, icon_text, hover_color="#3a3a3a", parent=None):
         super().__init__(icon_text, parent)
         self._hover_color = hover_color
         self.setFixedSize(46, 32)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setStyleSheet(f"""
-            QPushButton {{
+            QPushButton {{ 
                 background: transparent;
                 color: #aaaaaa;
                 border: none;
                 font-family: 'Segoe MDL2 Assets', 'Segoe UI Symbol';
                 font-size: 10px;
-            }}
-            QPushButton:hover {{
+            }} 
+            QPushButton:hover {{ 
                 background-color: {self._hover_color};
                 color: #ffffff;
-            }}
+            }} 
         """)
 
 
 class CustomTitleBar(QWidget):
-    """Dark custom title bar with embedded menu, title, and window controls."""
-
     TITLE_BAR_HEIGHT = 32
 
     def __init__(self, parent=None):
@@ -58,18 +61,24 @@ class CustomTitleBar(QWidget):
         self.icon_label = QLabel()
         pixmap = QPixmap(Config.ICON_PATH)
         if not pixmap.isNull():
-            self.icon_label.setPixmap(pixmap.scaled(
-                20, 20,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation
-            ))
+            self.icon_label.setPixmap(
+                pixmap.scaled(
+                    20,
+                    20,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            )
+
         self.icon_label.setFixedSize(36, self.TITLE_BAR_HEIGHT)
         self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.left_layout.addWidget(self.icon_label)
 
         self.menu_bar = QMenuBar()
         self.menu_bar.setFixedHeight(self.TITLE_BAR_HEIGHT)
-        self.menu_bar.setSizePolicy(QSizePolicy.Policy.MinimumExpanding, QSizePolicy.Policy.Fixed)
+        self.menu_bar.setSizePolicy(
+            QSizePolicy.Policy.MinimumExpanding, QSizePolicy.Policy.Fixed
+        )
         self.menu_bar.setStyleSheet("""
             QMenuBar {
                 background: transparent;
@@ -126,7 +135,7 @@ class CustomTitleBar(QWidget):
         self.right_layout.setSpacing(0)
 
         self.btn_minimize = TitleBarButton("\u2500")
-        self.btn_maximize = TitleBarButton("\u25A1")
+        self.btn_maximize = TitleBarButton("\u25a1")
         self.btn_close = TitleBarButton("\u2715", hover_color="#c42b1c")
 
         self.btn_minimize.clicked.connect(self._on_minimize)
@@ -152,6 +161,7 @@ class CustomTitleBar(QWidget):
     def _on_maximize(self):
         if self.window().isMaximized():
             self.window().showNormal()
+
         else:
             self.window().showMaximized()
 

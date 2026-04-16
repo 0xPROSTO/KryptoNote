@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import Optional
 
+
 @dataclass
 class NodeItemDTO:
     id: int
@@ -14,6 +15,7 @@ class NodeItemDTO:
     thumbnail: Optional[bytes] = None
     is_chunked: bool = False
     total_size: int = 0
+
 
 @dataclass
 class ConnectionDTO:
