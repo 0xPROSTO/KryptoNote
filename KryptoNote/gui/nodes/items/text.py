@@ -19,7 +19,6 @@ class TextNode(BaseNode):
                 else Theme.Palette.ACCENT_MAIN
             )
         )
-        self.title_item.setDefaultTextColor(QColor(Theme.Palette.ACCENT_MAIN))
         self.title_item.setFont(Theme.Typography.get_font("SIZE_H1", bold=True))
         self.title_item.setPos(12, 8)
         self.body_item = QGraphicsTextItem(self.text_content, self)

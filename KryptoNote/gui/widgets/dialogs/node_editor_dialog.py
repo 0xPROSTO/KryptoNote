@@ -49,7 +49,4 @@ class NoteEditorDialog(QDialog):
         layout.addLayout(btn_layout)
 
     def get_data(self):
-        return {
-            "title": self.title_edit.text(),
-            "content": self.content_edit.toPlainText(),
-        }
+        return self.title_edit.text(), self.content_edit.toPlainText()
