@@ -1,4 +1,4 @@
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import QGraphicsTextItem
 
 from KryptoNote.gui.theme import Theme
@@ -7,10 +7,12 @@ from .base import BaseNode
 
 
 class TextNode(BaseNode):
-    def __init__(self, item_id, x, y, w, h, title, text, service):
+    def __init__(self, item_id, x, y, w, h, title, text, service, title_size=14, text_size=10):
         super().__init__(item_id, x, y, w, h, service)
         self.title = title
         self.text_content = text if text else ""
+        self.title_size = title_size
+        self.text_size = text_size
         self.title_item = QGraphicsTextItem(self.title, self)
         self.title_item.setDefaultTextColor(
             QColor(
@@ -19,11 +21,13 @@ class TextNode(BaseNode):
                 else Theme.Palette.ACCENT_MAIN
             )
         )
-        self.title_item.setFont(Theme.Typography.get_font("SIZE_H1", bold=True))
+        self.title_item.setFont(QFont(Theme.Typography.FONT_DISPLAY, self.title_size, QFont.Weight.Bold))
         self.title_item.setPos(12, 8)
-        self.body_item = QGraphicsTextItem(self.text_content, self)
+        self.body_item = QGraphicsTextItem(parent=self)
+        self.body_item.setPlainText(self.text_content)
         self.body_item.setDefaultTextColor(QColor(Theme.Palette.TEXT_MAIN))
-        self.body_item.setFont(Theme.Typography.get_font("SIZE_BODY"))
+        self.body_item.setFont(QFont(Theme.Typography.FONT_BODY, self.text_size))
+        self.body_item.document().setMarkdown(self.text_content)
         self.body_item.setPos(12, 35)
         self.update_content_layout()
 
@@ -35,17 +39,23 @@ class TextNode(BaseNode):
     def mouseDoubleClickEvent(self, event):
         if self.resizer.isUnderMouse():
             return
-        dialog = NoteEditorDialog(self.title, self.text_content)
+        dialog = NoteEditorDialog(self.title, self.text_content, self.title_size, self.text_size)
         if dialog.exec():
-            new_title, new_text = dialog.get_data()
+            new_title, new_text, new_title_size, new_text_size = dialog.get_data()
 
             self.title = new_title.strip() or "Untitled"
             self.text_content = new_text
+            self.title_size = new_title_size
+            self.text_size = new_text_size
 
             self.title_item.setPlainText(self.title)
-            self.body_item.setPlainText(self.text_content)
+            self.title_item.setFont(QFont(Theme.Typography.FONT_DISPLAY, self.title_size, QFont.Weight.Bold))
+            
+            self.body_item.setFont(QFont(Theme.Typography.FONT_BODY, self.text_size))
+            self.body_item.document().setMarkdown(self.text_content)
+            
             self.service.update_text_content(
-                self.item_id, self.title, self.text_content
+                self.item_id, self.title, self.text_content, self.title_size, self.text_size
             )
 
     def extend_context_menu(self, menu):

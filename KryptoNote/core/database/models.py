@@ -15,6 +15,8 @@ class NodeItemDTO:
     thumbnail: Optional[bytes] = None
     is_chunked: bool = False
     total_size: int = 0
+    title_size: int = 14
+    text_size: int = 10
 
 
 @dataclass

@@ -95,6 +95,23 @@ class StyleFactory:
                 background-color: {Palette.BTN_CANCEL_HOVER};
                 border-color: #8c2a2a;
             }} 
+            QComboBox#font_combo {{
+                background-color: {Palette.BG_INPUT};
+                color: {Palette.TEXT_MAIN};
+                border: 1px solid {Palette.BORDER_DEFAULT};
+                border-radius: 4px;
+                padding: 4px;
+                min-width: 60px;
+            }}
+            QComboBox#font_combo:hover {{
+                border-color: {Palette.ACCENT_MAIN};
+            }}
+            QLabel {{
+                color: {Palette.TEXT_DIM};
+                font-size: 11px;
+                font-weight: bold;
+                text-transform: uppercase;
+            }}
         """
 
     @staticmethod

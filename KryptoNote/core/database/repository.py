@@ -11,7 +11,7 @@ class NodeRepository:
         self.crypto = crypto
 
     def add_item(
-            self, item_type, x, y, w, h, title="", text=None, thumb=None, data=None
+            self, item_type, x, y, w, h, title="", text=None, thumb=None, data=None, title_size=14, text_size=10
     ):
         enc_title = (
             self.crypto.encrypt(title.encode())
@@ -26,10 +26,10 @@ class NodeRepository:
 
         self.cursor.execute("""
                             INSERT INTO items (type, title, x, y, width, height, text_content, thumbnail, full_data,
-                                               is_chunked, total_size)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                               is_chunked, total_size, title_size, text_size)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             """,
-                            (item_type, enc_title, x, y, w, h, enc_text, enc_thumb, enc_data, is_chunked, total_size))
+                            (item_type, enc_title, x, y, w, h, enc_text, enc_thumb, enc_data, is_chunked, total_size, title_size, text_size))
         item_id = self.cursor.lastrowid
         self.conn.commit()
         return item_id
@@ -89,13 +89,13 @@ class NodeRepository:
 
     def get_all_items(self):
         self.cursor.execute(
-            "SELECT id, type, title, x, y, width, height, text_content, thumbnail, is_chunked, total_size FROM items"
+            "SELECT id, type, title, x, y, width, height, text_content, thumbnail, is_chunked, total_size, title_size, text_size FROM items"
         )
 
         rows = self.cursor.fetchall()
         decrypted_rows = []
         for r in rows:
-            rid, rtype, etitle, x, y, w, h, etext, ethumb, chunked, tsize = r
+            rid, rtype, etitle, x, y, w, h, etext, ethumb, chunked, tsize, tsize_val, text_size_val = r
             if self.crypto:
                 dtitle = self.crypto.decrypt(etitle).decode() if etitle else ""
                 dtext = self.crypto.decrypt(etext).decode() if etext else ""
@@ -108,7 +108,8 @@ class NodeRepository:
 
             decrypted_rows.append(NodeItemDTO(
                 id=rid, type=rtype, title=dtitle, x=x, y=y, width=w, height=h,
-                text_content=dtext, thumbnail=dthumb, is_chunked=bool(chunked), total_size=tsize
+                text_content=dtext, thumbnail=dthumb, is_chunked=bool(chunked), total_size=tsize,
+                title_size=tsize_val, text_size=text_size_val
             ))
         return decrypted_rows
 
@@ -142,7 +143,7 @@ class NodeRepository:
     def delete_item(self, item_id):
         self.delete_node_cascade(item_id)
 
-    def update_text_content(self, item_id, title, new_text):
+    def update_text_content(self, item_id, title, new_text, title_size=14, text_size=10):
         enc_title = (
             self.crypto.encrypt(title.encode())
             if title
@@ -150,8 +151,8 @@ class NodeRepository:
         )
         enc_text = self.crypto.encrypt(new_text.encode())
         self.cursor.execute(
-            "UPDATE items SET title=?, text_content=? WHERE id=?",
-            (enc_title, enc_text, item_id),
+            "UPDATE items SET title=?, text_content=?, title_size=?, text_size=? WHERE id=?",
+            (enc_title, enc_text, title_size, text_size, item_id),
         )
         self.conn.commit()
 

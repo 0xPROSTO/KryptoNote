@@ -17,6 +17,8 @@ class NodeFactory:
                 title=data.title,
                 text=data.text_content,
                 service=service,
+                title_size=data.title_size,
+                text_size=data.text_size,
             )
 
         elif item_type in ["image", "video"]:
@@ -39,8 +41,8 @@ class NodeFactory:
     @staticmethod
     def create_new_text(service, x, y, title):
         w, h = Config.NODE_DEFAULT_WIDTH, Config.NODE_DEFAULT_HEIGHT
-        rid = service.add_item("text", x, y, w, h, title=title, text="")
-        return TextNode(rid, x, y, w, h, title, "", service)
+        rid = service.add_item("text", x, y, w, h, title=title, text="", title_size=14, text_size=10)
+        return TextNode(rid, x, y, w, h, title, "", service, title_size=14, text_size=10)
 
     @staticmethod
     def create_new_media(service, x, y, mtype, title, thumb_bytes, full_data=None, file_path=None, progress_callback=None):

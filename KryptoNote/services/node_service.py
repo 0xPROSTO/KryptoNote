@@ -12,9 +12,9 @@ class NodeService:
         return self.repo.get_all_connections()
 
     def add_item(
-            self, item_type, x, y, w, h, title="", text=None, thumb=None, data=None
+            self, item_type, x, y, w, h, title="", text=None, thumb=None, data=None, title_size=14, text_size=10
     ):
-        return self.repo.add_item(item_type, x, y, w, h, title, text, thumb, data)
+        return self.repo.add_item(item_type, x, y, w, h, title, text, thumb, data, title_size, text_size)
 
     def add_streamed_video(
             self, item_type, x, y, w, h, title, thumb, file_path, progress_callback=None
@@ -41,8 +41,8 @@ class NodeService:
     def update_item_title(self, item_id, title):
         self.repo.update_item_title(item_id, title)
 
-    def update_text_content(self, item_id, title, new_text):
-        self.repo.update_text_content(item_id, title, new_text)
+    def update_text_content(self, item_id, title, new_text, title_size=14, text_size=10):
+        self.repo.update_text_content(item_id, title, new_text, title_size, text_size)
 
     def get_chunk(self, item_id, chunk_index):
         return self.repo.get_chunk(item_id, chunk_index)

@@ -29,7 +29,9 @@ class DatabaseConnection:
                                 thumbnail    BLOB,
                                 full_data    BLOB,
                                 is_chunked   INTEGER DEFAULT 0,
-                                total_size   INTEGER DEFAULT 0
+                                total_size   INTEGER DEFAULT 0,
+                                title_size   INTEGER DEFAULT 14,
+                                text_size    INTEGER DEFAULT 10
                             )
                             """)
 
@@ -50,8 +52,16 @@ class DatabaseConnection:
         )
 
         self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunks ON media_chunks(item_id, chunk_index)")
-
+        self._migrate_db()
         self.conn.commit()
+
+    def _migrate_db(self):
+        self.cursor.execute("PRAGMA table_info(items)")
+        columns = [column[1] for column in self.cursor.fetchall()]
+        if "title_size" not in columns:
+            self.cursor.execute("ALTER TABLE items ADD COLUMN title_size INTEGER DEFAULT 14")
+        if "text_size" not in columns:
+            self.cursor.execute("ALTER TABLE items ADD COLUMN text_size INTEGER DEFAULT 10")
 
     def get_salt(self):
         self.cursor.execute("SELECT value FROM metadata WHERE key='auth_salt'")

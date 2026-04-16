@@ -6,13 +6,15 @@ from PySide6.QtWidgets import (
     QTextEdit,
     QPushButton,
     QFrame,
+    QComboBox,
+    QLabel,
 )
 
 from KryptoNote.gui.theme import Theme
 
 
 class NoteEditorDialog(QDialog):
-    def __init__(self, title, content, parent=None):
+    def __init__(self, title, content, title_size=14, text_size=10, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Edit Note")
         self.resize(500, 480)
@@ -23,7 +25,30 @@ class NoteEditorDialog(QDialog):
         self.title_edit = QLineEdit(title)
         self.title_edit.setObjectName("title_edit")
         self.title_edit.setPlaceholderText("Title...")
+
+        size_layout = QHBoxLayout()
+        size_layout.setSpacing(10)
+        
+        self.title_size_combo = QComboBox()
+        self.title_size_combo.setObjectName("font_combo")
+        sizes = [str(s) for s in [8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 32, 36, 48, 64]]
+        self.title_size_combo.addItems(sizes)
+        self.title_size_combo.setCurrentText(str(title_size))
+        
+        self.text_size_combo = QComboBox()
+        self.text_size_combo.setObjectName("font_combo")
+        self.text_size_combo.addItems(sizes)
+        self.text_size_combo.setCurrentText(str(text_size))
+        
+        size_layout.addWidget(QLabel("Title Size:"))
+        size_layout.addWidget(self.title_size_combo)
+        size_layout.addStretch()
+        size_layout.addWidget(QLabel("Text Size:"))
+        size_layout.addWidget(self.text_size_combo)
+        
         layout.addWidget(self.title_edit)
+        layout.addLayout(size_layout)
+        
         line = QFrame()
         line.setFrameShape(QFrame.Shape.HLine)
         line.setFrameShadow(QFrame.Shadow.Plain)
@@ -49,4 +74,9 @@ class NoteEditorDialog(QDialog):
         layout.addLayout(btn_layout)
 
     def get_data(self):
-        return self.title_edit.text(), self.content_edit.toPlainText()
+        return (
+            self.title_edit.text(),
+            self.content_edit.toPlainText(),
+            int(self.title_size_combo.currentText()),
+            int(self.text_size_combo.currentText())
+        )
