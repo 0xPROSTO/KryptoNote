@@ -25,6 +25,8 @@ from .native_window import NativeWindowMixin
 from ..controllers.canvas_controller import CanvasController
 from ..views.canvas_view import InfiniteCanvasView
 from ..widgets.dialogs.search_dialog import SearchDialog
+from ..widgets.dialogs.about_dialog import AboutDialog
+from ..widgets.overlays.dim_overlay import DimOverlay
 from ..widgets.overlays.arraylist_overlay import ArrayListOverlay
 from ..widgets.title_bar import CustomTitleBar
 from ...config import Config
@@ -220,6 +222,11 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self.act_snap.triggered.connect(self.toggle_snap_to_grid)
         tools_menu.addAction(self.act_snap)
 
+        help_menu = menubar.addMenu("Help")
+        act_about = QAction("About", self)
+        act_about.triggered.connect(self.open_about)
+        help_menu.addAction(act_about)
+
         self.status_label = QLabel(self.default_status)
         self.status_label.setStyleSheet(
             f"padding-left: 10px; color: {Theme.Palette.TEXT_MUTED};"
@@ -286,6 +293,13 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self.search_dialog.activateWindow()
         self.search_dialog.search_input.setFocus()
         self.search_dialog.search_input.selectAll()
+
+    def open_about(self):
+        overlay = DimOverlay(self)
+        overlay.show()
+        dialog = AboutDialog(self)
+        dialog.exec()
+        overlay.close()
 
     def update_coords(self, pos):
         self.coords_label.setText(f"X: {int(pos.x())} Y: {int(pos.y())}")

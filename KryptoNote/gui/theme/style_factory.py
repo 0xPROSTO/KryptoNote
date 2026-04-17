@@ -199,3 +199,58 @@ class StyleFactory:
                 border-color: #2a8c2a;
             }} 
         """
+
+    @staticmethod
+    def get_about_dialog_qss():
+        return f"""
+            QDialog {{ 
+                background: transparent;
+            }} 
+            QWidget#about_container {{ 
+                background-color: {Palette.BG_PANEL};
+                border: 1px solid {Palette.BORDER_DEFAULT};
+                border-radius: 12px;
+            }} 
+            QLabel {{ 
+                background: transparent;
+                border: none;
+            }} 
+            QLabel#logo_label {{ 
+                margin-top: 5px;
+                margin-bottom: 25px;
+            }} 
+            QLabel#app_name {{ 
+                color: {Palette.ACCENT_MAIN};
+                font-size: 20px;
+                font-weight: bold;
+            }} 
+            QLabel#author_label {{ 
+                color: {Palette.TEXT_MAIN};
+                font-size: 14px;
+            }} 
+            QLabel#version_label {{ 
+                color: {Palette.TEXT_DIM};
+                font-size: 12px;
+            }} 
+            QLabel#desc_label {{ 
+                color: {Palette.TEXT_MUTED};
+                font-size: 12px;
+                line-height: 1.5;
+                margin-bottom: 20px;
+            }} 
+            QLabel#github_link {{ 
+                color: {Palette.ACCENT_MAIN};
+                margin-bottom: 20px;
+            }} 
+            QPushButton#btn_close {{ 
+                background: transparent;
+                color: {Palette.TEXT_MUTED};
+                border: none;
+                font-size: 24px;
+                font-weight: 900;
+                padding: 5px;
+            }} 
+            QPushButton#btn_close:hover {{ 
+                color: {Palette.ACCENT_MAIN};
+            }} 
+        """
