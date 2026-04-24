@@ -7,14 +7,14 @@ from KryptoNote.gui.theme import Theme
 
 class Config:
     APP_NAME = "ZeroXX-KryptoNote"
-    VERSION = "2.2.2"
+    VERSION = "2.2.4"
+    COMPANY_NAME = "ZeroXWare"
 
     CHUNK_SIZE = 4 * 1024 * 1024
 
-    if getattr(sys, "frozen", False):
-        BASE_DIR = os.path.dirname(sys.executable)
-    else:
-        BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # Path logic
+    IS_FROZEN = getattr(sys, "frozen", False)
+    BASE_DIR = os.path.dirname(sys.executable) if IS_FROZEN else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
     DB_PATH = "cases/"
     ICON_PATH = os.path.join(CURRENT_DIR, "gui", "assets", "icon.png")
@@ -38,15 +38,4 @@ class Config:
     COLOR_LINK_LINE = Theme.Palette.BORDER_DEFAULT
     COLOR_LINK_HIGHLIGHT = Theme.Palette.ACCENT_MAIN
 
-    STYLE_MAIN_WINDOW = Theme.Styles.get_main_window_qss()
-    STYLE_LAUNCHER = Theme.Styles.get_launcher_qss()
-
-    STYLE_PLAYER = f"""
-        QDialog {{ background-color: {Theme.Palette.BG_CANVAS}; }} 
-        QWidget {{ color: {Theme.Palette.TEXT_MAIN}; }} 
-        QSlider::groove:horizontal {{ border: 1px solid {Theme.Palette.BORDER_DEFAULT}; height: 4px; background: {Theme.Palette.BG_INPUT}; margin: 0px; border-radius: 2px; }} 
-        QSlider::sub-page:horizontal {{ background: {Theme.Palette.ACCENT_LOW}; border-radius: 2px; }} 
-        QSlider::handle:horizontal {{ background: {Theme.Palette.TEXT_MAIN}; border: 1px solid {Theme.Palette.BORDER_DEFAULT}; width: 12px; height: 12px; margin: -4px 0; border-radius: 6px; }} 
-        QSlider::handle:horizontal:hover {{ background: {Theme.Palette.ACCENT_HIGH}; }} 
-        QLabel {{ font-family: {Theme.Typography.FONT_BODY}, sans-serif; font-size: 12px; color: {Theme.Palette.TEXT_DIM}; }} 
-    """
+    COLOR_LINK_HIGHLIGHT = Theme.Palette.ACCENT_MAIN

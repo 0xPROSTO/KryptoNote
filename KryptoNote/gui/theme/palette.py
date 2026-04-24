@@ -32,3 +32,8 @@ class Palette:
     TEXT_DIM = "#bbbbbb"  # Subtle gray
     TEXT_MUTED = "#666666"  # Low contrast gray
     TEXT_ACCENT = "#e6158b"  # Magenta highlights
+
+    # TITLE BAR
+    BG_TITLE_BAR = "#181818"
+    BORDER_TITLE_BAR = "#2a2a2a"
+    BTN_HOVER_DEFAULT = "#3a3a3a"

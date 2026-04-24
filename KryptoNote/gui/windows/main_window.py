@@ -55,7 +55,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             self.title_bar = None
             adjust_window_to_screen(self)
 
-        self.setStyleSheet(Config.STYLE_MAIN_WINDOW)
+        self.setStyleSheet(Theme.Styles.get_main_window_qss())
         self.default_status = (
             "Ready | Hold [SHIFT] to Link | Hold [CTRL] to Multi-Select"
         )
@@ -228,13 +228,9 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         help_menu.addAction(act_about)
 
         self.status_label = QLabel(self.default_status)
-        self.status_label.setStyleSheet(
-            f"padding-left: 10px; color: {Theme.Palette.TEXT_MUTED};"
-        )
+        self.status_label.setStyleSheet(Theme.Styles.get_status_bar_qss())
         self.coords_label = QLabel("X: 0 Y: 0")
-        self.coords_label.setStyleSheet(
-            f"padding: 0 10px; color: {Theme.Palette.TEXT_MUTED}; font-weight: bold; font-size: 11px;"
-        )
+        self.coords_label.setStyleSheet(Theme.Styles.get_status_bar_qss("coords"))
         self.statusBar().setSizeGripEnabled(False)
         self.statusBar().addWidget(self.status_label, 1)
         self.statusBar().addPermanentWidget(self.coords_label)
@@ -244,18 +240,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             message = self.default_status
 
         self.status_label.setText(message)
-        if type == "secure":
-            self.status_label.setStyleSheet(
-                f"color: {Config.COLOR_SECURE_LABEL}; font-weight: bold; padding-left: 10px;"
-            )
-        elif type == "accent":
-            self.status_label.setStyleSheet(
-                f"color: {Config.COLOR_ACCENT}; font-weight: bold; padding-left: 10px;"
-            )
-        else:
-            self.status_label.setStyleSheet(
-                f"color: {Theme.Palette.TEXT_MUTED}; padding-left: 10px;"
-            )
+        self.status_label.setStyleSheet(Theme.Styles.get_status_bar_qss(type))
 
     def toggle_snap_to_grid(self):
         Config.SNAP_TO_GRID = not getattr(Config, "SNAP_TO_GRID", False)

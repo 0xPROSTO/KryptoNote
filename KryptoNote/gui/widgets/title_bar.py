@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 )
 
 from KryptoNote.config import Config
+from KryptoNote.gui.theme import Theme
 
 
 class TitleBarButton(QPushButton):
@@ -22,14 +23,14 @@ class TitleBarButton(QPushButton):
         self.setStyleSheet(f"""
             QPushButton {{ 
                 background: transparent;
-                color: #aaaaaa;
+                color: {Theme.Palette.TEXT_DIM};
                 border: none;
                 font-family: 'Segoe MDL2 Assets', 'Segoe UI Symbol';
                 font-size: 10px;
             }} 
             QPushButton:hover {{ 
                 background-color: {self._hover_color};
-                color: #ffffff;
+                color: {Theme.Palette.TEXT_MAIN};
             }} 
         """)
 
@@ -41,13 +42,8 @@ class CustomTitleBar(QWidget):
         super().__init__(parent)
         self.setFixedHeight(self.TITLE_BAR_HEIGHT)
         self.setAutoFillBackground(True)
-
-        self.setStyleSheet("""
-            CustomTitleBar {
-                background-color: #181818;
-                border-bottom: 1px solid #2a2a2a;
-            }
-        """)
+        self.setObjectName("CustomTitleBar")
+        self.setStyleSheet(Theme.Styles.get_title_bar_qss())
 
         layout = QGridLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -79,53 +75,11 @@ class CustomTitleBar(QWidget):
         self.menu_bar.setSizePolicy(
             QSizePolicy.Policy.MinimumExpanding, QSizePolicy.Policy.Fixed
         )
-        self.menu_bar.setStyleSheet("""
-            QMenuBar {
-                background: transparent;
-                color: #cccccc;
-                border: none;
-                font-family: 'Segoe UI', sans-serif;
-                font-size: 13px;
-                margin: 0;
-                padding: 0;
-            }
-            QMenuBar::item {
-                background: transparent;
-                padding: 6px 15px;
-                margin: 0;
-            }
-            QMenuBar::item:selected {
-                background-color: #333333;
-                color: #ffffff;
-            }
-            QMenu {
-                background-color: #1e1e1e;
-                color: #dddddd;
-                border: 1px solid #333;
-                font-size: 13px;
-                margin-top: 0;
-            }
-            QMenu::item {
-                padding: 8px 32px;
-            }
-            QMenu::item:selected {
-                background-color: #3b3b3b;
-            }
-            QMenu::separator {
-                height: 1px;
-                background: #333;
-                margin: 4px 0;
-            }
-        """)
         self.left_layout.addWidget(self.menu_bar)
         layout.addWidget(self.left_widget, 0, 0, Qt.AlignmentFlag.AlignLeft)
 
         self.title_label = QLabel("")
-        self.title_label.setStyleSheet("""
-            color: #888888;
-            font-family: 'Segoe UI', sans-serif;
-            font-size: 12px;
-        """)
+        self.title_label.setObjectName("window_title")
         self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.title_label, 0, 1, Qt.AlignmentFlag.AlignCenter)
 
@@ -134,8 +88,8 @@ class CustomTitleBar(QWidget):
         self.right_layout.setContentsMargins(0, 0, 0, 0)
         self.right_layout.setSpacing(0)
 
-        self.btn_minimize = TitleBarButton("\u2500")
-        self.btn_maximize = TitleBarButton("\u25a1")
+        self.btn_minimize = TitleBarButton("\u2500", hover_color=Theme.Palette.BTN_HOVER_DEFAULT)
+        self.btn_maximize = TitleBarButton("\u25a1", hover_color=Theme.Palette.BTN_HOVER_DEFAULT)
         self.btn_close = TitleBarButton("\u2715", hover_color="#c42b1c")
 
         self.btn_minimize.clicked.connect(self._on_minimize)

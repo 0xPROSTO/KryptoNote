@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from ...config import Config
+from ...gui.theme import Theme
 from ...core.io.stream import BlockEncryptedStream
 
 
@@ -49,7 +50,7 @@ class SecureVideoPlayer(QDialog):
         self.setWindowTitle(title)
         self.resize(1000, 700)
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowMinMaxButtonsHint)
-        self.setStyleSheet(Config.STYLE_PLAYER)
+        self.setStyleSheet(Theme.Styles.get_player_qss())
         self.repo = repo
 
         layout = QVBoxLayout(self)
@@ -65,7 +66,7 @@ class SecureVideoPlayer(QDialog):
 
         self.controls_container = QWidget()
         self.controls_container.setStyleSheet(
-            "background-color: #1a1a1a; border-top: 1px solid #2a2a2a;"
+            f"background-color: {Theme.Palette.BG_TITLE_BAR}; border-top: 1px solid {Theme.Palette.BORDER_DEFAULT};"
         )
         self.controls_container.setFixedHeight(50)
 

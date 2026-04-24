@@ -3,6 +3,25 @@ from .palette import Palette
 
 class StyleFactory:
     @staticmethod
+    def _generate_button_qss(bg, border, text, hover_bg, hover_border, selector="QPushButton"):
+        return f"""
+            {selector} {{
+                background-color: {bg};
+                border: 1px solid {border};
+                color: {text};
+                padding: 8px 15px;
+                font-size: 12px;
+                font-weight: bold;
+                border-radius: 4px;
+                text-transform: uppercase;
+            }}
+            {selector}:hover {{
+                background-color: {hover_bg};
+                border-color: {hover_border};
+            }}
+        """
+
+    @staticmethod
     def get_main_window_qss():
         return f"""
             QMainWindow {{ 
@@ -77,24 +96,8 @@ class StyleFactory:
                 text-transform: uppercase;
                 color: {Palette.TEXT_MAIN};
             }} 
-            QPushButton#btn_apply {{ 
-                background-color: {Palette.BTN_APPLY};
-                border-color: #2a5a32;
-                color: #99ff99;
-            }} 
-            QPushButton#btn_apply:hover {{ 
-                background-color: {Palette.BTN_APPLY_HOVER};
-                border-color: #3eb05d;
-            }} 
-            QPushButton#btn_cancel {{ 
-                background-color: {Palette.BTN_CANCEL};
-                border-color: #5a2a2a;
-                color: #ff9999;
-            }} 
-            QPushButton#btn_cancel:hover {{ 
-                background-color: {Palette.BTN_CANCEL_HOVER};
-                border-color: #8c2a2a;
-            }} 
+            {StyleFactory._generate_button_qss(Palette.BTN_APPLY, "#2a5a32", "#99ff99", Palette.BTN_APPLY_HOVER, "#3eb05d", "QPushButton#btn_apply")}
+            {StyleFactory._generate_button_qss(Palette.BTN_CANCEL, "#5a2a2a", "#ff9999", Palette.BTN_CANCEL_HOVER, "#8c2a2a", "QPushButton#btn_cancel")}
             QComboBox#font_combo {{
                 background-color: {Palette.BG_INPUT};
                 color: {Palette.TEXT_MAIN};
@@ -180,24 +183,8 @@ class StyleFactory:
                 border-color: #333333;
                 color: {Palette.TEXT_DIM};
             }} 
-            QPushButton#btn_danger {{ 
-                background-color: {Palette.BTN_CANCEL};
-                color: #ff9999;
-                border: 1px solid #5a2a2a;
-            }} 
-            QPushButton#btn_danger:hover {{ 
-                background-color: {Palette.BTN_CANCEL_HOVER};
-                border-color: #8c2a2a;
-            }} 
-            QPushButton#btn_success {{ 
-                background-color: {Palette.BTN_APPLY};
-                color: #99ff99;
-                border: 1px solid #2a5a2a;
-            }} 
-            QPushButton#btn_success:hover {{ 
-                background-color: {Palette.BTN_APPLY_HOVER};
-                border-color: #2a8c2a;
-            }} 
+            {StyleFactory._generate_button_qss(Palette.BTN_CANCEL, "#5a2a2a", "#ff9999", Palette.BTN_CANCEL_HOVER, "#8c2a2a", "QPushButton#btn_danger")}
+            {StyleFactory._generate_button_qss(Palette.BTN_APPLY, "#2a5a2a", "#99ff99", Palette.BTN_APPLY_HOVER, "#2a8c2a", "QPushButton#btn_success")}
         """
 
     @staticmethod
@@ -254,3 +241,86 @@ class StyleFactory:
                 color: {Palette.ACCENT_MAIN};
             }} 
         """
+
+    @staticmethod
+    def get_title_bar_qss():
+        return f"""
+            CustomTitleBar {{
+                background-color: {Palette.BG_TITLE_BAR};
+                border-bottom: 1px solid {Palette.BORDER_TITLE_BAR};
+            }}
+            QMenuBar {{
+                background: transparent;
+                color: {Palette.TEXT_DIM};
+                border: none;
+                font-family: 'Segoe UI', sans-serif;
+                font-size: 13px;
+                margin: 0;
+                padding: 0;
+            }}
+            QMenuBar::item {{
+                background: transparent;
+                padding: 6px 15px;
+                margin: 0;
+            }}
+            QMenuBar::item:selected {{
+                background-color: #333333;
+                color: {Palette.TEXT_MAIN};
+            }}
+            QMenu {{
+                background-color: {Palette.BG_PANEL};
+                color: {Palette.TEXT_MAIN};
+                border: 1px solid {Palette.BORDER_DEFAULT};
+                font-size: 13px;
+                margin-top: 0;
+            }}
+            QMenu::item {{
+                padding: 8px 32px;
+            }}
+            QMenu::item:selected {{
+                background-color: {Palette.ACCENT_LOW};
+                color: {Palette.ACCENT_MAIN};
+            }}
+            QMenu::separator {{
+                height: 1px;
+                background: {Palette.BORDER_DEFAULT};
+                margin: 4px 0;
+            }}
+            QLabel#window_title {{
+                color: {Palette.TEXT_MUTED};
+                font-family: 'Segoe UI', sans-serif;
+                font-size: 12px;
+            }}
+        """
+
+    @staticmethod
+    def get_player_qss():
+        return f"""
+            QDialog {{ background-color: {Palette.BG_CANVAS}; }} 
+            QWidget {{ color: {Palette.TEXT_MAIN}; }} 
+            QSlider::groove:horizontal {{ border: 1px solid {Palette.BORDER_DEFAULT}; height: 4px; background: {Palette.BG_INPUT}; margin: 0px; border-radius: 2px; }} 
+            QSlider::sub-page:horizontal {{ background: {Palette.ACCENT_LOW}; border-radius: 2px; }} 
+            QSlider::handle:horizontal {{ background: {Palette.TEXT_MAIN}; border: 1px solid {Palette.BORDER_DEFAULT}; width: 12px; height: 12px; margin: -4px 0; border-radius: 6px; }} 
+            QSlider::handle:horizontal:hover {{ background: {Palette.ACCENT_HIGH}; }} 
+            QLabel {{ font-family: {Typography.FONT_BODY}, sans-serif; font-size: 12px; color: {Palette.TEXT_DIM}; }} 
+        """
+
+    @staticmethod
+    def get_status_bar_qss(type="normal"):
+        color = Palette.TEXT_MUTED
+        weight = "normal"
+        size = "12px"
+        padding = "0 10px"
+
+        if type == "secure":
+            color = "#00FF00"
+            weight = "bold"
+        elif type == "accent":
+            color = Palette.ACCENT_MAIN
+            weight = "bold"
+        elif type == "coords":
+            color = Palette.TEXT_MUTED
+            weight = "bold"
+            size = "11px"
+
+        return f"padding: {padding}; color: {color}; font-weight: {weight}; font-size: {size};"

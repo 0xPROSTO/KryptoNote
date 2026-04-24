@@ -3,6 +3,7 @@ from PySide6.QtWidgets import QGraphicsTextItem
 
 from KryptoNote.gui.theme import Theme
 from KryptoNote.gui.widgets.dialogs.node_editor_dialog import NoteEditorDialog
+from KryptoNote.utils.text_utils import process_markdown_for_pyside
 from .base import BaseNode
 
 
@@ -27,7 +28,7 @@ class TextNode(BaseNode):
         self.body_item.setPlainText(self.text_content)
         self.body_item.setDefaultTextColor(QColor(Theme.Palette.TEXT_MAIN))
         self.body_item.setFont(QFont(Theme.Typography.FONT_BODY, self.text_size))
-        self.body_item.document().setMarkdown(self._process_markdown_text(self.text_content))
+        self.body_item.document().setMarkdown(process_markdown_for_pyside(self.text_content))
         self.body_item.setPos(12, 35)
         self.update_content_layout()
 
@@ -52,31 +53,11 @@ class TextNode(BaseNode):
             self.title_item.setFont(QFont(Theme.Typography.FONT_DISPLAY, self.title_size, QFont.Weight.Bold))
 
             self.body_item.setFont(QFont(Theme.Typography.FONT_BODY, self.text_size))
-            self.body_item.document().setMarkdown(self._process_markdown_text(self.text_content))
+            self.body_item.document().setMarkdown(process_markdown_for_pyside(self.text_content))
 
             self.service.update_text_content(
                 self.item_id, self.title, self.text_content, self.title_size, self.text_size
             )
-
-    def _process_markdown_text(self, text):
-        if not text:
-            return ""
-        lines = text.split('\n')
-        processed = []
-        in_code_block = False
-        for line in lines:
-            stripped = line.rstrip()
-            if stripped.startswith('```'):
-                in_code_block = not in_code_block
-                processed.append(line)
-            elif in_code_block:
-                processed.append(line)
-            else:
-                if stripped:
-                    processed.append(stripped + "  ")
-                else:
-                    processed.append("")
-        return '\n'.join(processed)
 
     def extend_context_menu(self, menu):
         edit_action = menu.addAction("Edit")
