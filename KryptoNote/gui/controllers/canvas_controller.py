@@ -12,6 +12,8 @@ from ...utils.media_proc import create_thumbnail
 class CanvasController(QObject):
     status_message = Signal(str, str)
     pending_commits_changed = Signal(bool)
+    progress_updated = Signal(float, str)
+    progress_finished = Signal(str)
 
     def __init__(self, scene, view, service):
         super().__init__()
@@ -23,8 +25,13 @@ class CanvasController(QObject):
         self.link_start_node = None
 
     def load_from_db(self):
+        self.progress_updated.emit(0.0, "Decrypting database...")
+        QApplication.processEvents()
+
         items = self.service.get_all_items()
-        for item_data in items:
+        total = len(items)
+
+        for i, item_data in enumerate(items):
             try:
                 node = NodeFactory.create_node_from_db(item_data, self.service)
                 self.scene.addItem(node)
@@ -32,8 +39,13 @@ class CanvasController(QObject):
             except Exception as e:
                 print(f"Skipping broken node {item_data.id}: {e}")
 
+            if total > 0:
+                self.progress_updated.emit((i + 1) / total * 0.85, f"Loading nodes ({i + 1}/{total})")
+                QApplication.processEvents()
+
         conns = self.service.get_all_connections()
-        for c in conns:
+        total_conns = len(conns)
+        for ci, c in enumerate(conns):
             n1 = self.nodes_map.get(c.start_id)
             n2 = self.nodes_map.get(c.end_id)
             if n1 and n2:
@@ -41,6 +53,12 @@ class CanvasController(QObject):
                 self.scene.addItem(line)
                 n1.add_connection(line)
                 n2.add_connection(line)
+
+            if total_conns > 0:
+                self.progress_updated.emit(0.85 + (ci + 1) / total_conns * 0.15, f"Loading connections ({ci + 1}/{total_conns})")
+                QApplication.processEvents()
+
+        self.progress_finished.emit("Ready")
 
     def get_center_pos(self):
         return self.view.mapToScene(self.view.viewport().rect().center())
@@ -92,16 +110,23 @@ class CanvasController(QObject):
                 x = round(x / Config.GRID_SIZE) * Config.GRID_SIZE
                 y = round(y / Config.GRID_SIZE) * Config.GRID_SIZE
 
+            self.progress_updated.emit(i / len(paths), f"Generating thumbnail for {mtype} {i + 1}/{len(paths)}...")
+            QApplication.processEvents()
+
             thumb_bytes = create_thumbnail(path)
             title = os.path.basename(path)
             full_data = None
 
             def progress_cb(current, total, status="Encrypting"):
-                self.status_message.emit(
-                    f"{status} video {i + 1}/{len(paths)} (Chunk {current}/{total})...",
-                    "normal",
+                progress_val = (i + current / total) / len(paths)
+                self.progress_updated.emit(
+                    progress_val,
+                    f"{status} {mtype} {i + 1}/{len(paths)} ({current}/{total})"
                 )
                 QApplication.processEvents()
+
+            self.progress_updated.emit(i / len(paths), f"Reading {mtype} {i + 1}/{len(paths)}...")
+            QApplication.processEvents()
 
             if mtype != "video":
                 try:
@@ -109,12 +134,6 @@ class CanvasController(QObject):
                         full_data = f.read()
                 except Exception as e:
                     print(f"Error reading image file: {e}")
-
-            if mtype == "video":
-                self.status_message.emit(
-                    f"Preparing video {i + 1}/{len(paths)}...", "normal"
-                )
-                QApplication.processEvents()
 
             node = NodeFactory.create_new_media(
                 self.service,
@@ -130,7 +149,7 @@ class CanvasController(QObject):
             self.scene.addItem(node)
             self.nodes_map[node.item_id] = node
 
-        self.status_message.emit("Ready", "normal")
+        self.progress_finished.emit("Ready")
 
     def handle_link_click(self, node):
         if self.link_start_node is None:
@@ -198,22 +217,31 @@ class CanvasController(QObject):
         if not path:
             return
 
-        self.status_message.emit("Exporting notes to Markdown...", "secure")
+        self.progress_updated.emit(0.0, "Exporting to Markdown...")
         QApplication.processEvents()
 
         try:
+            self.progress_updated.emit(0.2, "Reading nodes...")
+            QApplication.processEvents()
             items = self.service.get_all_items()
+
+            self.progress_updated.emit(0.4, "Reading connections...")
+            QApplication.processEvents()
             connections = self.service.get_all_connections()
+
+            self.progress_updated.emit(0.7, "Building Markdown...")
+            QApplication.processEvents()
             exporter = MarkdownExportService()
             exporter.export(items, connections, path)
-            self.status_message.emit("Ready", "normal")
+
+            self.progress_finished.emit("Ready")
             QMessageBox.information(
                 None, "Export Complete",
                 f"Exported successfully to:\n{path}"
             )
         except ValueError as e:
-            self.status_message.emit("Ready", "normal")
+            self.progress_finished.emit("Ready")
             QMessageBox.warning(None, "Export", str(e))
         except Exception as e:
-            self.status_message.emit("Ready", "normal")
+            self.progress_finished.emit("Ready")
             QMessageBox.critical(None, "Export Error", f"Failed to export:\n{e}")

@@ -3,14 +3,16 @@ from PySide6.QtWidgets import QWidget
 
 
 class DimOverlay(QWidget):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, block_input=False):
         super().__init__(parent)
         if parent:
             self.setGeometry(parent.rect())
             parent.installEventFilter(self)
 
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self.setStyleSheet("background-color: rgba(0, 0, 0, 76);")  # ~30%
+        if not block_input:
+            self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+        self.setStyleSheet("background-color: rgba(0, 0, 0, 76);")
         self.show()
 
     def eventFilter(self, obj, event):

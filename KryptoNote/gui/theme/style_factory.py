@@ -1,4 +1,5 @@
 from .palette import Palette
+from .typography import Typography
 
 
 class StyleFactory:

@@ -63,6 +63,7 @@ class BlockEncryptedStream(QIODevice):
             )
 
             row = self.cursor.fetchone()
+            self.cursor.fetchall()  # Finalize statement to release read lock
             if not row or not row[0]:
                 return b""
             decrypted_chunk = self.crypto.decrypt(row[0])

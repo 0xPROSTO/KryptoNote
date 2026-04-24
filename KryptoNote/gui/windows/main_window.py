@@ -28,6 +28,7 @@ from ..widgets.dialogs.search_dialog import SearchDialog
 from ..widgets.dialogs.about_dialog import AboutDialog
 from ..widgets.overlays.dim_overlay import DimOverlay
 from ..widgets.overlays.arraylist_overlay import ArrayListOverlay
+from ..widgets.progress_bar import ProgressBarWidget
 from ..widgets.title_bar import CustomTitleBar
 from ...config import Config
 from ...core.crypto import CryptoManager
@@ -158,6 +159,8 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             self.canvas_controller.quick_delete_connection
         )
         self.canvas_controller.status_message.connect(self._handle_status_update)
+        self.canvas_controller.progress_updated.connect(self._on_progress_updated)
+        self.canvas_controller.progress_finished.connect(self._on_progress_finished)
 
         self.overlay = ArrayListOverlay(self)
         self.view.zoom_changed.connect(self.overlay.set_zoom_status)
@@ -237,10 +240,18 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
 
         self.status_label = QLabel(self.default_status)
         self.status_label.setStyleSheet(Theme.Styles.get_status_bar_qss())
+
+        self.progress_label = QLabel("")
+        self.progress_label.setStyleSheet(Theme.Styles.get_status_bar_qss("accent"))
+        self.progress_label.setVisible(False)
+
+        self.progress_bar = ProgressBarWidget(self)
+
         self.coords_label = QLabel("X: 0 Y: 0")
         self.coords_label.setStyleSheet(Theme.Styles.get_status_bar_qss("coords"))
         self.statusBar().setSizeGripEnabled(False)
         self.statusBar().addWidget(self.status_label, 1)
+        self.statusBar().addWidget(self.progress_label)
         self.statusBar().addPermanentWidget(self.coords_label)
 
     def _handle_status_update(self, message, type="normal"):
@@ -249,6 +260,18 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
 
         self.status_label.setText(message)
         self.status_label.setStyleSheet(Theme.Styles.get_status_bar_qss(type))
+
+    def _on_progress_updated(self, value: float, message: str):
+        self.progress_bar.set_progress(value, message)
+        self.progress_label.setText(message)
+        self.progress_label.setVisible(True)
+        self.status_label.setVisible(False)
+
+    def _on_progress_finished(self, message: str):
+        self.progress_bar.finish(message)
+        self.progress_label.setVisible(False)
+        self.status_label.setVisible(True)
+        self._handle_status_update(message)
 
     def toggle_snap_to_grid(self):
         Config.SNAP_TO_GRID = not getattr(Config, "SNAP_TO_GRID", False)
@@ -312,6 +335,11 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             ov_y = sb_y - self.overlay.height() + 3
             self.overlay.move(ov_x, ov_y)
             self.overlay.raise_()
+        if hasattr(self, "progress_bar"):
+            sb_y = self.statusBar().y()
+            self.progress_bar.setFixedWidth(self.width())
+            self.progress_bar.move(0, sb_y - self.progress_bar.height())
+            self.progress_bar.raise_()
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Shift:
@@ -334,7 +362,6 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         geom = settings.value("geometry")
         if geom:
             self.restoreGeometry(geom)
-            # Если восстановленный размер слишком мал (баг 800х600), сбрасываем его
             if self.width() <= 800:
                 return False
             state = settings.value("windowState")

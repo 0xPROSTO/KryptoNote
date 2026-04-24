@@ -118,7 +118,7 @@ class MediaNode(BaseNode):
             if self.is_chunked:
                 try:
                     player = SecureVideoPlayer(
-                        self.service,
+                        self.service.repo,
                         self.item_id,
                         self.total_size,
                         Config.CHUNK_SIZE,

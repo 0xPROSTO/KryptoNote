@@ -206,6 +206,10 @@ class BaseNode(QGraphicsRectItem):
         for line in list(self.connections):
             line.remove_from_scene_only()
 
-        self.service.delete_node_cascade(self.item_id)
         if self.scene():
             self.scene().removeItem(self)
+
+        from PySide6.QtCore import QTimer
+        srv = self.service
+        i_id = self.item_id
+        QTimer.singleShot(10, lambda: srv.delete_node_cascade(i_id))
