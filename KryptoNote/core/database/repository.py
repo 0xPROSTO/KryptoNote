@@ -25,8 +25,7 @@ class NodeRepository:
                                                is_chunked, total_size, title_size, text_size)
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             """,
-                            (item_type, enc_title, x, y, w, h, enc_text, enc_thumb, enc_data, is_chunked, total_size,
-                             title_size, text_size))
+                            (item_type, enc_title, x, y, w, h, enc_text, enc_thumb, enc_data, is_chunked, total_size, title_size, text_size))
         item_id = self.cursor.lastrowid
         self.conn.commit()
         return item_id
@@ -167,10 +166,10 @@ class NodeRepository:
         self.cursor.execute("DELETE FROM connections WHERE id=?", (conn_id,))
         self.conn.commit()
 
-    def delete_node_cascade(self, item_id):
+    def delete_node_cascade(self, item_id, on_start_vacuum=None, on_finish_vacuum=None):
         self.cursor.execute("SELECT type, total_size FROM items WHERE id=?", (item_id,))
         row = self.cursor.fetchone()
-        self.cursor.fetchall()
+        self.cursor.fetchall() 
 
         should_vacuum = False
         if row:
@@ -187,48 +186,26 @@ class NodeRepository:
             self.conn.commit()
             if should_vacuum:
                 self.conn.execute("VACUUM")
+                
+            if should_vacuum and on_finish_vacuum:
+                on_finish_vacuum()
         else:
+            # Disk DB can be deleted in background
             try:
-                from PySide6.QtWidgets import QApplication
                 import sqlite3
                 import concurrent.futures
                 import threading
-
+                
                 if not hasattr(self, '_delete_executor'):
                     self._delete_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
                     self._active_deletions = 0
                     self._del_lock = threading.Lock()
 
-                app = QApplication.instance()
-
-                def get_main_window():
-                    if not app: return None
-                    for w in app.topLevelWidgets():
-                        if w.inherits("QMainWindow"):
-                            return w
-                    return None
-
-                main_win = get_main_window()
-
                 if should_vacuum:
                     with self._del_lock:
                         self._active_deletions += 1
-                        if main_win and hasattr(main_win, 'progress_bar') and hasattr(main_win, 'view'):
-                            view = main_win.view
-                            if not hasattr(app, 'global_dim_overlay') or not app.global_dim_overlay:
-                                from KryptoNote.gui.widgets.overlays.dim_overlay import DimOverlay
-                                app.global_dim_overlay = DimOverlay(view, block_input=True)
-                                app.global_dim_overlay.setParent(view)
-                                app.global_dim_overlay.resize(view.size())
-                            app.global_dim_overlay.show()
-                            app.global_dim_overlay.raise_()
-                            msg = "Cleaning and optimizing database..."
-                            main_win.progress_bar.start(msg, indeterminate=True)
-                            if hasattr(main_win, 'progress_label'):
-                                main_win.progress_label.setText(msg)
-                                main_win.progress_label.setVisible(True)
-                                main_win.status_label.setVisible(False)
-                            app.processEvents()
+                        if on_start_vacuum:
+                            on_start_vacuum()
 
                 def run_delete_and_vac():
                     try:
@@ -239,7 +216,14 @@ class NodeRepository:
                         v_cursor.execute("DELETE FROM media_chunks WHERE item_id=?", (item_id,))
                         v_cursor.execute("DELETE FROM items WHERE id=?", (item_id,))
                         v_conn.commit()
+                        
+                        do_vacuum = False
                         if should_vacuum:
+                            with self._del_lock:
+                                if self._active_deletions == 1:
+                                    do_vacuum = True
+                                    
+                        if do_vacuum:
                             v_conn.execute("VACUUM")
                         v_conn.close()
                     except Exception as e:
@@ -249,24 +233,8 @@ class NodeRepository:
                             with self._del_lock:
                                 self._active_deletions -= 1
                                 if self._active_deletions == 0:
-                                    def update_ui():
-                                        try:
-                                            mw = get_main_window()
-                                            if mw:
-                                                if hasattr(mw, 'progress_bar'):
-                                                    mw.progress_bar.finish()
-                                                if hasattr(mw, 'progress_label'):
-                                                    mw.progress_label.setVisible(False)
-                                                    mw.status_label.setVisible(True)
-                                                    mw.status_label.setText("Ready")
-                                                if hasattr(app, 'global_dim_overlay') and app.global_dim_overlay:
-                                                    app.global_dim_overlay.fade_out()
-                                                    app.global_dim_overlay = None
-                                        except Exception as ex:
-                                            print(f"update_ui Exception: {ex}")
-
-                                    from PySide6.QtCore import QTimer
-                                    QTimer.singleShot(0, app, update_ui)
+                                    if on_finish_vacuum:
+                                        on_finish_vacuum()
 
                 self._delete_executor.submit(run_delete_and_vac)
             except Exception as e:

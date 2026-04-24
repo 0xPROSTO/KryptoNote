@@ -14,6 +14,8 @@ class LodComponent(NodeComponent):
         self._lod_label = None
         self._lod_state = "full"
         self._beacon_dirty = True
+        self._cached_beacon_font_size = None
+        self._cached_beacon_node_size = None
         
     def on_attached(self, node):
         super().on_attached(node)
@@ -70,20 +72,27 @@ class LodComponent(NodeComponent):
         
         if available_w <= 0 or available_h <= 0:
             return
-            
-        lo, hi = 8, 72
-        best_size = lo
-        while lo <= hi:
-            mid = (lo + hi) // 2
-            font = QFont(Theme.Typography.FONT_DISPLAY, mid, QFont.Weight.Bold)
-            label.setFont(font)
-            label.setTextWidth(available_w)
-            doc_h = label.document().size().height()
-            if doc_h <= available_h:
-                best_size = mid
-                lo = mid + 1
-            else:
-                hi = mid - 1
+
+        node_size = (r.width(), r.height())
+        if (self._cached_beacon_font_size is not None 
+                and self._cached_beacon_node_size == node_size):
+            best_size = self._cached_beacon_font_size
+        else:
+            lo, hi = 8, 72
+            best_size = lo
+            while lo <= hi:
+                mid = (lo + hi) // 2
+                font = QFont(Theme.Typography.FONT_DISPLAY, mid, QFont.Weight.Bold)
+                label.setFont(font)
+                label.setTextWidth(available_w)
+                doc_h = label.document().size().height()
+                if doc_h <= available_h:
+                    best_size = mid
+                    lo = mid + 1
+                else:
+                    hi = mid - 1
+            self._cached_beacon_font_size = best_size
+            self._cached_beacon_node_size = node_size
                 
         font = QFont(Theme.Typography.FONT_DISPLAY, best_size, QFont.Weight.Bold)
         label.setFont(font)

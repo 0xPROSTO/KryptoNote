@@ -36,12 +36,13 @@ class MediaNode(BaseNode):
         self.node_title = title or ""
         self.pix_item = None
         self.full_pixmap = None
+        self._cached_pix_size = (0, 0)
         if thumbnail_bytes:
             image = QImage.fromData(thumbnail_bytes)
             self.full_pixmap = QPixmap.fromImage(image)
             self.pix_item = QGraphicsPixmapItem(self.full_pixmap, self)
             self.pix_item.setTransformationMode(
-                Qt.TransformationMode.SmoothTransformation
+                Qt.TransformationMode.FastTransformation
             )
 
         self.title_item = QGraphicsTextItem(self.node_title, self)
@@ -62,17 +63,21 @@ class MediaNode(BaseNode):
             available_h = self.rect().height() - title_h - footer_h - 10
             available_w = self.rect().width() - 20
             if available_h > 10 and available_w > 10:
-                transform_mode = Qt.TransformationMode.SmoothTransformation if high_quality else Qt.TransformationMode.FastTransformation
+                target_size = (int(available_w), int(available_h))
+                if target_size != self._cached_pix_size or high_quality:
+                    self._cached_pix_size = target_size
+                    transform_mode = Qt.TransformationMode.SmoothTransformation if high_quality else Qt.TransformationMode.FastTransformation
 
-                scaled = self.full_pixmap.scaled(
-                    int(available_w), int(available_h),
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    transform_mode,
-                )
+                    scaled = self.full_pixmap.scaled(
+                        target_size[0], target_size[1],
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        transform_mode,
+                    )
+                    self.pix_item.setPixmap(scaled)
 
-                self.pix_item.setPixmap(scaled)
-                off_x = (self.rect().width() - scaled.width()) / 2
-                off_y = title_h + 5 + (available_h - scaled.height()) / 2
+                cur_pix = self.pix_item.pixmap()
+                off_x = (self.rect().width() - cur_pix.width()) / 2
+                off_y = title_h + 5 + (available_h - cur_pix.height()) / 2
                 self.pix_item.setPos(off_x, off_y)
 
     def finalize_resize(self):

@@ -35,9 +35,10 @@ class InfiniteCanvasView(QGraphicsView):
         self.zoom_agent.zoom_changed.connect(self._on_zoom_changed)
 
     def _on_zoom_changed(self, scale):
+        """Broadcast zoom to the overlay AND update LOD on all nodes."""
         self.zoom_changed.emit(scale)
         for item in self.scene().items():
-            if hasattr(item, "apply_lod"):
+            if item.parentItem() is None and hasattr(item, "apply_lod"):
                 item.apply_lod(scale)
 
     def drawBackground(self, painter, rect):

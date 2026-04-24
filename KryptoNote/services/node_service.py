@@ -26,8 +26,8 @@ class NodeService:
     def add_connection(self, start_id, end_id, commit=True):
         return self.repo.add_connection(start_id, end_id, commit=commit)
 
-    def delete_node_cascade(self, item_id):
-        self.repo.delete_node_cascade(item_id)
+    def delete_node_cascade(self, item_id, on_start_vacuum=None, on_finish_vacuum=None):
+        self.repo.delete_node_cascade(item_id, on_start_vacuum, on_finish_vacuum)
 
     def delete_connection(self, conn_id):
         self.repo.delete_connection(conn_id)

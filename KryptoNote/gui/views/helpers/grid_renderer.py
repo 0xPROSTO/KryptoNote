@@ -27,19 +27,23 @@ class GridRenderer:
         top_grid = top - (top % grid_size)
         lines = []
         lines_main = []
-        fixed_lim = 1000000
+        # Clip lines to visible rect with small margin instead of 2M pixel lines
+        y_lo = top - 10
+        y_hi = bottom + 10
+        x_lo = left - 10
+        x_hi = right + 10
 
         for x in range(left_grid, right + grid_size, grid_size):
             if x % grid_main == 0:
-                lines_main.append(QLineF(x, -fixed_lim, x, fixed_lim))
+                lines_main.append(QLineF(x, y_lo, x, y_hi))
             elif scale >= 0.5:
-                lines.append(QLineF(x, -fixed_lim, x, fixed_lim))
+                lines.append(QLineF(x, y_lo, x, y_hi))
 
         for y in range(top_grid, bottom + grid_size, grid_size):
             if y % grid_main == 0:
-                lines_main.append(QLineF(-fixed_lim, y, fixed_lim, y))
+                lines_main.append(QLineF(x_lo, y, x_hi, y))
             elif scale >= 0.5:
-                lines.append(QLineF(-fixed_lim, y, fixed_lim, y))
+                lines.append(QLineF(x_lo, y, x_hi, y))
 
         grid_color = QColor(Config.GRID_COLOR)
         grid_color_main = QColor(Config.GRID_COLOR_MAIN)

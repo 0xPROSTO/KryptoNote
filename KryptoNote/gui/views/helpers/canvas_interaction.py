@@ -33,20 +33,20 @@ class InertiaHandler(QObject):
 
     def update_velocity(self, delta):
         self.last_move_timestamp = time.time()
-        self.pan_velocity = self.pan_velocity * 0.4 + delta * 2.0
+        self.pan_velocity = self.pan_velocity * 0.4 + delta * 1.5
 
     def decay_velocity(self):
         self.pan_velocity *= 0.4
 
     def start_if_needed(self):
-        if (time.time() - self.last_move_timestamp) > 0.08:
+        if (time.time() - self.last_move_timestamp) > 0.1:
             self.pan_velocity = QPointF(0, 0)
 
         if self.pan_velocity.manhattanLength() > 2:
             self.timer.start()
 
     def _apply_inertia(self):
-        self.pan_velocity *= 0.85
+        self.pan_velocity *= 0.82
         speed = self.pan_velocity.manhattanLength()
         if speed < 1.0:
             self.timer.stop()

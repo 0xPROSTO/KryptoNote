@@ -3,7 +3,7 @@ import os
 import sqlite3
 import sys
 
-from PySide6.QtCore import Qt, QSettings
+from PySide6.QtCore import Qt, QSettings, Slot
 from PySide6.QtGui import (
     QAction,
     QColor,
@@ -272,6 +272,31 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self.progress_label.setVisible(False)
         self.status_label.setVisible(True)
         self._handle_status_update(message)
+
+    @Slot(str)
+    def show_blocking_progress(self, msg: str):
+        if not hasattr(self, 'global_dim_overlay') or not self.global_dim_overlay:
+            self.global_dim_overlay = DimOverlay(self.view, block_input=True)
+            self.global_dim_overlay.setParent(self.view)
+            self.global_dim_overlay.resize(self.view.size())
+            
+        self.global_dim_overlay.show()
+        self.global_dim_overlay.raise_()
+        self.progress_bar.start(msg, indeterminate=True)
+        self.progress_label.setText(msg)
+        self.progress_label.setVisible(True)
+        self.status_label.setVisible(False)
+
+    @Slot()
+    def hide_blocking_progress(self):
+        if hasattr(self, 'global_dim_overlay') and self.global_dim_overlay:
+            self.global_dim_overlay.fade_out()
+            self.global_dim_overlay = None
+            
+        self.progress_bar.finish()
+        self.progress_label.setVisible(False)
+        self.status_label.setVisible(True)
+        self.status_label.setText("Ready")
 
     def toggle_snap_to_grid(self):
         Config.SNAP_TO_GRID = not getattr(Config, "SNAP_TO_GRID", False)

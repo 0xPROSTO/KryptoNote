@@ -87,23 +87,11 @@ class CanvasController(QObject):
         valid_img_exts = {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp"}
         valid_vid_exts = {".mp4", ".avi", ".mkv", ".mov", ".webm"}
 
-        app = QApplication.instance()
-        main_win = None
-        for w in app.topLevelWidgets():
-            if w.inherits("QMainWindow"):
-                main_win = w
-                break
+        main_win = self.view.window()
 
-        if main_win and mtype == "video":
-            view = getattr(main_win, "view", self.view)
-            if not hasattr(app, 'global_dim_overlay') or not app.global_dim_overlay:
-                from KryptoNote.gui.widgets.overlays.dim_overlay import DimOverlay
-                app.global_dim_overlay = DimOverlay(view, block_input=True)
-                app.global_dim_overlay.setParent(view)
-                app.global_dim_overlay.resize(view.size())
-            app.global_dim_overlay.show()
-            app.global_dim_overlay.raise_()
-            app.processEvents()
+        if main_win and hasattr(main_win, 'show_blocking_progress') and mtype == "video":
+            main_win.show_blocking_progress("Preparing video...")
+            QApplication.processEvents()
 
         for i, path in enumerate(paths):
             ext = os.path.splitext(path)[1].lower()
@@ -168,9 +156,8 @@ class CanvasController(QObject):
             self.scene.addItem(node)
             self.nodes_map[node.item_id] = node
 
-        if main_win and mtype == "video" and hasattr(app, 'global_dim_overlay') and app.global_dim_overlay:
-            app.global_dim_overlay.fade_out()
-            app.global_dim_overlay = None
+        if main_win and hasattr(main_win, 'hide_blocking_progress') and mtype == "video":
+            main_win.hide_blocking_progress()
 
         self.progress_finished.emit("Ready")
 

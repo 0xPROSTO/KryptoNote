@@ -222,13 +222,26 @@ class BaseNode(QGraphicsRectItem):
         self.del_anim.start()
 
     def delete_node(self):
+        main_win = None
+        if self.scene() and self.scene().views():
+            main_win = self.scene().views()[0].window()
+
         for line in list(self.connections):
             line.remove_from_scene_only()
 
         if self.scene():
             self.scene().removeItem(self)
 
-        from PySide6.QtCore import QTimer
+        from PySide6.QtCore import QTimer, QMetaObject, Qt
         srv = self.service
         i_id = self.item_id
-        QTimer.singleShot(10, lambda: srv.delete_node_cascade(i_id))
+
+        def on_start():
+            if main_win and hasattr(main_win, 'show_blocking_progress'):
+                main_win.show_blocking_progress("Cleaning database...")
+
+        def on_finish():
+            if main_win and hasattr(main_win, 'hide_blocking_progress'):
+                QMetaObject.invokeMethod(main_win, "hide_blocking_progress", Qt.ConnectionType.QueuedConnection)
+
+        QTimer.singleShot(10, lambda: srv.delete_node_cascade(i_id, on_start, on_finish))

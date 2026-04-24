@@ -98,6 +98,10 @@ class ProgressBarWidget(QWidget):
         if not self._active:
             self.start(message)
 
+        self._indeterminate = False
+        if hasattr(self, '_indet_timer'):
+            self._indet_timer.stop()
+
         self._progress = max(0.0, min(1.0, value))
         if message:
             self._message = message
