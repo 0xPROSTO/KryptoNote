@@ -42,7 +42,9 @@ class NodeFactory:
     def create_new_text(service, x, y, title):
         w, h = Config.NODE_DEFAULT_WIDTH, Config.NODE_DEFAULT_HEIGHT
         rid = service.add_item("text", x, y, w, h, title=title, text="", title_size=14, text_size=10)
-        return TextNode(rid, x, y, w, h, title, "", service, title_size=14, text_size=10)
+        node = TextNode(rid, x, y, w, h, title, "", service, title_size=14, text_size=10)
+        node._auto_fit_pending = True
+        return node
 
     @staticmethod
     def create_new_media(service, x, y, mtype, title, thumb_bytes, full_data=None, file_path=None, progress_callback=None):
