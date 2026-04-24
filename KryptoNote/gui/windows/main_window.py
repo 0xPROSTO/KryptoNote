@@ -191,6 +191,14 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         act_backup.triggered.connect(self.create_backup)
         file_menu.addAction(act_backup)
 
+        file_menu.addSeparator()
+
+        act_export_md = QAction("Export Text Nodes to Markdown", self)
+        act_export_md.triggered.connect(self._on_export_markdown)
+        file_menu.addAction(act_export_md)
+
+        file_menu.addSeparator()
+
         add_menu = menubar.addMenu("Add")
 
         act_note = QAction("Note\t[Ctrl+N]", self)
@@ -248,6 +256,13 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self.act_snap.setText(f"Snap to Grid: {state_text}\t[G]")
         self.overlay.set_snap_status(Config.SNAP_TO_GRID)
         self.status_label.setText(f"Snap to grid {state_text.lower()}.")
+
+    def _on_export_markdown(self):
+        db_path = getattr(self.db_conn, "db_path", "Untitled")
+        name, _ = os.path.splitext(os.path.basename(db_path))
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d")
+        default_filename = f"{name}-KryptoNoteExported-{timestamp}.md"
+        self.canvas_controller.export_to_markdown(default_filename)
 
     def create_backup(self):
         db_path = self.db_conn.db_path

@@ -5,6 +5,7 @@ from PySide6.QtWidgets import QFileDialog, QMessageBox, QApplication
 
 from ..nodes import ConnectionLine, NodeFactory
 from ...config import Config
+from ...services.export_service import MarkdownExportService
 from ...utils.media_proc import create_thumbnail
 
 
@@ -188,3 +189,31 @@ class CanvasController(QObject):
                 self.link_start_node.setSelected(False)
                 self.link_start_node = None
             self.commit_changes()
+
+    def export_to_markdown(self, default_filename="kryptonote_export.md"):
+        path, _ = QFileDialog.getSaveFileName(
+            None, "Export Notes to Markdown", default_filename,
+            "Markdown Files (*.md)"
+        )
+        if not path:
+            return
+
+        self.status_message.emit("Exporting notes to Markdown...", "secure")
+        QApplication.processEvents()
+
+        try:
+            items = self.service.get_all_items()
+            connections = self.service.get_all_connections()
+            exporter = MarkdownExportService()
+            exporter.export(items, connections, path)
+            self.status_message.emit("Ready", "normal")
+            QMessageBox.information(
+                None, "Export Complete",
+                f"Exported successfully to:\n{path}"
+            )
+        except ValueError as e:
+            self.status_message.emit("Ready", "normal")
+            QMessageBox.warning(None, "Export", str(e))
+        except Exception as e:
+            self.status_message.emit("Ready", "normal")
+            QMessageBox.critical(None, "Export Error", f"Failed to export:\n{e}")
