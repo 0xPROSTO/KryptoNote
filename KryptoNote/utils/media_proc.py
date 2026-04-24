@@ -28,10 +28,10 @@ def create_thumbnail(file_path, size=(800, 800)):
         elif img.mode != "RGB":
             img = img.convert("RGB")
 
-        img.thumbnail(size, Image.Resampling.LANCZOS)
+        img.thumbnail(size, Image.Resampling.BICUBIC)
 
         byte_arr = io.BytesIO()
-        img.save(byte_arr, format="JPEG", quality=90)
+        img.save(byte_arr, format="JPEG", quality=80, optimize=True)
         return byte_arr.getvalue()
     except Exception as e:
         print(f"Error creating thumbnail: {e}")

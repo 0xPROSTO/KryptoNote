@@ -69,6 +69,7 @@ class ProgressBarWidget(QWidget):
             self._fade_anim.finished.disconnect(self._on_fade_out_finished)
             self._fade_out_connected = False
             
+        self._opacity_effect.setEnabled(True)
         self.setVisible(True)
         self._fade_anim.setStartValue(self._opacity_effect.opacity())
         self._fade_anim.setEndValue(1.0)
@@ -155,11 +156,14 @@ class ProgressBarWidget(QWidget):
             self._fade_out_connected = False
             
         if self._opacity_effect.opacity() == 0.0:
+            self._opacity_effect.setEnabled(False)
             self.setVisible(False)
             self._progress = 0.0
             self._visible_progress = 0.0
             self._message = ""
             self.update()
+        elif self._opacity_effect.opacity() == 1.0:
+            self._opacity_effect.setEnabled(False)
 
     def paintEvent(self, event):
         if not self.isVisible():

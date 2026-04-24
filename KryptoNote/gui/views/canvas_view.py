@@ -32,7 +32,13 @@ class InfiniteCanvasView(QGraphicsView):
 
         self.inertia = InertiaHandler(self)
         self.zoom_agent = ZoomHandler(self)
-        self.zoom_agent.zoom_changed.connect(self.zoom_changed.emit)
+        self.zoom_agent.zoom_changed.connect(self._on_zoom_changed)
+
+    def _on_zoom_changed(self, scale):
+        self.zoom_changed.emit(scale)
+        for item in self.scene().items():
+            if hasattr(item, "apply_lod"):
+                item.apply_lod(scale)
 
     def drawBackground(self, painter, rect):
         GridRenderer.draw_grid(self, painter, rect)

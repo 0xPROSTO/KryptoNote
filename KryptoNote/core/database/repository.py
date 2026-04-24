@@ -13,11 +13,7 @@ class NodeRepository:
     def add_item(
             self, item_type, x, y, w, h, title="", text=None, thumb=None, data=None, title_size=14, text_size=10
     ):
-        enc_title = (
-            self.crypto.encrypt(title.encode())
-            if title
-            else self.crypto.encrypt(b"Untitled")
-        )
+        enc_title = self.crypto.encrypt((title or "").encode())
         enc_text = self.crypto.encrypt(text.encode()) if text else None
         enc_thumb = self.crypto.encrypt(thumb) if thumb else None
         enc_data = self.crypto.encrypt(data) if data else None
@@ -29,7 +25,8 @@ class NodeRepository:
                                                is_chunked, total_size, title_size, text_size)
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             """,
-                            (item_type, enc_title, x, y, w, h, enc_text, enc_thumb, enc_data, is_chunked, total_size, title_size, text_size))
+                            (item_type, enc_title, x, y, w, h, enc_text, enc_thumb, enc_data, is_chunked, total_size,
+                             title_size, text_size))
         item_id = self.cursor.lastrowid
         self.conn.commit()
         return item_id
@@ -132,11 +129,7 @@ class NodeRepository:
         self.conn.commit()
 
     def update_item_title(self, item_id, title):
-        enc_title = (
-            self.crypto.encrypt(title.encode())
-            if title
-            else self.crypto.encrypt(b"Untitled")
-        )
+        enc_title = self.crypto.encrypt((title or "").encode())
         self.cursor.execute("UPDATE items SET title=? WHERE id=?", (enc_title, item_id))
         self.conn.commit()
 
@@ -144,11 +137,7 @@ class NodeRepository:
         self.delete_node_cascade(item_id)
 
     def update_text_content(self, item_id, title, new_text, title_size=14, text_size=10):
-        enc_title = (
-            self.crypto.encrypt(title.encode())
-            if title
-            else self.crypto.encrypt(b"Untitled")
-        )
+        enc_title = self.crypto.encrypt((title or "").encode())
         enc_text = self.crypto.encrypt(new_text.encode())
         self.cursor.execute(
             "UPDATE items SET title=?, text_content=?, title_size=?, text_size=? WHERE id=?",
@@ -181,9 +170,7 @@ class NodeRepository:
     def delete_node_cascade(self, item_id):
         self.cursor.execute("SELECT type, total_size FROM items WHERE id=?", (item_id,))
         row = self.cursor.fetchone()
-        
-        # Finalize the SELECT statement to release any read locks on the main connection
-        self.cursor.fetchall() 
+        self.cursor.fetchall()
 
         should_vacuum = False
         if row:
@@ -191,54 +178,60 @@ class NodeRepository:
             if item_type == "video" or (total_size and total_size > 10 * 1024 * 1024):
                 should_vacuum = True
 
-        try:
-            from PySide6.QtWidgets import QApplication
-            import sqlite3
-            
-            if not hasattr(self, '_delete_executor'):
+        db_path = getattr(self.conn_manager, "db_path", ":memory:")
+
+        if db_path == ":memory:":
+            self.cursor.execute("DELETE FROM connections WHERE start_id=? OR end_id=?", (item_id, item_id))
+            self.cursor.execute("DELETE FROM media_chunks WHERE item_id=?", (item_id,))
+            self.cursor.execute("DELETE FROM items WHERE id=?", (item_id,))
+            self.conn.commit()
+            if should_vacuum:
+                self.conn.execute("VACUUM")
+        else:
+            try:
+                from PySide6.QtWidgets import QApplication
+                import sqlite3
                 import concurrent.futures
                 import threading
-                self._delete_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-                self._active_deletions = 0
-                self._del_lock = threading.Lock()
 
-            app = QApplication.instance()
-            
-            def get_main_window():
-                if not app: return None
-                for w in app.topLevelWidgets():
-                    if w.inherits("QMainWindow"):
-                        return w
-                return None
+                if not hasattr(self, '_delete_executor'):
+                    self._delete_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                    self._active_deletions = 0
+                    self._del_lock = threading.Lock()
 
-            main_win = get_main_window()
-            
-            if should_vacuum:
-                with self._del_lock:
-                    self._active_deletions += 1
-                    if main_win and hasattr(main_win, 'progress_bar'):
-                        if not hasattr(app, 'global_dim_overlay') or not app.global_dim_overlay:
-                            from KryptoNote.gui.widgets.overlays.dim_overlay import DimOverlay
-                            app.global_dim_overlay = DimOverlay(main_win, block_input=True)
-                            app.global_dim_overlay.setParent(main_win)
-                            app.global_dim_overlay.resize(main_win.size())
-                        app.global_dim_overlay.show()
-                        app.global_dim_overlay.raise_()
-                        
-                        main_win.progress_bar.start("Удаление файла и оптимизация базы данных...", indeterminate=True)
+                app = QApplication.instance()
 
-            db_path = getattr(self.conn_manager, "db_path", ":memory:")
+                def get_main_window():
+                    if not app: return None
+                    for w in app.topLevelWidgets():
+                        if w.inherits("QMainWindow"):
+                            return w
+                    return None
 
-            def run_delete_and_vac():
-                try:
-                    if db_path == ":memory:":
-                        self.cursor.execute("DELETE FROM connections WHERE start_id=? OR end_id=?", (item_id, item_id))
-                        self.cursor.execute("DELETE FROM media_chunks WHERE item_id=?", (item_id,))
-                        self.cursor.execute("DELETE FROM items WHERE id=?", (item_id,))
-                        self.conn.commit()
-                        if should_vacuum:
-                            self.conn.execute("VACUUM")
-                    else:
+                main_win = get_main_window()
+
+                if should_vacuum:
+                    with self._del_lock:
+                        self._active_deletions += 1
+                        if main_win and hasattr(main_win, 'progress_bar') and hasattr(main_win, 'view'):
+                            view = main_win.view
+                            if not hasattr(app, 'global_dim_overlay') or not app.global_dim_overlay:
+                                from KryptoNote.gui.widgets.overlays.dim_overlay import DimOverlay
+                                app.global_dim_overlay = DimOverlay(view, block_input=True)
+                                app.global_dim_overlay.setParent(view)
+                                app.global_dim_overlay.resize(view.size())
+                            app.global_dim_overlay.show()
+                            app.global_dim_overlay.raise_()
+                            msg = "Cleaning and optimizing database..."
+                            main_win.progress_bar.start(msg, indeterminate=True)
+                            if hasattr(main_win, 'progress_label'):
+                                main_win.progress_label.setText(msg)
+                                main_win.progress_label.setVisible(True)
+                                main_win.status_label.setVisible(False)
+                            app.processEvents()
+
+                def run_delete_and_vac():
+                    try:
                         v_conn = sqlite3.connect(db_path, timeout=60.0)
                         v_cursor = v_conn.cursor()
                         v_cursor.execute("PRAGMA journal_mode=WAL;")
@@ -246,39 +239,39 @@ class NodeRepository:
                         v_cursor.execute("DELETE FROM media_chunks WHERE item_id=?", (item_id,))
                         v_cursor.execute("DELETE FROM items WHERE id=?", (item_id,))
                         v_conn.commit()
-                        
                         if should_vacuum:
                             v_conn.execute("VACUUM")
-                        
                         v_conn.close()
-                except Exception as e:
-                    print(f"Background Delete/Vacuum Error: {e}")
-                finally:
-                    if should_vacuum:
-                        with self._del_lock:
-                            self._active_deletions -= 1
-                            if self._active_deletions == 0:
-                                def update_ui():
-                                    try:
-                                        mw = get_main_window()
-                                        if mw:
-                                            if hasattr(mw, 'progress_bar'):
-                                                mw.progress_bar.finish()
-                                            if hasattr(app, 'global_dim_overlay') and app.global_dim_overlay:
-                                                app.global_dim_overlay.close()
-                                                app.global_dim_overlay = None
-                                    except Exception as ex:
-                                        print(f"update_ui Exception: {ex}")
-                                
-                                from PySide6.QtCore import QTimer
-                                QTimer.singleShot(0, app, update_ui)
+                    except Exception as e:
+                        print(f"Background Delete/Vacuum Error: {e}")
+                    finally:
+                        if should_vacuum:
+                            with self._del_lock:
+                                self._active_deletions -= 1
+                                if self._active_deletions == 0:
+                                    def update_ui():
+                                        try:
+                                            mw = get_main_window()
+                                            if mw:
+                                                if hasattr(mw, 'progress_bar'):
+                                                    mw.progress_bar.finish()
+                                                if hasattr(mw, 'progress_label'):
+                                                    mw.progress_label.setVisible(False)
+                                                    mw.status_label.setVisible(True)
+                                                    mw.status_label.setText("Ready")
+                                                if hasattr(app, 'global_dim_overlay') and app.global_dim_overlay:
+                                                    app.global_dim_overlay.fade_out()
+                                                    app.global_dim_overlay = None
+                                        except Exception as ex:
+                                            print(f"update_ui Exception: {ex}")
 
-            self._delete_executor.submit(run_delete_and_vac)
+                                    from PySide6.QtCore import QTimer
+                                    QTimer.singleShot(0, app, update_ui)
 
-        except Exception as e:
-            print(f"CRASH IN DELETE_NODE_CASCADE: {e}")
-            self.conn.rollback()
-            raise e
+                self._delete_executor.submit(run_delete_and_vac)
+            except Exception as e:
+                print(f"CRASH IN DELETE_NODE_CASCADE: {e}")
+                self.conn.rollback()
 
     def search_items(self, query):
         all_items = self.get_all_items()

@@ -9,7 +9,9 @@ from PySide6.QtCore import (
     QEasingCurve,
     QAbstractAnimation,
     Qt,
+    QEvent,
 )
+from PySide6.QtGui import QMouseEvent, QTransform
 from PySide6.QtWidgets import QGraphicsView
 
 
@@ -61,12 +63,10 @@ class InertiaHandler(QObject):
         vbar = self.view.verticalScrollBar()
         hbar.setValue(hbar.value() - idx)
         vbar.setValue(vbar.value() - idy)
-        self._force_hover_update()
+        # NOTE: _force_hover_update removed from here — calling it at 60fps
+        # with full scene hit-testing was expensive. Only called on stop (above).
 
     def _force_hover_update(self):
-        from PySide6.QtGui import QMouseEvent
-        from PySide6.QtCore import QEvent
-
         pos = self.view.viewport().mapFromGlobal(self.view.cursor().pos())
         event = QMouseEvent(
             QEvent.Type.MouseMove,
@@ -108,8 +108,6 @@ class ZoomHandler(QObject):
         self.anim.start()
 
     def _apply_zoom(self, scale_value):
-        from PySide6.QtGui import QTransform
-
         self.view.setTransformationAnchor(QGraphicsView.ViewportAnchor.NoAnchor)
         self.view.setTransform(QTransform.fromScale(scale_value, scale_value))
         new_viewport_pos = self.view.mapFromScene(self.zoom_scene_pos)
@@ -118,7 +116,8 @@ class ZoomHandler(QObject):
         vbar = self.view.verticalScrollBar()
         hbar.setValue(hbar.value() + int(delta.x()))
         vbar.setValue(vbar.value() + int(delta.y()))
-        self.view.update()
+        # NOTE: self.view.update() removed — setTransform() already invalidates
+        # the viewport, so calling update() caused double rendering per frame.
         self.zoom_changed.emit(scale_value)
 
     def _on_zoom_finished(self):
@@ -126,9 +125,6 @@ class ZoomHandler(QObject):
         self._force_hover_update()
 
     def _force_hover_update(self):
-        from PySide6.QtGui import QMouseEvent
-        from PySide6.QtCore import QEvent
-
         pos = self.view.viewport().mapFromGlobal(self.view.cursor().pos())
         event = QMouseEvent(
             QEvent.Type.MouseMove,

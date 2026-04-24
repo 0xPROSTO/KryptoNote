@@ -33,7 +33,7 @@ class MediaNode(BaseNode):
         self.media_type = media_type
         self.is_chunked = is_chunked
         self.total_size = total_size
-        self.node_title = title if title else "Untitled"
+        self.node_title = title or ""
         self.pix_item = None
         self.full_pixmap = None
         if thumbnail_bytes:
@@ -53,7 +53,7 @@ class MediaNode(BaseNode):
         self.label.setFont(Theme.Typography.get_font("SIZE_SMALL"))
         self.update_content_layout()
 
-    def update_content_layout(self):
+    def update_content_layout(self, high_quality=False):
         self.title_item.setPos(10, 5)
         title_h = self.title_item.boundingRect().height()
         footer_h = self.label.boundingRect().height()
@@ -62,11 +62,12 @@ class MediaNode(BaseNode):
             available_h = self.rect().height() - title_h - footer_h - 10
             available_w = self.rect().width() - 20
             if available_h > 10 and available_w > 10:
+                transform_mode = Qt.TransformationMode.SmoothTransformation if high_quality else Qt.TransformationMode.FastTransformation
+
                 scaled = self.full_pixmap.scaled(
-                    int(available_w),
-                    int(available_h),
+                    int(available_w), int(available_h),
                     Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation,
+                    transform_mode,
                 )
 
                 self.pix_item.setPixmap(scaled)
@@ -74,26 +75,24 @@ class MediaNode(BaseNode):
                 off_y = title_h + 5 + (available_h - scaled.height()) / 2
                 self.pix_item.setPos(off_x, off_y)
 
+    def finalize_resize(self):
+        super().finalize_resize()
+        self.update_content_layout(high_quality=True)
+
     def mouseDoubleClickEvent(self, event):
         if self.resizer.isUnderMouse():
             return
-        self.open_content()
+        self.dispatch_event("double_click", event=event)
 
     def extend_context_menu(self, menu):
-        open_action = menu.addAction("Open")
-        open_action.triggered.connect(self.open_content)
-        rename_action = menu.addAction("Rename")
-        rename_action.triggered.connect(self.rename_node)
-        menu.addSeparator()
-        save_action = menu.addAction(f"Export to Disk")
-        save_action.triggered.connect(self.export_file)
+        self.dispatch_event("extend_context_menu", menu=menu)
 
     def rename_node(self):
         new_title, ok = QInputDialog.getText(
             None, "Rename", "New Title:", text=self.node_title
         )
         if ok:
-            self.node_title = new_title.strip() or "Untitled"
+            self.node_title = new_title.strip()
             self.title_item.setPlainText(self.node_title)
             self.service.update_item_title(self.item_id, self.node_title)
             self.update_content_layout()
@@ -148,3 +147,6 @@ class MediaNode(BaseNode):
                 if data is not None:
                     with open(path, "wb") as f:
                         f.write(data)
+
+    def auto_fit_to_media(self):
+        self.dispatch_event("auto_fit")

@@ -7,7 +7,7 @@ from KryptoNote.gui.theme import Theme
 
 class Config:
     APP_NAME = "ZeroXX-KryptoNote"
-    VERSION = "2.2.8"
+    VERSION = "2.3.1"
     COMPANY_NAME = "ZeroXWare"
 
     CHUNK_SIZE = 4 * 1024 * 1024
@@ -29,6 +29,8 @@ class Config:
     NODE_DEFAULT_HEIGHT = 150
     NODE_MEDIA_SIZE = 220
     SNAP_TO_GRID = False
+
+    LOD_TEXT_HIDE_THRESHOLD = 0.22
 
     COLOR_NODE_BG = Theme.Palette.BG_NODE
     COLOR_TEXT_TITLE = Theme.Palette.TEXT_MAIN

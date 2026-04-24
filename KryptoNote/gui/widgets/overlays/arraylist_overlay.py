@@ -23,8 +23,10 @@ class ArrayListOverlay(QWidget):
         self.update()
 
     def set_zoom_status(self, scale):
-        self.zoom_pct = f"{int(scale * 100)}%"
-        self.update()
+        new_pct = f"{int(scale * 100)}%"
+        if self.zoom_pct != new_pct:
+            self.zoom_pct = new_pct
+            self.update()
 
     def paintEvent(self, event):
         painter = QPainter(self)

@@ -33,6 +33,22 @@ class BaseNode(QGraphicsRectItem):
         self.color_anim = QVariantAnimation()
         self.color_anim.setDuration(120)
         self.color_anim.valueChanged.connect(self._on_color_changed)
+        
+        self.components = []
+        
+    def add_component(self, component):
+        self.components.append(component)
+        component.on_attached(self)
+        
+    def get_component(self, comp_class):
+        for c in self.components:
+            if isinstance(c, comp_class):
+                return c
+        return None
+        
+    def dispatch_event(self, event_type, *args, **kwargs):
+        for c in self.components:
+            c.on_event(event_type, *args, **kwargs)
 
     def _on_color_changed(self, color):
         self.currentColor = color
@@ -157,6 +173,9 @@ class BaseNode(QGraphicsRectItem):
 
     def update_content_layout(self):
         pass
+        
+    def apply_lod(self, lod):
+        self.dispatch_event("apply_lod", lod=lod)
 
     def mouseReleaseEvent(self, event):
         super().mouseReleaseEvent(event)
