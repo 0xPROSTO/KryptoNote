@@ -54,7 +54,7 @@ class TextNode(BaseNode):
         if dialog.exec():
             new_title, new_text, new_title_size, new_text_size = dialog.get_data()
 
-            self.title = new_title.strip() or "Untitled"
+            self.title = new_title.strip()
             self.text_content = new_text
             self.title_size = new_title_size
             self.text_size = new_text_size
@@ -70,6 +70,9 @@ class TextNode(BaseNode):
             self.service.update_text_content(
                 self.item_id, self.title, self.text_content, self.title_size, self.text_size
             )
+        else:
+            if not self.title.strip() and not self.text_content.strip():
+                self.delete_node()
 
     def extend_context_menu(self, menu):
         edit_action = menu.addAction("Edit")
