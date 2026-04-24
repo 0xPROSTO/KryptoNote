@@ -8,6 +8,10 @@ from .base import BaseNode
 
 
 class TextNode(BaseNode):
+    TITLE_PADDING_TOP = 8
+    TITLE_BODY_GAP = 6
+    CONTENT_MARGIN = 12
+
     def __init__(self, item_id, x, y, w, h, title, text, service, title_size=14, text_size=10):
         super().__init__(item_id, x, y, w, h, service)
         self.title = title
@@ -23,19 +27,25 @@ class TextNode(BaseNode):
             )
         )
         self.title_item.setFont(QFont(Theme.Typography.FONT_DISPLAY, self.title_size, QFont.Weight.Bold))
-        self.title_item.setPos(12, 8)
+        self.title_item.setPos(self.CONTENT_MARGIN, self.TITLE_PADDING_TOP)
         self.body_item = QGraphicsTextItem(parent=self)
         self.body_item.setPlainText(self.text_content)
         self.body_item.setDefaultTextColor(QColor(Theme.Palette.TEXT_MAIN))
         self.body_item.setFont(QFont(Theme.Typography.FONT_BODY, self.text_size))
         self.body_item.document().setMarkdown(process_markdown_for_pyside(self.text_content))
-        self.body_item.setPos(12, 35)
         self.update_content_layout()
 
+    def _calc_body_y(self):
+        if self.title:
+            title_height = self.title_item.boundingRect().height()
+            return self.TITLE_PADDING_TOP + title_height + self.TITLE_BODY_GAP
+        return self.TITLE_PADDING_TOP
+
     def update_content_layout(self):
-        target_width = self.rect().width() - 24
+        target_width = self.rect().width() - self.CONTENT_MARGIN * 2
         self.title_item.setTextWidth(target_width)
         self.body_item.setTextWidth(target_width)
+        self.body_item.setPos(self.CONTENT_MARGIN, self._calc_body_y())
 
     def mouseDoubleClickEvent(self, event):
         if self.resizer.isUnderMouse():
@@ -54,6 +64,8 @@ class TextNode(BaseNode):
 
             self.body_item.setFont(QFont(Theme.Typography.FONT_BODY, self.text_size))
             self.body_item.document().setMarkdown(process_markdown_for_pyside(self.text_content))
+
+            self.update_content_layout()
 
             self.service.update_text_content(
                 self.item_id, self.title, self.text_content, self.title_size, self.text_size

@@ -45,7 +45,7 @@ class CanvasController(QObject):
         return self.view.mapToScene(self.view.viewport().rect().center())
 
     def add_text_node(self):
-        title = "New Note"
+        title = ""
         pos = self.get_center_pos()
         node = NodeFactory.create_new_text(self.service, pos.x(), pos.y(), title)
         self.scene.addItem(node)
