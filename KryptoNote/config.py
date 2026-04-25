@@ -7,7 +7,7 @@ from KryptoNote.gui.theme import Theme
 
 class Config:
     APP_NAME = "ZeroXX-KryptoNote"
-    VERSION = "2.3.8"
+    VERSION = "2.3.9"
     COMPANY_NAME = "ZeroXWare"
 
     CHUNK_SIZE = 4 * 1024 * 1024
@@ -22,8 +22,8 @@ class Config:
 
     GRID_SIZE_MAIN = 500
     GRID_SIZE = 100
-    GRID_COLOR = "#1a1a1a"
-    GRID_COLOR_MAIN = "#252525"
+    GRID_COLOR = Theme.Palette.GRID_SUB
+    GRID_COLOR_MAIN = Theme.Palette.GRID_MAIN
     BACKGROUND_COLOR = Theme.Palette.BG_CANVAS
 
     NODE_DEFAULT_WIDTH = 200
@@ -37,8 +37,6 @@ class Config:
     COLOR_TEXT_TITLE = Theme.Palette.TEXT_MAIN
     COLOR_TEXT_BODY = Theme.Palette.TEXT_DIM
     COLOR_ACCENT = Theme.Palette.ACCENT_MAIN
-    COLOR_SECURE_LABEL = "#00FF00"
+    COLOR_SECURE_LABEL = Theme.Palette.GREEN_SECURE
     COLOR_LINK_LINE = Theme.Palette.BORDER_DEFAULT
-    COLOR_LINK_HIGHLIGHT = Theme.Palette.ACCENT_MAIN
-
     COLOR_LINK_HIGHLIGHT = Theme.Palette.ACCENT_MAIN
