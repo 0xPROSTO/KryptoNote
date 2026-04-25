@@ -33,7 +33,7 @@ class InertiaHandler(QObject):
 
     def update_velocity(self, delta):
         self.last_move_timestamp = time.time()
-        self.pan_velocity = self.pan_velocity * 0.4 + delta * 1.5
+        self.pan_velocity = self.pan_velocity * 0.4 + delta * 1.85
 
     def decay_velocity(self):
         self.pan_velocity *= 0.4

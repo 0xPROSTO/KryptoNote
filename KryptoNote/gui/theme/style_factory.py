@@ -244,6 +244,44 @@ class StyleFactory:
         """
 
     @staticmethod
+    def get_search_dialog_qss():
+        return f"""
+            QDialog {{ 
+                background-color: {Palette.BG_PANEL}; 
+                color: {Palette.TEXT_MAIN}; 
+            }}
+            QLineEdit {{ 
+                background-color: {Palette.BG_INPUT}; 
+                color: {Palette.TEXT_MAIN}; 
+                border: 1px solid {Palette.BORDER_DEFAULT}; 
+                border-radius: 4px;
+                padding: 6px 10px; 
+            }}
+            QLineEdit:focus {{
+                border-color: {Palette.ACCENT_MAIN};
+            }}
+            QPushButton {{ 
+                background-color: {Palette.BG_NODE}; 
+                color: {Palette.TEXT_MAIN}; 
+                border: 1px solid {Palette.BORDER_DEFAULT}; 
+                padding: 6px 12px; 
+                border-radius: 4px;
+            }}
+            QPushButton:hover {{ 
+                background-color: {Palette.BORDER_HOVER}; 
+                border-color: {Palette.ACCENT_MAIN};
+            }}
+            QPushButton:disabled {{
+                color: {Palette.TEXT_MUTED};
+                background-color: {Palette.BG_CANVAS};
+                border-color: {Palette.BORDER_DEFAULT};
+            }}
+            QLabel {{ 
+                color: {Palette.TEXT_DIM}; 
+            }}
+        """
+
+    @staticmethod
     def get_title_bar_qss():
         return f"""
             #CustomTitleBar {{

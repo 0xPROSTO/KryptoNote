@@ -336,6 +336,11 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         if not self.search_dialog:
             self.search_dialog = SearchDialog(self)
 
+        margin = 20
+        x = self.geometry().x() + self.geometry().width() - self.search_dialog.width() - margin
+        y = self.geometry().y() + 80 
+        self.search_dialog.move(x, y)
+
         self.search_dialog.show()
         self.search_dialog.raise_()
         self.search_dialog.activateWindow()

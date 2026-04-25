@@ -1,4 +1,4 @@
-from PySide6.QtCore import Qt, Signal, QPointF
+from PySide6.QtCore import Qt, Signal, QPointF, QVariantAnimation, QEasingCurve
 from PySide6.QtGui import QPainter, QMouseEvent
 from PySide6.QtWidgets import QGraphicsView, QMessageBox
 
@@ -172,3 +172,17 @@ class InfiniteCanvasView(QGraphicsView):
         if not self.is_erasing:
             self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
         super().focusOutEvent(event)
+
+    def smooth_center_on(self, target_pos: QPointF, duration: int = 200):
+        """Animates the view center from current position to target_pos."""
+        self.inertia.stop()
+        
+        start_pos = self.mapToScene(self.viewport().rect().center())
+        
+        self.pan_anim = QVariantAnimation(self)
+        self.pan_anim.setDuration(duration)
+        self.pan_anim.setStartValue(start_pos)
+        self.pan_anim.setEndValue(target_pos)
+        self.pan_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.pan_anim.valueChanged.connect(self.centerOn)
+        self.pan_anim.start()

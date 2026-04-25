@@ -1,4 +1,4 @@
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QPointF
 from PySide6.QtWidgets import (
     QDialog,
     QVBoxLayout,
@@ -8,6 +8,8 @@ from PySide6.QtWidgets import (
     QLabel,
 )
 
+from ...theme import Theme
+
 
 class SearchDialog(QDialog):
     def __init__(self, parent=None):
@@ -15,17 +17,12 @@ class SearchDialog(QDialog):
         self.setWindowTitle("Find Node")
         self.setFixedWidth(400)
         self.setWindowFlags(Qt.WindowType.Tool)
-        self.setStyleSheet("""
-            QDialog { background-color: #2b2b2b; color: white; }
-            QLineEdit { background-color: #1e1e1e; color: white; border: 1px solid #555; padding: 5px; }
-            QPushButton { background-color: #444; color: white; border: none; padding: 5px 10px; }
-            QPushButton:hover { background-color: #555; }
-            QLabel { color: #aaa; }
-        """)
+        self.setStyleSheet(Theme.Styles.get_search_dialog_qss())
 
         self.main_window = parent
         self.results = []
         self.current_index = -1
+        self.last_query = ""
 
         layout = QVBoxLayout(self)
 
@@ -62,8 +59,14 @@ class SearchDialog(QDialog):
         query = self.search_input.text()
         if not query:
             return
+            
+        if query == self.last_query and self.results:
+            self.next_result()
+            return
+            
+        self.last_query = query
         if self.main_window:
-            self.results = self.main_window.repo.search_items(query)
+            self.results = self.main_window.service.search_items(query)
             self.current_index = 0
             self.update_ui_state()
             self.jump_to_current()
@@ -99,9 +102,12 @@ class SearchDialog(QDialog):
             return
         target = self.results[self.current_index]
         if self.main_window:
-            self.main_window.view.centerOn(target["x"], target["y"])
+            center_x = target.x + target.width / 2
+            center_y = target.y + target.height / 2
+            
+            self.main_window.view.smooth_center_on(QPointF(center_x, center_y))
             self.main_window.scene.clearSelection()
-            node_id = target["id"]
-            if node_id in self.main_window.nodes_map:
-                node = self.main_window.nodes_map[node_id]
+            node_id = target.id
+            if node_id in self.main_window.canvas_controller.nodes_map:
+                node = self.main_window.canvas_controller.nodes_map[node_id]
                 node.setSelected(True)
