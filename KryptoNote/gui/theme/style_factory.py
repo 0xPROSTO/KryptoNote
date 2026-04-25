@@ -1,5 +1,4 @@
 from .palette import Palette
-from .typography import Typography
 
 
 class StyleFactory:
@@ -299,11 +298,56 @@ class StyleFactory:
         return f"""
             QDialog {{ background-color: {Palette.BG_CANVAS}; }} 
             QWidget {{ color: {Palette.TEXT_MAIN}; }} 
-            QSlider::groove:horizontal {{ border: 1px solid {Palette.BORDER_DEFAULT}; height: 4px; background: {Palette.BG_INPUT}; margin: 0px; border-radius: 2px; }} 
-            QSlider::sub-page:horizontal {{ background: {Palette.ACCENT_LOW}; border-radius: 2px; }} 
-            QSlider::handle:horizontal {{ background: {Palette.TEXT_MAIN}; border: 1px solid {Palette.BORDER_DEFAULT}; width: 12px; height: 12px; margin: -4px 0; border-radius: 6px; }} 
-            QSlider::handle:horizontal:hover {{ background: {Palette.ACCENT_HIGH}; }} 
-            QLabel {{ font-family: {Typography.FONT_BODY}, sans-serif; font-size: 12px; color: {Palette.TEXT_DIM}; }} 
+        """
+
+    @staticmethod
+    def get_player_controls_qss():
+        return f"""
+            #ControlsContainer {{
+                background-color: {Palette.BG_CANVAS};
+                border-top: 1px solid rgba(255, 255, 255, 0.05);
+            }}
+            QPushButton {{
+                background: transparent;
+                border: none;
+                border-radius: 6px;
+                padding: 4px;
+            }}
+            QPushButton:hover {{
+                background: rgba(255, 255, 255, 0.1);
+            }}
+            QPushButton:pressed {{
+                background: rgba(255, 255, 255, 0.15);
+            }}
+            QSlider::groove:horizontal {{
+                height: 4px;
+                background: rgba(255, 255, 255, 0.15);
+                border-radius: 2px;
+            }}
+            QSlider::sub-page:horizontal {{
+                background: #e0e0e0;
+                border-radius: 2px;
+            }}
+            QSlider::handle:horizontal {{
+                background: #ffffff;
+                width: 14px;
+                height: 14px;
+                margin: -5px 0;
+                border-radius: 7px;
+            }}
+            QSlider::handle:horizontal:hover {{
+                background: #f0f0f0;
+                width: 16px;
+                height: 16px;
+                margin: -6px 0;
+                border-radius: 8px;
+            }}
+            QLabel {{
+                color: rgba(255, 255, 255, 0.85);
+                font-family: 'Segoe UI', 'SF Pro Display', monospace;
+                font-size: 13px;
+                font-weight: 500;
+            }}
         """
 
     @staticmethod
