@@ -17,6 +17,11 @@ class NodeItemDTO:
     total_size: int = 0
     title_size: int = 14
     text_size: int = 10
+    created_at: str = ""
+    updated_at: str = ""
+    media_width: int = 0
+    media_height: int = 0
+    media_duration: float = 0.0
 
 
 @dataclass

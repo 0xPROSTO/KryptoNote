@@ -11,6 +11,7 @@ class Palette:
 
     # ACCENT (Vibrant Magenta Palette)
     ACCENT_MAIN = "#e6158b"  # Magenta (Primary)
+    ACCENT_HOVER = "#cc1279"  # Darker magenta for hover states
     ACCENT_LOW = "#3a1025"  # Deep muted magenta for backgrounds
     ACCENT_HIGH = "#ff33a1"  # Bright Magenta
     ACCENT_ULTRA = "#ff99cc"  # Light pink highlight

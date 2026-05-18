@@ -1,0 +1,48 @@
+import QtQuick
+
+Item {
+    id: deleteAnimation
+    property Item targetItem
+    property int nodeId: 0
+    property bool deleting: false
+    property real progress: 0.0
+
+    onDeletingChanged: {
+        if (deleting) {
+            deletionOpacityAnim.start()
+            deletionProgressAnim.start()
+        }
+    }
+
+    Rectangle {
+        anchors.fill: parent
+        radius: 4
+        z: 100
+        visible: deleteAnimation.deleting
+        color: {
+            if (!deleteAnimation.deleting) return "transparent"
+            var p = deleteAnimation.progress
+            var alpha = p < 0.33 ? (p / 0.33) * 0.7 : 0.7 * (1.0 - (p - 0.33) / 0.67)
+            return Qt.rgba(90/255, 90/255, 90/255, alpha)
+        }
+    }
+
+    NumberAnimation {
+        id: deletionOpacityAnim
+        target: deleteAnimation.targetItem
+        property: "opacity"
+        from: 1.0
+        to: 0.0
+        duration: 240
+        onFinished: canvasController.perform_delete(deleteAnimation.nodeId)
+    }
+
+    NumberAnimation {
+        id: deletionProgressAnim
+        target: deleteAnimation
+        property: "progress"
+        from: 0.0
+        to: 1.0
+        duration: 240
+    }
+}

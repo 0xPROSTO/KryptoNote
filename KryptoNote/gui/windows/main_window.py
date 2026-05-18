@@ -1,45 +1,52 @@
 import datetime
 import os
-import sqlite3
 import sys
 
-from PySide6.QtCore import Qt, QSettings, Slot
+from PySide6.QtCore import Qt, QSettings, Slot, QUrl, QEvent, QTimer, Signal, QMetaObject
 from PySide6.QtGui import (
     QAction,
     QColor,
-    QBrush,
     QShortcut,
     QKeySequence,
 )
 from PySide6.QtWidgets import (
     QMainWindow,
-    QGraphicsScene,
     QLabel,
     QWidget,
     QVBoxLayout,
-    QLineEdit,
     QMessageBox,
+    QApplication,
 )
+from PySide6.QtQuickWidgets import QQuickWidget
 
 from .native_window import NativeWindowMixin
-from ..controllers.canvas_controller import CanvasController
-from ..views.canvas_view import InfiniteCanvasView
-from ..widgets.dialogs.search_dialog import SearchDialog
+from ..controllers.canvas_controller_qml import QmlCanvasController
+from ..controllers.viewer_controller import ViewerController
+from ..models.node_list_model import NodeListModel
+from ..models.connection_list_model import ConnectionListModel
+from ..models.thumbnail_provider import ThumbnailProvider
 from ..widgets.dialogs.about_dialog import AboutDialog
+from ..widgets.dialogs.keybinds_dialog import KeybindsDialog
 from ..widgets.overlays.dim_overlay import DimOverlay
 from ..widgets.overlays.arraylist_overlay import ArrayListOverlay
+from ..widgets.overlays.node_properties_overlay import NodePropertiesOverlay
 from ..widgets.progress_bar import ProgressBarWidget
 from ..widgets.title_bar import CustomTitleBar
 from ...config import Config
-from ...core.crypto import CryptoManager
-from ...core.database import NodeRepository, DatabaseConnection
 from ...gui.theme import Theme
-from ...services.node_service import NodeService
-from ...utils.gui_utils import get_centered_input, adjust_window_to_screen
+from ...gui.theme.theme_bridge import ThemeBridge
+from ...services.backup_service import BackupService
+from ...utils.gui_utils import adjust_window_to_screen
 
 
 class ZeroXXWindow(NativeWindowMixin, QMainWindow):
-    def __init__(self, db_path):
+    _manual_vacuum_started = Signal(str)
+    _manual_vacuum_updated = Signal(str)
+    _password_change_progress = Signal(int, int, str)
+    _password_change_finished = Signal(bool, str)
+    _manual_vacuum_finished = Signal(str)
+
+    def __init__(self, db_path, db_conn=None, crypto=None, repo=None, service=None):
         QMainWindow.__init__(self)
         self.is_windows = sys.platform == "win32"
 
@@ -60,8 +67,16 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self.default_status = (
             "Ready | Hold [SHIFT] to Link | Hold [CTRL] to Multi-Select"
         )
+        self._manual_vacuum_running = False
+        self._ctrl_held = False
+        self._shift_held = False
+        self._manual_vacuum_started.connect(self.show_blocking_progress)
+        self._manual_vacuum_updated.connect(self.update_blocking_progress)
+        self._manual_vacuum_finished.connect(self._on_manual_vacuum_finished)
+        self._password_change_progress.connect(self._on_password_change_progress)
+        self._password_change_finished.connect(self._on_password_change_finished)
 
-        self._init_core(db_path)
+        self._init_core(db_path, db_conn, crypto, repo, service)
         self._setup_canvas()
         self._setup_menubar()
 
@@ -77,95 +92,109 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             self.db_conn.conn.close()
             raise RuntimeError("Failed to load DB")
 
-        self.search_dialog = None
         self.search_shortcut = QShortcut(QKeySequence("Ctrl+F"), self)
         self.search_shortcut.activated.connect(self.open_search)
 
-        self.snap_shortcut = QShortcut(QKeySequence("G"), self)
-        self.snap_shortcut.activated.connect(self.toggle_snap_to_grid)
         self.read_settings()
+        self._install_key_event_filter()
 
-    def _init_core(self, db_path):
-        self.db_conn = DatabaseConnection(db_path)
-        self.crypto = CryptoManager()
-        salt = self.db_conn.get_salt()
-
-        if not salt:
-            while True:
-                pwd1, ok1 = get_centered_input(
-                    self,
-                    "Create Password",
-                    f"Set password for new project:\n{os.path.basename(db_path)}",
-                    QLineEdit.EchoMode.Password,
-                )
-                if not ok1 or not pwd1:
-                    raise RuntimeError("Password entry cancelled")
-                pwd2, ok2 = get_centered_input(
-                    self,
-                    "Confirm Password",
-                    "Repeat password:",
-                    QLineEdit.EchoMode.Password,
-                )
-                if not ok2:
-                    raise RuntimeError("Password entry cancelled")
-                if pwd1 == pwd2:
-                    salt = os.urandom(16)
-                    self.db_conn.set_salt(salt)
-                    self.crypto.derive_key(pwd1, salt)
-                    self.db_conn.set_auth_check(
-                        self.crypto.encrypt(b"KryptoNote_Auth_OK")
-                    )
-                    break
-                else:
-                    QMessageBox.warning(
-                        self, "Mismatch", "Passwords do not match! Try again."
-                    )
+    def _init_core(self, db_path, db_conn=None, crypto=None, repo=None, service=None):
+        if db_conn and crypto and repo and service:
+            self.db_conn = db_conn
+            self.crypto = crypto
+            self.repo = repo
+            self.service = service
         else:
-            pwd, ok = get_centered_input(
-                self,
-                "Enter password",
-                f"Password for {os.path.basename(db_path)}:",
-                QLineEdit.EchoMode.Password,
+            # Fallback for legacy callers (e.g. tests)
+            from ...services.auth_service import AuthService
+            from PySide6.QtWidgets import QInputDialog, QLineEdit
+
+            def _password_provider(mode, db_name, error_msg=None):
+                if mode == "create":
+                    prompt = f"Create password for '{db_name}':"
+                elif mode == "confirm":
+                    prompt = f"Confirm password for '{db_name}':"
+                else:
+                    prompt = f"Enter password for '{db_name}':"
+                if error_msg:
+                    prompt = f"{error_msg}\n\n{prompt}"
+                dlg = QInputDialog(None)
+                dlg.setWindowTitle("KryptoNote")
+                dlg.setLabelText(prompt)
+                dlg.setTextEchoMode(QLineEdit.EchoMode.Password)
+                dlg.setMinimumWidth(400)
+                dlg.resize(420, 160)
+                screen = QApplication.primaryScreen()
+                if screen:
+                    geo = screen.availableGeometry()
+                    dlg.move(
+                        geo.x() + (geo.width() - dlg.width()) // 2,
+                        geo.y() + (geo.height() - dlg.height()) // 2,
+                    )
+                ok = dlg.exec() == QInputDialog.DialogCode.Accepted
+                pwd = dlg.textValue()
+                return pwd, ok
+
+            self.db_conn, self.crypto, self.repo, self.service = (
+                AuthService.authenticate(db_path, _password_provider)
             )
-            if not ok or not pwd:
-                raise RuntimeError("Password entry cancelled")
-
-            self.crypto.derive_key(pwd, salt)
-
-            auth_check = self.db_conn.get_auth_check()
-            if auth_check:
-                try:
-                    if self.crypto.decrypt(auth_check) != b"KryptoNote_Auth_OK":
-                        raise Exception("Verification failed")
-                except Exception:
-                    QMessageBox.critical(self, "Error", "Incorrect password!")
-                    self.db_conn.conn.close()
-                    raise RuntimeError("Incorrect password")
-
-        self.repo = NodeRepository(self.db_conn, self.crypto)
-        self.service = NodeService(self.repo)
 
     def _setup_canvas(self):
-        self.scene = QGraphicsScene()
-        self.scene.setSceneRect(-25000, -25000, 50000, 50000)
-        self.scene.setBackgroundBrush(QBrush(QColor(Config.BACKGROUND_COLOR)))
+        self.node_model = NodeListModel(self)
+        self.connection_model = ConnectionListModel(self.node_model, self)
 
-        self.view = InfiniteCanvasView(self.scene)
-        self.canvas_controller = CanvasController(self.scene, self.view, self.service)
-
-        self.view.mouse_moved.connect(self.update_coords)
-        self.view.node_clicked_signal.connect(self.canvas_controller.handle_link_click)
-        self.view.connection_right_clicked_signal.connect(
-            self.canvas_controller.quick_delete_connection
+        self.canvas_controller = QmlCanvasController(
+            self.node_model, self.connection_model, self.service, self
         )
         self.canvas_controller.status_message.connect(self._handle_status_update)
         self.canvas_controller.progress_updated.connect(self._on_progress_updated)
         self.canvas_controller.progress_finished.connect(self._on_progress_finished)
 
+        self.viewer_controller = ViewerController(
+            self.node_model, self.canvas_controller, self.service, self
+        )
+        self.canvas_controller.open_media_viewer_requested.connect(
+            self.viewer_controller.open_media_viewer
+        )
+
+        from PySide6.QtGui import QSurfaceFormat
+        format = QSurfaceFormat()
+        format.setSamples(8)
+        self.view = QQuickWidget()
+        self.view.setFormat(format)
+        self.view.setResizeMode(QQuickWidget.SizeRootObjectToView)
+        self.view.setClearColor(QColor("#050505"))
+
+        quick_window = self.view.quickWindow()
+        if quick_window:
+            quick_window.setPersistentGraphics(True)
+            quick_window.setPersistentSceneGraph(True)
+
+        self.thumb_provider = ThumbnailProvider(self.node_model)
+        self.view.engine().addImageProvider("thumbnails", self.thumb_provider)
+
+        self._theme_bridge = ThemeBridge(self)
+
+        ctx = self.view.rootContext()
+        ctx.setContextProperty("AppTheme", self._theme_bridge)
+        ctx.setContextProperty("nodeModel", self.node_model)
+        ctx.setContextProperty("connectionModel", self.connection_model)
+        ctx.setContextProperty("canvasController", self.canvas_controller)
+
+        qml_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "qml")
+        qml_path = os.path.join(qml_dir, "Canvas.qml")
+        self._qml_canvas_source = QUrl.fromLocalFile(qml_path)
+
+        self.view.setSource(self._qml_canvas_source)
+
+        if self.view.status() == QQuickWidget.Status.Error:
+            errors = self.view.errors()
+            for err in errors:
+                print(f"QML Error: {err.toString()}")
+
         self.overlay = ArrayListOverlay(self)
-        self.view.zoom_changed.connect(self.overlay.set_zoom_status)
         self.overlay.set_snap_status(Config.SNAP_TO_GRID)
-        self.overlay.set_zoom_status(self.view.transform().m11())
+        self.overlay.set_zoom_status(1.0)
         self.overlay.raise_()
         central = QWidget()
         vbox = QVBoxLayout(central)
@@ -178,6 +207,14 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self.setCentralWidget(central)
         self.view.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
+    def _install_key_event_filter(self):
+        if getattr(self, "_key_event_filter_installed", False):
+            return
+        app = QApplication.instance()
+        if app:
+            app.installEventFilter(self)
+            self._key_event_filter_installed = True
+
     def _setup_menubar(self):
         menubar = (
             self.title_bar.menu_bar
@@ -186,41 +223,62 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         )
         file_menu = menubar.addMenu("File")
 
-        act_close = QAction("Close", self)
-        act_close.triggered.connect(self.close)
-        file_menu.addAction(act_close)
+        act_save = QAction("Save\t[Ctrl+S]", self)
+        act_save.setShortcut(QKeySequence("Ctrl+S"))
+        act_save.triggered.connect(self._on_manual_save)
+        file_menu.addAction(act_save)
+
+        act_select_all = QAction("Select All\t[Ctrl+A]", self)
+        act_select_all.triggered.connect(self._on_select_all)
+        file_menu.addAction(act_select_all)
+
+        file_menu.addSeparator()
+
+        act_vacuum = QAction("Vacuum", self)
+        act_vacuum.triggered.connect(self._on_manual_vacuum)
+        file_menu.addAction(act_vacuum)
 
         act_backup = QAction("Backup", self)
-        act_backup.triggered.connect(self.create_backup)
+        act_backup.triggered.connect(self._on_create_backup)
         file_menu.addAction(act_backup)
 
+        export_menu = file_menu.addMenu("Export")
+
+        act_export_all_md = QAction("Export all text nodes to md", self)
+        act_export_all_md.triggered.connect(self._on_export_all_markdown)
+        export_menu.addAction(act_export_all_md)
+
+        act_export_selected_md = QAction("Export selected text nodes to md", self)
+        act_export_selected_md.triggered.connect(self._on_export_selected_markdown)
+        export_menu.addAction(act_export_selected_md)
+
         file_menu.addSeparator()
 
-        act_export_md = QAction("Export Text Nodes to Markdown", self)
-        act_export_md.triggered.connect(self._on_export_markdown)
-        file_menu.addAction(act_export_md)
+        act_change_pwd = QAction("Change Password", self)
+        act_change_pwd.triggered.connect(self._on_change_password)
+        file_menu.addAction(act_change_pwd)
 
         file_menu.addSeparator()
+
+        act_close = QAction("Exit", self)
+        act_close.triggered.connect(self.close)
+        file_menu.addAction(act_close)
 
         add_menu = menubar.addMenu("Add")
 
         act_note = QAction("Note\t[Ctrl+N]", self)
         act_note.setShortcut(QKeySequence("Ctrl+N"))
-        act_note.triggered.connect(self.canvas_controller.add_text_node)
+        act_note.triggered.connect(self._on_add_text_node)
         add_menu.addAction(act_note)
 
         act_img = QAction("Image\t[Ctrl+M]", self)
         act_img.setShortcut(QKeySequence("Ctrl+M"))
-        act_img.triggered.connect(
-            lambda: self.canvas_controller.add_media_node("image")
-        )
+        act_img.triggered.connect(self._on_add_image_node)
         add_menu.addAction(act_img)
 
         act_vid = QAction("Video\t[Ctrl+Shift+M]", self)
         act_vid.setShortcut(QKeySequence("Ctrl+Shift+M"))
-        act_vid.triggered.connect(
-            lambda: self.canvas_controller.add_media_node("video")
-        )
+        act_vid.triggered.connect(self._on_add_video_node)
         add_menu.addAction(act_vid)
 
         tools_menu = menubar.addMenu("Tools")
@@ -234,6 +292,10 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         tools_menu.addAction(self.act_snap)
 
         help_menu = menubar.addMenu("Help")
+        act_keybinds = QAction("Show All Keybinds", self)
+        act_keybinds.triggered.connect(self.open_keybinds)
+        help_menu.addAction(act_keybinds)
+
         act_about = QAction("About", self)
         act_about.triggered.connect(self.open_about)
         help_menu.addAction(act_about)
@@ -254,12 +316,23 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self.statusBar().addWidget(self.progress_label)
         self.statusBar().addPermanentWidget(self.coords_label)
 
+    # ── Status & Progress ───────────────────────────────────────────
+
     def _handle_status_update(self, message, type="normal"):
         if message == "Ready":
+            if getattr(self, "_status_protected", False):
+                return
             message = self.default_status
-
         self.status_label.setText(message)
         self.status_label.setStyleSheet(Theme.Styles.get_status_bar_qss(type))
+
+    def _protect_status(self, duration_ms=1000):
+        self._status_protected = True
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(duration_ms, self._unprotect_status)
+
+    def _unprotect_status(self):
+        self._status_protected = False
 
     def _on_progress_updated(self, value: float, message: str):
         self.progress_bar.set_progress(value, message)
@@ -273,13 +346,22 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self.status_label.setVisible(True)
         self._handle_status_update(message)
 
+    # ── Blocking Progress Overlay ───────────────────────────────────
+
     @Slot(str)
     def show_blocking_progress(self, msg: str):
-        if not hasattr(self, 'global_dim_overlay') or not self.global_dim_overlay:
+        was_inactive = getattr(self, "_blocking_progress_depth", 0) == 0
+        self._blocking_progress_depth = getattr(self, "_blocking_progress_depth", 0) + 1
+        if was_inactive and hasattr(self, "view"):
+            self.view.setEnabled(False)
+        if not hasattr(self, "global_dim_overlay") or not self.global_dim_overlay:
             self.global_dim_overlay = DimOverlay(self.view, block_input=True)
             self.global_dim_overlay.setParent(self.view)
             self.global_dim_overlay.resize(self.view.size())
-            
+            self.global_dim_overlay.destroyed.connect(self._on_blocking_overlay_destroyed)
+        elif hasattr(self.global_dim_overlay, "fade_in"):
+            self.global_dim_overlay.fade_in()
+
         self.global_dim_overlay.show()
         self.global_dim_overlay.raise_()
         self.progress_bar.start(msg, indeterminate=True)
@@ -287,16 +369,46 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self.progress_label.setVisible(True)
         self.status_label.setVisible(False)
 
+    @Slot(str)
+    def update_blocking_progress(self, msg: str):
+        if getattr(self, "_blocking_progress_depth", 0) <= 0:
+            self.show_blocking_progress(msg)
+            return
+        self.progress_bar.start(msg, indeterminate=True)
+        self.progress_label.setText(msg)
+        self.progress_label.setVisible(True)
+        self.status_label.setVisible(False)
+        if hasattr(self, "global_dim_overlay") and self.global_dim_overlay:
+            self.global_dim_overlay.raise_()
+
     @Slot()
     def hide_blocking_progress(self):
-        if hasattr(self, 'global_dim_overlay') and self.global_dim_overlay:
+        depth = max(0, getattr(self, "_blocking_progress_depth", 0) - 1)
+        self._blocking_progress_depth = depth
+        if depth > 0:
+            return
+        if hasattr(self, "global_dim_overlay") and self.global_dim_overlay:
             self.global_dim_overlay.fade_out()
-            self.global_dim_overlay = None
-            
+        if hasattr(self, "view"):
+            self.view.setEnabled(True)
         self.progress_bar.finish()
         self.progress_label.setVisible(False)
         self.status_label.setVisible(True)
         self.status_label.setText("Ready")
+
+    def _on_blocking_overlay_destroyed(self, *args):
+        self.global_dim_overlay = None
+
+    def show_video_transition_overlay(self, message="Processing video..."):
+        self.show_blocking_progress(message)
+
+    def update_video_transition_overlay(self, message="Processing video..."):
+        self.update_blocking_progress(message)
+
+    def hide_video_transition_overlay(self):
+        self.hide_blocking_progress()
+
+    # ── Actions ─────────────────────────────────────────────────────
 
     def toggle_snap_to_grid(self):
         Config.SNAP_TO_GRID = not getattr(Config, "SNAP_TO_GRID", False)
@@ -304,61 +416,484 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self.act_snap.setText(f"Snap to Grid: {state_text}\t[G]")
         self.overlay.set_snap_status(Config.SNAP_TO_GRID)
         self.status_label.setText(f"Snap to grid {state_text.lower()}.")
+        self.canvas_controller.snap_to_grid_changed.emit(Config.SNAP_TO_GRID)
 
-    def _on_export_markdown(self):
+    def _markdown_export_filename(self, selected=False):
         db_path = getattr(self.db_conn, "db_path", "Untitled")
         name, _ = os.path.splitext(os.path.basename(db_path))
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d")
-        default_filename = f"{name}-KryptoNoteExported-{timestamp}.md"
-        self.canvas_controller.export_to_markdown(default_filename)
+        suffix = "Selected" if selected else "Exported"
+        return f"{name}-KryptoNote{suffix}-{timestamp}.md"
 
-    def create_backup(self):
-        db_path = self.db_conn.db_path
-        name, ext = os.path.splitext(os.path.basename(db_path))
-        backup_dir = os.path.join(os.path.dirname(db_path), "backup")
-        os.makedirs(backup_dir, exist_ok=True)
+    def _on_select_all(self):
+        self.canvas_controller.select_all_nodes()
+        self._defer_modifier_sync()
 
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_path = os.path.join(backup_dir, f"{name}_{timestamp}{ext}")
+    def _on_export_all_markdown(self):
+        self.canvas_controller.export_to_markdown(
+            self._markdown_export_filename(selected=False),
+            selected_only=False,
+        )
+
+    def _on_export_selected_markdown(self):
+        self.canvas_controller.export_to_markdown(
+            self._markdown_export_filename(selected=True),
+            selected_only=True,
+        )
+
+    def _on_manual_save(self):
+        if hasattr(self, '_pwd_change_dialog') and self._pwd_change_dialog and self._pwd_change_dialog.is_changing():
+            self._handle_status_update("Cannot save during password change", "warning")
+            return
         self.service.commit_changes()
+        self._handle_status_update("Saved", "secure")
+        self._defer_modifier_sync()
 
-        try:
-            backup_conn = sqlite3.connect(backup_path)
-            self.db_conn.conn.backup(backup_conn)
-            backup_conn.close()
-            QMessageBox.information(
-                self, "Backup", f"Backup created successfully:\n{backup_path}"
+    def _on_manual_vacuum(self):
+        if self._manual_vacuum_running:
+            return
+        if hasattr(self, '_pwd_change_dialog') and self._pwd_change_dialog and self._pwd_change_dialog.is_changing():
+            return
+        self._manual_vacuum_running = True
+
+        def on_start():
+            self._manual_vacuum_started.emit("Vacuuming database...")
+
+        def on_finish():
+            self._manual_vacuum_finished.emit("Ready")
+
+        def on_waiting_lock(attempt):
+            self._manual_vacuum_updated.emit(
+                f"Waiting for database lock... retry {attempt}/8"
             )
-        except Exception as e:
-            QMessageBox.critical(self, "Backup Error", f"Failed to create backup:\n{e}")
+
+        self.service.vacuum_database(
+            on_start_vacuum=on_start,
+            on_finish_vacuum=on_finish,
+            on_waiting_lock=on_waiting_lock,
+        )
+
+    @Slot(str)
+    def _on_manual_vacuum_finished(self, message: str):
+        self._manual_vacuum_running = False
+        self.hide_blocking_progress()
+        self._handle_status_update(message)
+
+    def _on_create_backup(self):
+        success, message = BackupService.create(self.db_conn, self.service)
+        if success:
+            QMessageBox.information(self, "Backup", message)
+        else:
+            QMessageBox.critical(self, "Backup Error", message)
+
+    def _on_add_text_node(self):
+        self.canvas_controller.add_text_node()
+        self._defer_modifier_sync()
+
+    def _on_add_image_node(self):
+        self.canvas_controller.add_media_node("image")
+        self._defer_modifier_sync()
+
+    def _on_add_video_node(self):
+        self.canvas_controller.add_media_node("video")
+        self._defer_modifier_sync()
+
+    # ── Dialogs ─────────────────────────────────────────────────────
 
     def open_search(self):
-        if not self.search_dialog:
-            self.search_dialog = SearchDialog(self)
-
-        margin = 20
-        x = self.geometry().x() + self.geometry().width() - self.search_dialog.width() - margin
-        y = self.geometry().y() + 80 
-        self.search_dialog.move(x, y)
-
-        self.search_dialog.show()
-        self.search_dialog.raise_()
-        self.search_dialog.activateWindow()
-        self.search_dialog.search_input.setFocus()
-        self.search_dialog.search_input.selectAll()
+        if hasattr(self, "view"):
+            self.view.setFocus(Qt.FocusReason.ShortcutFocusReason)
+        self._invoke_qml_root("openSearchPanel")
+        self._defer_modifier_sync()
 
     def open_about(self):
         overlay = DimOverlay(self)
         overlay.show()
         dialog = AboutDialog(self)
         dialog.exec()
-        overlay.close()
+        overlay.fade_out(delete_on_finish=True)
+
+    def open_keybinds(self):
+        overlay = DimOverlay(self)
+        overlay.show()
+        dialog = KeybindsDialog(self)
+        dialog.exec()
+        overlay.fade_out(delete_on_finish=True)
+
+    def show_node_properties_overlay(self, metadata_lines):
+        """Show themed node properties overlay over the canvas."""
+        if hasattr(self, 'view'):
+            if hasattr(self, '_node_props_overlay') and self._node_props_overlay:
+                self._node_props_overlay.fade_out(delete_on_finish=True)
+            self._node_props_overlay = NodePropertiesOverlay(metadata_lines, parent=self.view)
+            self._node_props_overlay.destroyed.connect(lambda: setattr(self, '_node_props_overlay', None))
+            self._node_props_overlay.raise_()
+
+    # ── Password Change ─────────────────────────────────────────────
+
+    def _on_change_password(self):
+        from ..widgets.dialogs.password_change_dialog import PasswordChangeDialog
+        if hasattr(self, '_pwd_change_dialog') and self._pwd_change_dialog:
+            return
+
+        self._pwd_change_dim = DimOverlay(self.view, block_input=True, auto_show=True)
+        self._pwd_change_dim.setStyleSheet("DimOverlay { background-color: rgba(0, 0, 0, 150); }")
+        self._pwd_change_dim.raise_()
+
+        self._pwd_change_dialog = PasswordChangeDialog(self)
+        self._pwd_change_dialog.passwordChangeRequested.connect(
+            self._execute_password_change
+        )
+        self._pwd_change_dialog.finished.connect(self._cleanup_pwd_change_dialog)
+        self._pwd_change_dialog.show()
+
+    def _execute_password_change(self, old_pwd, new_pwd, create_backup):
+        import concurrent.futures
+        from ...services.password_change_service import PasswordChangeService
+
+        if create_backup:
+            success, message = BackupService.create(self.db_conn, self.service)
+            if not success:
+                if hasattr(self, '_pwd_change_dialog') and self._pwd_change_dialog:
+                    self._pwd_change_dialog.show_finished(False, f"Backup failed: {message}")
+                return
+
+        db_path = getattr(self.db_conn, 'db_path', None)
+        if not db_path:
+            return
+
+        progress_signal = self._password_change_progress
+        finished_signal = self._password_change_finished
+
+        def on_progress(current, total, msg):
+            progress_signal.emit(current, total, msg)
+
+        def on_finished(success, msg):
+            finished_signal.emit(success, msg)
+
+        self._password_change_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        self._password_change_executor.submit(
+            PasswordChangeService.change_password,
+            db_path, old_pwd, new_pwd,
+            on_progress, on_finished,
+        )
+
+    @Slot(int, int, str)
+    def _on_password_change_progress(self, current, total, msg):
+        if hasattr(self, '_pwd_change_dialog') and self._pwd_change_dialog:
+            self._pwd_change_dialog.set_changing(True, msg)
+
+    @Slot(bool, str)
+    def _on_password_change_finished(self, success, msg):
+        if hasattr(self, '_pwd_change_dialog') and self._pwd_change_dialog:
+            self._pwd_change_dialog.show_finished(success, msg)
+        executor = getattr(self, "_password_change_executor", None)
+        if executor:
+            executor.shutdown(wait=False)
+            self._password_change_executor = None
+
+    def _cleanup_pwd_change_dialog(self, *args):
+        self._pwd_change_dialog = None
+        if hasattr(self, "_pwd_change_dim") and self._pwd_change_dim:
+            self._pwd_change_dim.fade_out()
+            self._pwd_change_dim = None
+
+    # ── Coords ──────────────────────────────────────────────────────
 
     def update_coords(self, pos):
         self.coords_label.setText(f"X: {int(pos.x())} Y: {int(pos.y())}")
 
+    # ── Key Events ──────────────────────────────────────────────────
+
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.Type.ShortcutOverride:
+            if self._should_claim_shortcut(event):
+                event.accept()
+        if event.type() == QEvent.Type.KeyPress:
+            self._handle_global_modifier_press(event)
+            if self._handle_global_key_press(event):
+                return True
+        if event.type() == QEvent.Type.KeyRelease:
+            self._handle_global_modifier_release(event)
+            if self._handle_global_key_release(event):
+                return True
+        return super().eventFilter(watched, event)
+
+    def _should_claim_shortcut(self, event):
+        """Return True for shortcuts we want to handle in Python, not QML."""
+        if not self.isActiveWindow():
+            return False
+        editor_open = self._is_qml_text_editor_open()
+        if not editor_open:
+            return False
+        key = event.key()
+        modifiers = event.modifiers()
+        is_s_key = key == Qt.Key.Key_S or event.nativeVirtualKey() == 0x53
+        if is_s_key and modifiers & Qt.KeyboardModifier.ControlModifier:
+            return True
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and modifiers & Qt.KeyboardModifier.ControlModifier:
+            return True
+        if key == Qt.Key.Key_Escape:
+            return True
+        if self._is_app_shortcut_while_editor_open(event):
+            return True
+        return False
+
+    def _handle_global_key_press(self, event):
+        if not self.isActiveWindow() or QApplication.activeModalWidget() is not None:
+            return False
+
+        key = event.key()
+        modifiers = event.modifiers()
+
+        editor_open = self._is_qml_text_editor_open()
+        if editor_open:
+            if key == Qt.Key.Key_Escape:
+                self._invoke_qml_root("cancelEditor")
+                return True
+
+            is_s_key = key == Qt.Key.Key_S or event.nativeVirtualKey() == 0x53
+            if is_s_key and modifiers & Qt.KeyboardModifier.ControlModifier:
+                self._invoke_qml_root("saveEditor")
+                self._protect_status(2000)
+                return True
+            if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and modifiers & Qt.KeyboardModifier.ControlModifier:
+                self._invoke_qml_root("saveEditor")
+                self._protect_status(2000)
+                return True
+            if self._is_app_shortcut_while_editor_open(event):
+                return True
+            return False
+
+        if not self._canvas_has_keyboard_focus():
+            return False
+
+        search_open = self._is_qml_search_panel_open()
+
+        if search_open and key == Qt.Key.Key_Escape:
+            self._invoke_qml_root("closeSearchPanel")
+            return True
+        if search_open:
+            return False
+
+        if self._is_select_all_shortcut(event):
+            self.canvas_controller.select_all_nodes()
+            return True
+
+        if key == Qt.Key.Key_Escape and modifiers == Qt.KeyboardModifier.NoModifier:
+            self.canvas_controller.clear_selection()
+            return True
+
+        if modifiers == Qt.KeyboardModifier.NoModifier and key in (
+            Qt.Key.Key_Left,
+            Qt.Key.Key_Right,
+            Qt.Key.Key_Up,
+            Qt.Key.Key_Down,
+        ):
+            self._set_keyboard_pan_key(key, True)
+            return True
+
+        if self._is_snap_key(event) and modifiers == Qt.KeyboardModifier.NoModifier:
+            self.toggle_snap_to_grid()
+            return True
+
+        if key == Qt.Key.Key_Delete:
+            if modifiers & Qt.KeyboardModifier.ShiftModifier:
+                self.canvas_controller.delete_selected_nodes_without_confirmation()
+            else:
+                self.canvas_controller.delete_selected_nodes()
+            return True
+
+        return False
+
+    def _is_snap_key(self, event):
+        if event.key() == Qt.Key.Key_G:
+            return True
+        try:
+            return event.nativeVirtualKey() == 0x47
+        except AttributeError:
+            return False
+
+    def _is_select_all_shortcut(self, event):
+        modifiers = event.modifiers()
+        if not (modifiers & Qt.KeyboardModifier.ControlModifier):
+            return False
+        if modifiers & (Qt.KeyboardModifier.ShiftModifier | Qt.KeyboardModifier.AltModifier):
+            return False
+        try:
+            native = event.nativeVirtualKey()
+        except AttributeError:
+            native = 0
+        return event.key() == Qt.Key.Key_A or native == 0x41
+
+    def _handle_global_key_release(self, event):
+        if self._keyboard_pan_key_name(event.key()) is None:
+            return False
+        if self._is_auto_repeat_event(event):
+            return True
+        self._set_keyboard_pan_key(event.key(), False)
+        return self.isActiveWindow()
+
+    def _set_keyboard_pan_key(self, key, pressed):
+        key_name = self._keyboard_pan_key_name(key)
+        if key_name is None:
+            return
+        self._invoke_qml_root("setKeyboardPanKey", key_name, bool(pressed))
+
+    @staticmethod
+    def _keyboard_pan_key_name(key):
+        if key == Qt.Key.Key_Left:
+            return "left"
+        if key == Qt.Key.Key_Right:
+            return "right"
+        if key == Qt.Key.Key_Up:
+            return "up"
+        if key == Qt.Key.Key_Down:
+            return "down"
+        return None
+
+    @staticmethod
+    def _is_auto_repeat_event(event):
+        try:
+            return event.isAutoRepeat()
+        except AttributeError:
+            return False
+
+    def _is_app_shortcut_while_editor_open(self, event):
+        key = event.key()
+        modifiers = event.modifiers()
+        ctrl = bool(modifiers & Qt.KeyboardModifier.ControlModifier)
+
+        if key in (Qt.Key.Key_Delete, Qt.Key.Key_Escape):
+            return True
+        if self._is_snap_key(event) and modifiers == Qt.KeyboardModifier.NoModifier:
+            return True
+        if not ctrl:
+            return False
+
+        native = event.nativeVirtualKey()
+        is_n_key = key == Qt.Key.Key_N or native == 0x4E
+        is_m_key = key == Qt.Key.Key_M or native == 0x4D
+        is_f_key = key == Qt.Key.Key_F or native == 0x46
+
+        return is_n_key or is_f_key or is_m_key
+
+    def _canvas_has_keyboard_focus(self):
+        if not hasattr(self, "view"):
+            return False
+        focus = QApplication.focusWidget()
+        if focus is None:
+            return False
+        return focus is self.view or self.view.isAncestorOf(focus)
+
+    def _is_qml_text_editor_open(self):
+        if not hasattr(self, "view"):
+            return False
+        root = self.view.rootObject()
+        return bool(root and root.property("isTextEditorOpen"))
+
+    def _is_qml_search_panel_open(self):
+        if not hasattr(self, "view"):
+            return False
+        root = self.view.rootObject()
+        return bool(root and root.property("isSearchPanelOpen"))
+
+    def _invoke_qml_root(self, method_name, *args):
+        if not hasattr(self, "view"):
+            return
+        root = self.view.rootObject()
+        if root is not None:
+            fn = getattr(root, method_name, None)
+            if fn and callable(fn):
+                fn(*args)
+            else:
+                QMetaObject.invokeMethod(root, method_name)
+
+
+
+    def _reset_all_modifiers(self):
+        """Reset both QML modifier flags and Python status bar.
+
+        Called when the window regains focus after a dialog (e.g. QFileDialog)
+        consumed the key-release event, leaving modifiers stuck.
+        """
+        self._ctrl_held = False
+        self._shift_held = False
+        self._invoke_qml_root("resetModifiers")
+        self._invoke_qml_root("stopKeyboardPan")
+        self.canvas_controller.toggle_link_mode_off()
+        self._handle_status_update("Ready")
+
+    def _handle_global_modifier_press(self, event):
+        if not self.isActiveWindow() or QApplication.activeModalWidget() is not None:
+            return
+        if self._is_qml_text_editor_open():
+            return
+        key = event.key()
+        if key not in (Qt.Key.Key_Control, Qt.Key.Key_Shift):
+            return
+        if key == Qt.Key.Key_Control:
+            self._ctrl_held = True
+        elif key == Qt.Key.Key_Shift:
+            self._shift_held = True
+        self._apply_modifier_state(self._ctrl_held, self._shift_held)
+
+    def _handle_global_modifier_release(self, event):
+        if self._is_qml_text_editor_open():
+            return
+        key = event.key()
+        if key not in (Qt.Key.Key_Control, Qt.Key.Key_Shift):
+            return
+        if key == Qt.Key.Key_Control:
+            self._ctrl_held = False
+        elif key == Qt.Key.Key_Shift:
+            self._shift_held = False
+        self._apply_modifier_state(self._ctrl_held, self._shift_held)
+
+    def _sync_modifier_state(self):
+        """Clear stale modifier state without re-enabling it from Qt's cache."""
+        mods = QApplication.keyboardModifiers()
+        if not (mods & Qt.KeyboardModifier.ControlModifier):
+            self._ctrl_held = False
+        if not (mods & Qt.KeyboardModifier.ShiftModifier):
+            self._shift_held = False
+        self._apply_modifier_state(self._ctrl_held, self._shift_held)
+
+    def _apply_modifier_state(self, ctrl_held, shift_held):
+        self._ctrl_held = ctrl_held
+        self._shift_held = shift_held
+        root = self.view.rootObject() if hasattr(self, "view") else None
+        if root is None:
+            return
+        if root.property("isCtrlHeld") != ctrl_held or root.property("isShiftHeld") != shift_held:
+            root.setProperty("isCtrlHeld", ctrl_held)
+            root.setProperty("isShiftHeld", shift_held)
+            root.setProperty("isLinkMode", shift_held)
+            if not shift_held:
+                self.canvas_controller.toggle_link_mode_off()
+        if shift_held:
+            self._handle_status_update(
+                "LINKING: Hold Shift and click nodes to create links.", "secure"
+            )
+        elif ctrl_held:
+            self._handle_status_update(
+                "SELECTION ACTIVE: Drag mouse to select multiple objects.", "accent"
+            )
+        else:
+            self._handle_status_update("Ready")
+
+    def _defer_modifier_sync(self):
+        """Shortcuts can consume key-release events before QML sees them."""
+        QTimer.singleShot(0, self._reset_all_modifiers)
+        QTimer.singleShot(80, self._reset_all_modifiers)
+        QTimer.singleShot(220, self._reset_all_modifiers)
+
+    # ── Window Events ───────────────────────────────────────────────
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self._sync_window_margins()
+
         if hasattr(self, "overlay") and hasattr(self, "statusBar"):
             sb_y = self.statusBar().y()
             ov_x = self.width() - self.overlay.width()
@@ -371,21 +906,50 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             self.progress_bar.move(0, sb_y - self.progress_bar.height())
             self.progress_bar.raise_()
 
-    def keyPressEvent(self, event):
-        if event.key() == Qt.Key.Key_Shift:
-            self.canvas_controller.toggle_link_mode(True)
-        elif event.key() == Qt.Key.Key_Control:
-            self._handle_status_update(
-                "SELECTION ACTIVE: Drag mouse to select multiple objects.", "accent"
-            )
-        super().keyPressEvent(event)
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.WindowStateChange:
+            self._sync_window_margins()
+            self._schedule_qml_render_recovery()
+        elif event.type() == QEvent.Type.ActivationChange:
+            if self.isActiveWindow():
+                # Window regained focus — modifiers may have been released
+                # inside a native dialog (QFileDialog, etc.).
+                QTimer.singleShot(0, self._sync_modifier_state)
 
-    def keyReleaseEvent(self, event):
-        if event.key() == Qt.Key.Key_Shift:
-            self.canvas_controller.toggle_link_mode(False)
-        elif event.key() == Qt.Key.Key_Control:
-            self._handle_status_update("Ready")
-        super().keyReleaseEvent(event)
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self.is_windows:
+            self._apply_native_dwm_attributes()
+        self._schedule_qml_render_recovery()
+
+    def _sync_window_margins(self):
+        self.setContentsMargins(0, 0, 0, 0)
+
+    def _schedule_qml_render_recovery(self):
+        if self.windowState() & Qt.WindowState.WindowMinimized:
+            return
+        QTimer.singleShot(0, self._recover_qml_render)
+        QTimer.singleShot(40, self._recover_qml_render)
+        QTimer.singleShot(140, lambda: self._recover_qml_render(release_resources=True))
+
+    def _recover_qml_render(self, release_resources=False):
+        if not hasattr(self, "view"):
+            return
+        if self.windowState() & Qt.WindowState.WindowMinimized:
+            return
+        quick_window = self.view.quickWindow()
+        if quick_window:
+            quick_window.setPersistentGraphics(True)
+            quick_window.setPersistentSceneGraph(True)
+            if release_resources:
+                quick_window.releaseResources()
+        root = self.view.rootObject()
+        if root is not None:
+            root.update()
+        self.view.update()
+
+    # ── Settings Persistence ────────────────────────────────────────
 
     def read_settings(self):
         settings = QSettings("ZeroXware", "KryptoNote")
@@ -406,10 +970,26 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         settings.setValue("windowState", self.saveState())
 
     def closeEvent(self, event):
+        if hasattr(self, '_pwd_change_dialog') and self._pwd_change_dialog:
+            if self._pwd_change_dialog.is_changing():
+                event.ignore()
+                self._handle_status_update("Cannot close: password change in progress", "warning")
+                return
+
         self.write_settings()
         if hasattr(self, "service"):
             try:
                 self.service.commit_changes()
             except Exception as e:
                 print(f"Error saving changes on close: {e}")
+        if hasattr(self, "repo"):
+            try:
+                self.repo.close()
+            except Exception:
+                pass
+        if hasattr(self, "db_conn"):
+            try:
+                self.db_conn.conn.close()
+            except Exception:
+                pass
         super().closeEvent(event)

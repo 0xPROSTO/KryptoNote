@@ -1,4 +1,5 @@
 import sqlite3
+from datetime import datetime
 
 
 class DatabaseConnection:
@@ -6,7 +7,18 @@ class DatabaseConnection:
         self.db_path = db_path
         self.conn = sqlite3.connect(db_path)
         self.cursor = self.conn.cursor()
-        self._init_db()
+        try:
+            self._init_db()
+        except Exception:
+            self.conn.close()
+            raise
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.conn.close()
+        return False
 
     def _init_db(self):
         self.cursor.execute("PRAGMA journal_mode=WAL;")
@@ -31,7 +43,12 @@ class DatabaseConnection:
                                 is_chunked   INTEGER DEFAULT 0,
                                 total_size   INTEGER DEFAULT 0,
                                 title_size   INTEGER DEFAULT 14,
-                                text_size    INTEGER DEFAULT 10
+                                text_size    INTEGER DEFAULT 10,
+                                created_at   TEXT DEFAULT '',
+                                updated_at   TEXT DEFAULT '',
+                                media_width  INTEGER DEFAULT 0,
+                                media_height INTEGER DEFAULT 0,
+                                media_duration REAL DEFAULT 0
                             )
                             """)
 
@@ -52,6 +69,8 @@ class DatabaseConnection:
         )
 
         self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunks ON media_chunks(item_id, chunk_index)")
+        self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_conn_start ON connections(start_id)")
+        self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_conn_end ON connections(end_id)")
         self._migrate_db()
         self.conn.commit()
 
@@ -62,21 +81,53 @@ class DatabaseConnection:
             self.cursor.execute("ALTER TABLE items ADD COLUMN title_size INTEGER DEFAULT 14")
         if "text_size" not in columns:
             self.cursor.execute("ALTER TABLE items ADD COLUMN text_size INTEGER DEFAULT 10")
+        if "created_at" not in columns:
+            self.cursor.execute("ALTER TABLE items ADD COLUMN created_at TEXT DEFAULT ''")
+        if "updated_at" not in columns:
+            self.cursor.execute("ALTER TABLE items ADD COLUMN updated_at TEXT DEFAULT ''")
+        if "media_width" not in columns:
+            self.cursor.execute("ALTER TABLE items ADD COLUMN media_width INTEGER DEFAULT 0")
+        if "media_height" not in columns:
+            self.cursor.execute("ALTER TABLE items ADD COLUMN media_height INTEGER DEFAULT 0")
+        if "media_duration" not in columns:
+            self.cursor.execute("ALTER TABLE items ADD COLUMN media_duration REAL DEFAULT 0")
+
+        now = datetime.now().isoformat(timespec="seconds")
+        self.cursor.execute("UPDATE items SET created_at=? WHERE created_at IS NULL OR created_at=''", (now,))
+        self.cursor.execute("UPDATE items SET updated_at=created_at WHERE updated_at IS NULL OR updated_at=''")
 
     def get_salt(self):
-        self.cursor.execute("SELECT value FROM metadata WHERE key='auth_salt'")
-        row = self.cursor.fetchone()
-        return row[0] if row else None
+        return self.get_metadata("auth_salt")
 
     def set_salt(self, salt_bytes):
-        self.cursor.execute("INSERT OR REPLACE INTO metadata (key, value) VALUES ('auth_salt', ?)", (salt_bytes,))
-        self.conn.commit()
+        self.set_metadata("auth_salt", salt_bytes)
 
     def get_auth_check(self):
-        self.cursor.execute("SELECT value FROM metadata WHERE key='auth_check'")
+        return self.get_metadata("auth_check")
+
+    def set_auth_check(self, check_bytes):
+        self.set_metadata("auth_check", check_bytes)
+
+    def get_metadata(self, key):
+        self.cursor.execute("SELECT value FROM metadata WHERE key=?", (key,))
         row = self.cursor.fetchone()
         return row[0] if row else None
 
-    def set_auth_check(self, check_bytes):
-        self.cursor.execute("INSERT OR REPLACE INTO metadata (key, value) VALUES ('auth_check', ?)", (check_bytes,))
-        self.conn.commit()
+    def set_metadata(self, key, value, commit=True):
+        self.cursor.execute(
+            "INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)",
+            (key, value),
+        )
+        if commit:
+            self.conn.commit()
+
+    def get_crypto_version(self):
+        value = self.get_metadata("crypto_version")
+        if value is None:
+            return 1
+        if isinstance(value, bytes):
+            value = value.decode("ascii")
+        return int(value)
+
+    def get_wrapped_data_key(self):
+        return self.get_metadata("wrapped_data_key")

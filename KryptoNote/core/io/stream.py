@@ -1,6 +1,15 @@
 import sqlite3
+import weakref
 
 from PySide6.QtCore import QIODevice
+
+_active_streams = weakref.WeakSet()
+
+
+def close_streams_for_item(item_id):
+    for stream in list(_active_streams):
+        if getattr(stream, "item_id", None) == item_id:
+            stream.close()
 
 
 class BlockEncryptedStream(QIODevice):
@@ -14,6 +23,7 @@ class BlockEncryptedStream(QIODevice):
         self.chunk_size = chunk_size
         self.conn = None
         self.cursor = None
+        _active_streams.add(self)
         self.open(QIODevice.OpenModeFlag.ReadOnly)
 
     def open(self, mode):
@@ -27,8 +37,16 @@ class BlockEncryptedStream(QIODevice):
             return False
 
     def close(self):
+        if self.cursor:
+            try:
+                self.cursor.close()
+            except Exception:
+                pass
         if self.conn:
             self.conn.close()
+            self.conn = None
+            self.cursor = None
+        _active_streams.discard(self)
 
         super().close()
 
@@ -39,7 +57,7 @@ class BlockEncryptedStream(QIODevice):
         return self._size
 
     def bytesAvailable(self):
-        return self._size - self._pos
+        return super().bytesAvailable() + (self._size - self._pos)
 
     def pos(self):
         return self._pos
@@ -47,12 +65,14 @@ class BlockEncryptedStream(QIODevice):
     def seek(self, pos):
         if 0 <= pos <= self._size:
             self._pos = pos
-            return True
+            return super().seek(pos)
 
         return False
 
     def readData(self, max_len):
         try:
+            if not self.cursor:
+                return b""
             if self._pos >= self._size:
                 return b""
             chunk_idx = self._pos // self.chunk_size

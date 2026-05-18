@@ -59,7 +59,6 @@ class AboutDialog(QDialog):
         content_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         content_layout.setSpacing(10)
 
-        # Logo
         self.logo_label = QLabel()
         self.logo_label.setObjectName("logo_label")
         pixmap = QPixmap(Config.ICON_PATH)
@@ -71,7 +70,6 @@ class AboutDialog(QDialog):
         self.logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         content_layout.addWidget(self.logo_label)
 
-        # Metas
         self.app_name_label = QLabel(Config.APP_NAME)
         self.app_name_label.setObjectName("app_name")
         self.app_name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)

@@ -7,7 +7,7 @@ class AnimatedButton(QPushButton):
     def __init__(self, text, parent=None):
         super().__init__(text, parent)
         self.effect = QGraphicsColorizeEffect(self)
-        self.effect.setColor(QColor("#151515"))
+        self.effect.setColor(QColor(""))
         self.effect.setStrength(0.0)
         self.setGraphicsEffect(self.effect)
 

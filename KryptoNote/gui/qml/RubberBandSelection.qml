@@ -1,0 +1,47 @@
+import QtQuick
+
+Rectangle {
+    id: rubberBand
+    visible: false
+    color: "transparent"
+    border.color: AppTheme ? AppTheme.accentMain : "#e6158b"
+    border.width: 1
+    opacity: 0.4
+    z: 100
+
+    property point start: Qt.point(0, 0)
+
+    Rectangle {
+        anchors.fill: parent
+        color: AppTheme ? AppTheme.accentMain : "#e6158b"
+        opacity: 0.08
+    }
+
+    function begin(mouseX, mouseY) {
+        start = Qt.point(mouseX, mouseY)
+        x = mouseX
+        y = mouseY
+        width = 0
+        height = 0
+        visible = true
+    }
+
+    function updateBand(mouseX, mouseY) {
+        x = Math.min(start.x, mouseX)
+        y = Math.min(start.y, mouseY)
+        width = Math.abs(mouseX - start.x)
+        height = Math.abs(mouseY - start.y)
+    }
+
+    function finishSelection(contentLayer, contentScale) {
+        var rx1 = (x - contentLayer.x) / contentScale
+        var ry1 = (y - contentLayer.y) / contentScale
+        var rx2 = ((x + width) - contentLayer.x) / contentScale
+        var ry2 = ((y + height) - contentLayer.y) / contentScale
+        var selected = nodeModel.get_nodes_in_rect(rx1, ry1, rx2, ry2)
+        for (var i = 0; i < selected.length; i++) {
+            nodeModel.set_selected(selected[i], true)
+        }
+        visible = false
+    }
+}

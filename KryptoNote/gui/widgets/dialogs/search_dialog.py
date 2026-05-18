@@ -59,14 +59,20 @@ class SearchDialog(QDialog):
         query = self.search_input.text()
         if not query:
             return
-            
+
         if query == self.last_query and self.results:
             self.next_result()
             return
-            
+
         self.last_query = query
-        if self.main_window:
-            self.results = self.main_window.service.search_items(query)
+        if self.main_window and hasattr(self.main_window, "node_model"):
+            model = self.main_window.node_model
+            matching_ids = model.search_nodes(query)
+            self.results = []
+            for nid in matching_ids:
+                data = model.get_node_data(nid)
+                if data:
+                    self.results.append(type("R", (), data)())
             self.current_index = 0
             self.update_ui_state()
             self.jump_to_current()
@@ -102,12 +108,18 @@ class SearchDialog(QDialog):
             return
         target = self.results[self.current_index]
         if self.main_window:
-            center_x = target.x + target.width / 2
-            center_y = target.y + target.height / 2
-            
-            self.main_window.view.smooth_center_on(QPointF(center_x, center_y))
-            self.main_window.scene.clearSelection()
-            node_id = target.id
-            if node_id in self.main_window.canvas_controller.nodes_map:
-                node = self.main_window.canvas_controller.nodes_map[node_id]
-                node.setSelected(True)
+            # Use live model data instead of stale DB coordinates
+            node_data = self.main_window.node_model.get_node_data(target.id)
+            if node_data:
+                center_x = node_data["x"] + node_data["width"] / 2
+                center_y = node_data["y"] + node_data["height"] / 2
+            else:
+                center_x = target.x + target.width / 2
+                center_y = target.y + target.height / 2
+
+            root_obj = self.main_window.view.rootObject()
+            if root_obj:
+                root_obj.smoothCenterOn(center_x, center_y)
+
+            self.main_window.node_model.clear_selection()
+            self.main_window.node_model.set_selected(target.id, True)

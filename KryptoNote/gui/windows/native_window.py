@@ -2,11 +2,13 @@ import ctypes
 import ctypes.wintypes
 import sys
 
+from PySide6.QtCore import QTimer
 from PySide6.QtGui import QCursor
 
 WM_NCCALCSIZE = 0x0083
 WM_NCHITTEST = 0x0084
 WM_GETMINMAXINFO = 0x0024
+WM_NCLBUTTONDBLCLK = 0x00A3
 
 HTCLIENT = 1
 HTCAPTION = 2
@@ -27,17 +29,14 @@ WS_CAPTION = 0x00C00000
 WS_MAXIMIZEBOX = 0x00010000
 WS_MINIMIZEBOX = 0x00020000
 GWL_STYLE = -16
+SM_CXSIZEFRAME = 32
+SM_CYSIZEFRAME = 33
+SM_CXPADDEDBORDER = 92
 
-DWMWA_EXTENDED_FRAME_BOUNDS = 9
-
-
-class MARGINS(ctypes.Structure):
-    _fields_ = [
-        ("cxLeftWidth", ctypes.c_int),
-        ("cxRightWidth", ctypes.c_int),
-        ("cyTopHeight", ctypes.c_int),
-        ("cyBottomHeight", ctypes.c_int),
-    ]
+DWMWA_WINDOW_CORNER_PREFERENCE = 33
+DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+DWMWA_BORDER_COLOR = 34
+DWMWCP_ROUND = 2
 
 
 class MINMAXINFO(ctypes.Structure):
@@ -71,12 +70,59 @@ class NativeWindowMixin:
         style |= WS_THICKFRAME | WS_CAPTION | WS_MAXIMIZEBOX | WS_MINIMIZEBOX
         ctypes.windll.user32.SetWindowLongW(hwnd, GWL_STYLE, style)
 
-        margins = MARGINS(-1, -1, -1, -1)
-        ctypes.windll.dwmapi.DwmExtendFrameIntoClientArea(hwnd, ctypes.byref(margins))
+        self._apply_native_dwm_attributes(hwnd)
 
         ctypes.windll.user32.SetWindowPos(
             hwnd, 0, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0004 | 0x0020
         )
+
+    def _apply_native_dwm_attributes(self, hwnd=None):
+        if sys.platform != "win32":
+            return
+
+        hwnd = hwnd or int(self.winId())
+        try:
+            corner_preference = ctypes.c_int(DWMWCP_ROUND)
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_WINDOW_CORNER_PREFERENCE,
+                ctypes.byref(corner_preference),
+                ctypes.sizeof(corner_preference),
+            )
+
+            dark_mode = ctypes.c_int(1)
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_USE_IMMERSIVE_DARK_MODE,
+                ctypes.byref(dark_mode),
+                ctypes.sizeof(dark_mode),
+            )
+
+            # Native Win11 border color uses BGR. This matches Qt's quiet dark
+            # separator instead of drawing a second custom frame in the client.
+            border_color = ctypes.c_int(0x303030)
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_BORDER_COLOR,
+                ctypes.byref(border_color),
+                ctypes.sizeof(border_color),
+            )
+        except Exception:
+            pass
+
+    def _get_maximized_frame_insets(self, hwnd):
+        try:
+            dpi = ctypes.windll.user32.GetDpiForWindow(hwnd)
+            get_metric = ctypes.windll.user32.GetSystemMetricsForDpi
+            frame_x = get_metric(SM_CXSIZEFRAME, dpi)
+            frame_y = get_metric(SM_CYSIZEFRAME, dpi)
+            padded = get_metric(SM_CXPADDEDBORDER, dpi)
+        except Exception:
+            frame_x = ctypes.windll.user32.GetSystemMetrics(SM_CXSIZEFRAME)
+            frame_y = ctypes.windll.user32.GetSystemMetrics(SM_CYSIZEFRAME)
+            padded = ctypes.windll.user32.GetSystemMetrics(SM_CXPADDEDBORDER)
+
+        return frame_x + padded, frame_y + padded
 
     def _get_title_bar_widget(self):
         return getattr(self, "title_bar", None)
@@ -128,29 +174,16 @@ class NativeWindowMixin:
 
             if msg.message == WM_NCCALCSIZE:
                 if msg.wParam:
+                    if ctypes.windll.user32.IsIconic(msg.hWnd):
+                        return super().nativeEvent(event_type, message)
                     if ctypes.windll.user32.IsZoomed(msg.hWnd):
+                        # Keep maximized client content inside the work area.
                         params = NCCALCSIZE_PARAMS.from_address(msg.lParam)
-                        monitor = ctypes.windll.user32.MonitorFromWindow(
-                            msg.hWnd, 0x00000002
-                        )
-
-                        class MONITORINFO(ctypes.Structure):
-                            _fields_ = [
-                                ("cbSize", ctypes.wintypes.DWORD),
-                                ("rcMonitor", ctypes.wintypes.RECT),
-                                ("rcWork", ctypes.wintypes.RECT),
-                                ("dwFlags", ctypes.wintypes.DWORD),
-                            ]
-
-                        mi = MONITORINFO()
-                        mi.cbSize = ctypes.sizeof(MONITORINFO)
-                        ctypes.windll.user32.GetMonitorInfoW(monitor, ctypes.byref(mi))
-
-                        params.rgrc[0].left = mi.rcWork.left
-                        params.rgrc[0].top = mi.rcWork.top
-                        params.rgrc[0].right = mi.rcWork.right
-                        params.rgrc[0].bottom = mi.rcWork.bottom
-
+                        inset_x, inset_y = self._get_maximized_frame_insets(msg.hWnd)
+                        params.rgrc[0].left += inset_x
+                        params.rgrc[0].right -= inset_x
+                        params.rgrc[0].top += inset_y
+                        params.rgrc[0].bottom -= inset_y
                     return True, 0
 
                 return True, 0
@@ -228,5 +261,16 @@ class NativeWindowMixin:
                 info.ptMinTrackSize.y = self.minimumHeight()
 
                 return True, 0
+
+            elif msg.message == WM_NCLBUTTONDBLCLK:
+                if msg.wParam == HTCAPTION:
+                    def toggle_maximized():
+                        if self.isMaximized():
+                            self.showNormal()
+                        else:
+                            self.showMaximized()
+
+                    QTimer.singleShot(0, toggle_maximized)
+                    return True, 0
 
         return super().nativeEvent(event_type, message)

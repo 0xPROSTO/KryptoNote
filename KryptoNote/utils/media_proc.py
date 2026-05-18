@@ -1,9 +1,41 @@
 import io
+from dataclasses import dataclass
 
 import cv2
 from PIL import Image, ImageOps
 
 Image.MAX_IMAGE_PIXELS = None
+_LARGE_IMAGE_THRESHOLD = 256_000_000  # ~16k×16k
+
+
+@dataclass
+class MediaMetadata:
+    width: int = 0
+    height: int = 0
+    duration: float = 0.0
+
+
+def read_media_metadata(file_path):
+    try:
+        if file_path.lower().endswith((".mp4", ".avi", ".mov", ".mkv", ".webm")):
+            cap = cv2.VideoCapture(file_path)
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+            frames = float(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+            fps = float(cap.get(cv2.CAP_PROP_FPS) or 0)
+            cap.release()
+            duration = frames / fps if fps > 0 and frames > 0 else 0.0
+            return MediaMetadata(width=width, height=height, duration=duration)
+
+        with Image.open(file_path) as img:
+            img = ImageOps.exif_transpose(img)
+            pixels = img.width * img.height
+            if pixels > _LARGE_IMAGE_THRESHOLD:
+                print(f"Warning: very large image ({img.width}x{img.height}, {pixels:,} pixels) — processing may be slow: {file_path}")
+            return MediaMetadata(width=img.width, height=img.height)
+    except Exception as e:
+        print(f"Error reading media metadata: {e}")
+        return MediaMetadata()
 
 
 def create_thumbnail(file_path, size=(800, 800)):
@@ -19,6 +51,9 @@ def create_thumbnail(file_path, size=(800, 800)):
         else:
             img = Image.open(file_path)
             img = ImageOps.exif_transpose(img)
+            pixels = img.width * img.height
+            if pixels > _LARGE_IMAGE_THRESHOLD:
+                print(f"Warning: very large image ({img.width}x{img.height}, {pixels:,} pixels) — thumbnail creation may be slow")
 
         if img.mode in ("RGBA", "LA"):
             background = Image.new("RGB", img.size, (45, 45, 45))

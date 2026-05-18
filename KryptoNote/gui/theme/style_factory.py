@@ -128,8 +128,6 @@ class StyleFactory:
             QLabel {{ 
                 color: {Palette.TEXT_DIM};
                 font-size: 11px;
-                text-transform: uppercase;
-                letter-spacing: 0.5px;
                 font-weight: bold;
             }} 
             QListWidget {{ 
@@ -184,8 +182,24 @@ class StyleFactory:
                 border-color: {Palette.BORDER_DEFAULT};
                 color: {Palette.TEXT_DIM};
             }} 
-            {StyleFactory._generate_button_qss(Palette.BTN_CANCEL, Palette.BTN_CANCEL_BORDER, Palette.BTN_CANCEL_TEXT, Palette.BTN_CANCEL_HOVER, Palette.DANGER_HOVER, "QPushButton#btn_danger")}
-            {StyleFactory._generate_button_qss(Palette.BTN_APPLY, Palette.BTN_APPLY_BORDER, Palette.BTN_APPLY_TEXT, Palette.BTN_APPLY_HOVER, Palette.SUCCESS_HOVER, "QPushButton#btn_success")}
+            QPushButton#btn_danger {{
+                background-color: {Palette.BTN_CANCEL};
+                border-color: {Palette.BTN_CANCEL_BORDER};
+                color: {Palette.BTN_CANCEL_TEXT};
+            }}
+            QPushButton#btn_danger:hover {{
+                background-color: {Palette.BTN_CANCEL_HOVER};
+                border-color: {Palette.DANGER_HOVER};
+            }}
+            QPushButton#btn_success {{
+                background-color: {Palette.BTN_APPLY};
+                border-color: {Palette.BTN_APPLY_BORDER};
+                color: {Palette.BTN_APPLY_TEXT};
+            }}
+            QPushButton#btn_success:hover {{
+                background-color: {Palette.BTN_APPLY_HOVER};
+                border-color: {Palette.SUCCESS_HOVER};
+            }}
         """
 
     @staticmethod

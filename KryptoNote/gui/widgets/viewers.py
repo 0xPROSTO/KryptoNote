@@ -1,4 +1,4 @@
-from PySide6.QtCore import Qt, QUrl, QTimer
+from PySide6.QtCore import Qt, QUrl, QTimer, QCoreApplication
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaMetaData
 from PySide6.QtMultimediaWidgets import QVideoWidget
@@ -13,13 +13,16 @@ from ...core.io.stream import BlockEncryptedStream
 
 
 class SecureVideoPlayer(QDialog):
-    def __init__(self, repo, item_id, total_size, chunk_size, title="Secure Video"):
-        super().__init__()
+    def __init__(self, repo, item_id, total_size, chunk_size, title="Secure Video", parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         self.setWindowTitle(title)
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowMinMaxButtonsHint)
         self.setStyleSheet(StyleFactory.get_player_qss())
         self.repo = repo
         self._has_resized = False
+        self._cleaned_up = False
+        self.finished.connect(lambda _result: self._cleanup_media())
 
         self.CTRL_HEIGHT = 60
 
@@ -174,8 +177,33 @@ class SecureVideoPlayer(QDialog):
         self.controls_widget.lbl_time.setText("Error")
         print(self.player.errorString())
 
+    def _cleanup_media(self):
+        if self._cleaned_up:
+            return
+        self._cleaned_up = True
+        try:
+            self.player.stop()
+            self.player.setVideoOutput(None)
+            self.player.setAudioOutput(None)
+            self.player.setSource(QUrl())
+            QCoreApplication.processEvents()
+        except Exception:
+            pass
+        try:
+            self.io_device.close()
+        except Exception:
+            pass
+        try:
+            self.audio.deleteLater()
+            self.player.deleteLater()
+            QCoreApplication.processEvents()
+        except Exception:
+            pass
+
+    def done(self, result):
+        self._cleanup_media()
+        super().done(result)
+
     def closeEvent(self, event):
-        self.player.stop()
-        self.player.setSource(QUrl())
-        self.io_device.close()
+        self._cleanup_media()
         super().closeEvent(event)

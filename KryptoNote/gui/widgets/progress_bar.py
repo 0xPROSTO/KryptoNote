@@ -43,7 +43,6 @@ class ProgressBarWidget(QWidget):
         self._fade_anim.setDuration(200)
         self._fade_out_connected = False
 
-    # --- Qt Property for animation ---
     def _get_visible_progress(self):
         return self._visible_progress
 
@@ -53,7 +52,6 @@ class ProgressBarWidget(QWidget):
 
     visible_progress = Property(float, _get_visible_progress, _set_visible_progress)
 
-    # --- Public API ---
 
     def start(self, message="", indeterminate=False):
         self._active = True
@@ -141,7 +139,6 @@ class ProgressBarWidget(QWidget):
     def message(self):
         return self._message
 
-    # --- Internal ---
 
     def _do_hide(self):
         self._fade_anim.stop()

@@ -68,8 +68,8 @@ class MediaViewerDialog(QDialog):
         limit_w = screen_geom.width() * 0.8
         limit_h = screen_geom.height() * 0.8
 
-        img_w = image.width()
-        img_h = image.height()
+        img_w = max(1, image.width())
+        img_h = max(1, image.height())
         aspect_ratio = img_w / img_h
 
         target_w = img_w
@@ -89,7 +89,7 @@ class MediaViewerDialog(QDialog):
         self.setGeometry(int(x), int(y), int(target_w), int(target_h))
 
         self.setStyleSheet("""
-            QDialog { background-color: #050505; }
+            QDialog { background-color: ; }
             QPushButton { 
                 background-color: rgba(30, 30, 30, 160); 
                 color: rgba(255, 255, 255, 200); 
@@ -108,7 +108,7 @@ class MediaViewerDialog(QDialog):
         layout.setSpacing(0)
 
         self.scene = QGraphicsScene()
-        self.scene.setBackgroundBrush(QBrush(QColor("#050505")))
+        self.scene.setBackgroundBrush(QBrush(QColor("")))
 
         self.view = ZoomableView(self.scene)
         self.view.setStyleSheet("border: none;")
@@ -160,9 +160,10 @@ class MediaViewerDialog(QDialog):
         start_x = (self.width() - total_w) // 2
         y = self.height() - btn_w - 40
 
-        self.btn_rot_left.move(start_x, y)
-        self.btn_fit.move(start_x + btn_w + gap, y)
-        self.btn_rot_right.move(start_x + (btn_w + gap) * 2, y)
+        if hasattr(self, 'btn_rot_left'):
+            self.btn_rot_left.move(start_x, y)
+            self.btn_fit.move(start_x + btn_w + gap, y)
+            self.btn_rot_right.move(start_x + (btn_w + gap) * 2, y)
 
     def showEvent(self, event):
         super().showEvent(event)
