@@ -766,8 +766,6 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
 
         if key in (Qt.Key.Key_Delete, Qt.Key.Key_Escape):
             return True
-        if self._is_snap_key(event) and modifiers == Qt.KeyboardModifier.NoModifier:
-            return True
         if not ctrl:
             return False
 
