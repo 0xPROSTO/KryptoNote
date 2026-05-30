@@ -2,7 +2,19 @@ import datetime
 import os
 import sys
 
-from PySide6.QtCore import Qt, QSettings, Slot, QUrl, QEvent, QTimer, Signal, QMetaObject
+from PySide6.QtCore import (
+    QEasingCurve,
+    QMetaObject,
+    QPropertyAnimation,
+    QSettings,
+    QEvent,
+    QPoint,
+    QTimer,
+    QUrl,
+    Qt,
+    Signal,
+    Slot,
+)
 from PySide6.QtGui import (
     QAction,
     QColor,
@@ -26,6 +38,7 @@ from ..models.node_list_model import NodeListModel
 from ..models.connection_list_model import ConnectionListModel
 from ..models.thumbnail_provider import ThumbnailProvider
 from ..widgets.dialogs.about_dialog import AboutDialog
+from ..widgets.dialogs.dashboard_dialog import DashboardDialog
 from ..widgets.dialogs.keybinds_dialog import KeybindsDialog
 from ..widgets.overlays.dim_overlay import DimOverlay
 from ..widgets.overlays.arraylist_overlay import ArrayListOverlay
@@ -36,6 +49,7 @@ from ...config import Config
 from ...gui.theme import Theme
 from ...gui.theme.theme_bridge import ThemeBridge
 from ...services.backup_service import BackupService
+from ...services.stats_service import KnowledgeStatsService
 from ...utils.gui_utils import adjust_window_to_screen
 
 
@@ -191,11 +205,21 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             errors = self.view.errors()
             for err in errors:
                 print(f"QML Error: {err.toString()}")
+        else:
+            root = self.view.rootObject()
+            if root is not None:
+                root.textEditorOpenChanged.connect(self._on_text_editor_open_changed)
 
         self.overlay = ArrayListOverlay(self)
         self.overlay.set_snap_status(Config.SNAP_TO_GRID)
         self.overlay.set_zoom_status(1.0)
+        self.overlay.stats_clicked.connect(self.open_dashboard)
         self.overlay.raise_()
+        self._arraylist_hidden = False
+        self._arraylist_anim = QPropertyAnimation(self.overlay, b"pos", self)
+        self._arraylist_anim.setDuration(220)
+        self._arraylist_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._connect_dashboard_stats_updates()
         central = QWidget()
         vbox = QVBoxLayout(central)
         vbox.setContentsMargins(0, 0, 0, 0)
@@ -206,6 +230,72 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         vbox.addWidget(self.view, 1)
         self.setCentralWidget(central)
         self.view.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def _connect_dashboard_stats_updates(self):
+        for signal in (
+            self.node_model.rowsInserted,
+            self.node_model.rowsRemoved,
+            self.node_model.modelReset,
+            self.connection_model.rowsInserted,
+            self.connection_model.rowsRemoved,
+            self.connection_model.modelReset,
+        ):
+            signal.connect(self._schedule_dashboard_stats_update)
+        QTimer.singleShot(0, self._update_dashboard_stats)
+
+    def _schedule_dashboard_stats_update(self, *args):
+        QTimer.singleShot(0, self._update_dashboard_stats)
+
+    def _dashboard_stats(self):
+        db_path = getattr(self.db_conn, "db_path", None)
+        return KnowledgeStatsService.build(
+            getattr(self.node_model, "_nodes", ()),
+            self.connection_model.rowCount(),
+            db_path,
+            getattr(self.connection_model, "_connections", ()),
+        )
+
+    def _update_dashboard_stats(self):
+        if not hasattr(self, "overlay"):
+            return
+        stats = self._dashboard_stats()
+        self.overlay.set_stats(
+            stats["node_count"],
+            stats["link_count"],
+            stats["db_size_label"],
+        )
+
+    @Slot(bool)
+    def _on_text_editor_open_changed(self, opened):
+        self._set_arraylist_hidden(bool(opened), animate=True)
+
+    def _arraylist_visible_pos(self):
+        sb_y = self.statusBar().y()
+        return QPoint(
+            self.width() - self.overlay.width(),
+            sb_y - self.overlay.height() + 3,
+        )
+
+    def _arraylist_hidden_pos(self):
+        visible = self._arraylist_visible_pos()
+        return QPoint(self.width() + 2, visible.y())
+
+    def _set_arraylist_hidden(self, hidden, animate=True):
+        if not hasattr(self, "overlay"):
+            return
+        self._arraylist_hidden = hidden
+        target = self._arraylist_hidden_pos() if hidden else self._arraylist_visible_pos()
+        self.overlay.raise_()
+        if not animate:
+            self._arraylist_anim.stop()
+            self.overlay.move(target)
+            return
+        if self.overlay.pos() == target:
+            return
+        self._arraylist_anim.stop()
+        self._arraylist_anim.setStartValue(self.overlay.pos())
+        self._arraylist_anim.setEndValue(target)
+        self._arraylist_anim.start()
 
     def _install_key_event_filter(self):
         if getattr(self, "_key_event_filter_installed", False):
@@ -446,6 +536,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             self._handle_status_update("Cannot save during password change", "warning")
             return
         self.service.commit_changes()
+        self._update_dashboard_stats()
         self._handle_status_update("Saved", "secure")
         self._defer_modifier_sync()
 
@@ -477,11 +568,13 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
     def _on_manual_vacuum_finished(self, message: str):
         self._manual_vacuum_running = False
         self.hide_blocking_progress()
+        self._update_dashboard_stats()
         self._handle_status_update(message)
 
     def _on_create_backup(self):
         success, message = BackupService.create(self.db_conn, self.service)
         if success:
+            self._update_dashboard_stats()
             QMessageBox.information(self, "Backup", message)
         else:
             QMessageBox.critical(self, "Backup Error", message)
@@ -517,6 +610,14 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         overlay = DimOverlay(self)
         overlay.show()
         dialog = KeybindsDialog(self)
+        dialog.exec()
+        overlay.fade_out(delete_on_finish=True)
+
+    def open_dashboard(self):
+        self._update_dashboard_stats()
+        overlay = DimOverlay(self)
+        overlay.show()
+        dialog = DashboardDialog(self._dashboard_stats(), self)
         dialog.exec()
         overlay.fade_out(delete_on_finish=True)
 
@@ -893,10 +994,10 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self._sync_window_margins()
 
         if hasattr(self, "overlay") and hasattr(self, "statusBar"):
-            sb_y = self.statusBar().y()
-            ov_x = self.width() - self.overlay.width()
-            ov_y = sb_y - self.overlay.height() + 3
-            self.overlay.move(ov_x, ov_y)
+            self._set_arraylist_hidden(
+                getattr(self, "_arraylist_hidden", False),
+                animate=False,
+            )
             self.overlay.raise_()
         if hasattr(self, "progress_bar"):
             sb_y = self.statusBar().y()

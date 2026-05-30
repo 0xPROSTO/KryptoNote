@@ -22,6 +22,8 @@ Rectangle {
     property bool isSearchPanelOpen: searchPanel.open
     property int hoveredConnectionId: 0
 
+    signal textEditorOpenChanged(bool open)
+
     property alias _contentLayerX: contentLayer.x
     property alias _contentLayerY: contentLayer.y
     property real _editorReturnX: 0
@@ -32,6 +34,7 @@ Rectangle {
     Component.onCompleted: viewport.initialize()
     onWidthChanged: viewport.ensureInitialized()
     onHeightChanged: viewport.ensureInitialized()
+    onIsTextEditorOpenChanged: textEditorOpenChanged(isTextEditorOpen)
 
     GridLayer {
         anchors.fill: parent

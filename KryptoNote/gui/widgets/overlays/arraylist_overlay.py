@@ -1,22 +1,27 @@
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QPainter, QPainterPath, QColor, QFont, QPen
+from PySide6.QtCore import QRect, Qt, Signal
+from PySide6.QtGui import QPainter, QPainterPath, QColor, QFont, QPen, QRegion
 from PySide6.QtWidgets import QWidget
 
 from ...theme.palette import Palette
 
 
 class ArrayListOverlay(QWidget):
+    stats_clicked = Signal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setMouseTracking(True)
         self.snap_state = "OFF"
         self.zoom_pct = "100%"
+        self.stats_text = "Nodes: 0 | Links: 0 | Size: 0 B"
         self.row_h = 24
         self.snap_w = 75
         self.zoom_w = 90
+        self.stats_w = 210
         self.p_left = 8.0
-        self.setFixedSize(int(self.zoom_w + self.p_left), self.row_h * 2)
+        self.setFixedSize(int(self.stats_w + self.p_left), self.row_h * 3)
+        self._sync_mask()
 
     def set_snap_status(self, state):
         self.snap_state = "ON" if state else "OFF"
@@ -28,56 +33,162 @@ class ArrayListOverlay(QWidget):
             self.zoom_pct = new_pct
             self.update()
 
+    def set_stats(self, node_count, link_count, size_label):
+        text = f"Nodes: {node_count} | Links: {link_count} | Size: {size_label}"
+        if self.stats_text != text:
+            self.stats_text = text
+            self.update()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self._is_stats_hit(event.position()):
+            self.stats_clicked.emit()
+            event.accept()
+            return
+        event.ignore()
+
+    def mouseMoveEvent(self, event):
+        self._update_cursor(event.position())
+        super().mouseMoveEvent(event)
+
+    def enterEvent(self, event):
+        self._update_cursor(event.position())
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self.unsetCursor()
+        super().leaveEvent(event)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._sync_mask()
+
+    def _is_stats_hit(self, pos):
+        return self.row_h * 2 <= pos.y() < self.row_h * 3
+
+    def _update_cursor(self, pos):
+        if self._is_stats_hit(pos):
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+        else:
+            self.unsetCursor()
+
+    def _shape_path(self, offset=0.5):
+        r = 4.0
+        overlap = 2.0
+        w_stats = float(self.stats_w)
+        h = float(self.row_h)
+        total_w = w_stats + self.p_left
+        total_h = 3 * h
+        stats_x = self.p_left
+        snap_x = total_w - float(self.snap_w)
+        zoom_x = total_w - float(self.zoom_w)
+
+        path = QPainterPath()
+        path.moveTo(total_w - offset, offset)
+        path.lineTo(snap_x + r, offset)
+        path.quadTo(snap_x + offset, offset, snap_x + offset, r)
+        path.lineTo(snap_x + offset, h - r)
+        path.quadTo(snap_x + offset, h - offset, snap_x - r, h - offset)
+        path.lineTo(zoom_x + r, h - offset)
+        path.quadTo(zoom_x + offset, h - offset, zoom_x + offset, h + r)
+        path.lineTo(zoom_x + offset, 2 * h - r)
+        path.quadTo(zoom_x + offset, 2 * h - offset, zoom_x - r, 2 * h - offset)
+        path.lineTo(stats_x + r, 2 * h - offset)
+        path.quadTo(stats_x + offset, 2 * h - offset, stats_x + offset, 2 * h + r)
+        path.lineTo(stats_x + offset, total_h - overlap - r)
+        path.quadTo(
+            stats_x + offset,
+            total_h - overlap - offset,
+            stats_x - r,
+            total_h - overlap - offset,
+        )
+        path.lineTo(stats_x - r, total_h - offset)
+        path.lineTo(total_w - offset, total_h - offset)
+        path.lineTo(total_w - offset, offset)
+        return path
+
+    def _border_path(self, offset=0.5):
+        r = 4.0
+        overlap = 2.0
+        w_stats = float(self.stats_w)
+        h = float(self.row_h)
+        total_w = w_stats + self.p_left
+        total_h = 3 * h
+        stats_x = self.p_left
+        snap_x = total_w - float(self.snap_w)
+        zoom_x = total_w - float(self.zoom_w)
+
+        path = QPainterPath()
+        path.moveTo(total_w, offset)
+        path.lineTo(snap_x + r, offset)
+        path.quadTo(snap_x + offset, offset, snap_x + offset, r)
+        path.lineTo(snap_x + offset, h - r)
+        path.quadTo(snap_x + offset, h - offset, snap_x - r, h - offset)
+        path.lineTo(zoom_x + r, h - offset)
+        path.quadTo(zoom_x + offset, h - offset, zoom_x + offset, h + r)
+        path.lineTo(zoom_x + offset, 2 * h - r)
+        path.quadTo(zoom_x + offset, 2 * h - offset, zoom_x - r, 2 * h - offset)
+        path.lineTo(stats_x + r, 2 * h - offset)
+        path.quadTo(stats_x + offset, 2 * h - offset, stats_x + offset, 2 * h + r)
+        path.lineTo(stats_x + offset, total_h - overlap - r)
+        path.quadTo(
+            stats_x + offset,
+            total_h - overlap - offset,
+            stats_x - r,
+            total_h - overlap - offset,
+        )
+        return path
+
+    def _sync_mask(self):
+        total_w = int(self.stats_w + self.p_left)
+        snap_x = total_w - self.snap_w
+        zoom_x = total_w - self.zoom_w
+        aa_pad = 6
+        mask = QRegion(
+            QRect(snap_x - aa_pad, 0, self.snap_w + aa_pad + 2, self.row_h + aa_pad)
+        )
+        mask = mask.united(
+            QRegion(
+                QRect(
+                    zoom_x - aa_pad,
+                    self.row_h - aa_pad,
+                    self.zoom_w + aa_pad + 2,
+                    self.row_h + aa_pad * 2,
+                )
+            )
+        )
+        mask = mask.united(
+            QRegion(
+                QRect(
+                    0,
+                    self.row_h * 2 - aa_pad,
+                    self.width(),
+                    self.row_h + aa_pad + 2,
+                )
+            )
+        )
+        self.setMask(mask)
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        r = 4.0
-        offset = 0.5
-        overlap = 2.0
-        w_inner = float(self.snap_w)
-        w_outer = float(self.zoom_w)
-        h = float(self.row_h)
-        total_w = w_outer + self.p_left
-        total_h = 2 * h
-        p = self.p_left
-        step_x = p + (w_outer - w_inner)
-        path = QPainterPath()
-        path.moveTo(total_w - offset, offset)
-        path.lineTo(step_x + r, offset)
-        path.quadTo(step_x + offset, offset, step_x + offset, r)
-        path.lineTo(step_x + offset, h - r)
-        path.quadTo(step_x + offset, h - offset, step_x - r, h - offset)
-        path.lineTo(p + r, h - offset)
-        path.quadTo(p + offset, h - offset, p + offset, h + r)
-        path.lineTo(p + offset, total_h - overlap - r)
-        path.quadTo(
-            p + offset, total_h - overlap - offset, p - r, total_h - overlap - offset
-        )
-        path.lineTo(p - r, total_h - offset)
-        path.lineTo(total_w - offset, total_h - offset)
-        path.lineTo(total_w - offset, offset)
+        path = self._shape_path()
         painter.fillPath(path, QColor(Palette.BG_PANEL))
+
         pen = QPen(QColor(Palette.BORDER_DEFAULT))
         pen.setWidthF(1.0)
         painter.setPen(pen)
-        border_path = QPainterPath()
-        border_path.moveTo(total_w, offset)
-        border_path.lineTo(step_x + r, offset)
-        border_path.quadTo(step_x + offset, offset, step_x + offset, r)
-        border_path.lineTo(step_x + offset, h - r)
-        border_path.quadTo(step_x + offset, h - offset, step_x - r, h - offset)
-        border_path.lineTo(p + r, h - offset)
-        border_path.quadTo(p + offset, h - offset, p + offset, h + r)
-        border_path.lineTo(p + offset, total_h - overlap - r)
-        border_path.quadTo(
-            p + offset, total_h - overlap - offset, p - r, total_h - overlap - offset
-        )
-        painter.drawPath(border_path)
+        painter.drawPath(self._border_path(offset=0.5))
+
+        total_w = float(self.stats_w) + self.p_left
+        snap_x = total_w - float(self.snap_w)
+        zoom_x = total_w - float(self.zoom_w)
+        stats_x = self.p_left
+
         painter.setPen(QColor(Palette.TEXT_MUTED))
         font = QFont("Segoe UI", 8, QFont.Weight.Bold)
         painter.setFont(font)
         painter.drawText(
-            int(step_x),
+            int(snap_x),
             0,
             self.snap_w,
             self.row_h,
@@ -85,10 +196,19 @@ class ArrayListOverlay(QWidget):
             f"SNAP: {self.snap_state}",
         )
         painter.drawText(
-            int(p),
+            int(zoom_x),
             self.row_h,
             self.zoom_w,
             self.row_h,
             Qt.AlignmentFlag.AlignCenter,
             f"ZOOM: {self.zoom_pct}",
+        )
+        painter.setPen(QColor(Palette.TEXT_MUTED))
+        painter.drawText(
+            int(stats_x),
+            self.row_h * 2,
+            self.stats_w,
+            self.row_h,
+            Qt.AlignmentFlag.AlignCenter,
+            self.stats_text,
         )
