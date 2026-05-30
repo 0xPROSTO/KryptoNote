@@ -216,10 +216,11 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self.overlay.stats_clicked.connect(self.open_dashboard)
         self.overlay.raise_()
         self._arraylist_hidden = False
+        self._overlay_stats_update_scheduled = False
         self._arraylist_anim = QPropertyAnimation(self.overlay, b"pos", self)
         self._arraylist_anim.setDuration(220)
         self._arraylist_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-        self._connect_dashboard_stats_updates()
+        self._connect_overlay_stats_updates()
         central = QWidget()
         vbox = QVBoxLayout(central)
         vbox.setContentsMargins(0, 0, 0, 0)
@@ -231,20 +232,33 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self.setCentralWidget(central)
         self.view.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
-    def _connect_dashboard_stats_updates(self):
+    def _connect_overlay_stats_updates(self):
         for signal in (
             self.node_model.rowsInserted,
             self.node_model.rowsRemoved,
             self.node_model.modelReset,
+            self.node_model.dataChanged,
             self.connection_model.rowsInserted,
             self.connection_model.rowsRemoved,
             self.connection_model.modelReset,
+            self.connection_model.dataChanged,
         ):
-            signal.connect(self._schedule_dashboard_stats_update)
-        QTimer.singleShot(0, self._update_dashboard_stats)
+            signal.connect(self._schedule_overlay_stats_update)
+        QTimer.singleShot(0, self._update_overlay_stats)
 
-    def _schedule_dashboard_stats_update(self, *args):
-        QTimer.singleShot(0, self._update_dashboard_stats)
+    def _schedule_overlay_stats_update(self, *args):
+        if getattr(self, "_overlay_stats_update_scheduled", False):
+            return
+        self._overlay_stats_update_scheduled = True
+        QTimer.singleShot(0, self._update_overlay_stats)
+
+    def _overlay_stats(self):
+        db_path = getattr(self.db_conn, "db_path", None)
+        return KnowledgeStatsService.build_overlay(
+            getattr(self.node_model, "_nodes", ()),
+            self.connection_model.rowCount(),
+            db_path,
+        )
 
     def _dashboard_stats(self):
         db_path = getattr(self.db_conn, "db_path", None)
@@ -255,14 +269,15 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             getattr(self.connection_model, "_connections", ()),
         )
 
-    def _update_dashboard_stats(self):
+    def _update_overlay_stats(self):
+        self._overlay_stats_update_scheduled = False
         if not hasattr(self, "overlay"):
             return
-        stats = self._dashboard_stats()
+        stats = self._overlay_stats()
         self.overlay.set_stats(
             stats["node_count"],
             stats["link_count"],
-            stats["db_size_label"],
+            stats["content_size_label"],
         )
 
     @Slot(bool)
@@ -536,7 +551,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             self._handle_status_update("Cannot save during password change", "warning")
             return
         self.service.commit_changes()
-        self._update_dashboard_stats()
+        self._update_overlay_stats()
         self._handle_status_update("Saved", "secure")
         self._defer_modifier_sync()
 
@@ -568,13 +583,13 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
     def _on_manual_vacuum_finished(self, message: str):
         self._manual_vacuum_running = False
         self.hide_blocking_progress()
-        self._update_dashboard_stats()
+        self._update_overlay_stats()
         self._handle_status_update(message)
 
     def _on_create_backup(self):
         success, message = BackupService.create(self.db_conn, self.service)
         if success:
-            self._update_dashboard_stats()
+            self._update_overlay_stats()
             QMessageBox.information(self, "Backup", message)
         else:
             QMessageBox.critical(self, "Backup Error", message)
@@ -614,7 +629,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         overlay.fade_out(delete_on_finish=True)
 
     def open_dashboard(self):
-        self._update_dashboard_stats()
+        self._update_overlay_stats()
         overlay = DimOverlay(self)
         overlay.show()
         dialog = DashboardDialog(self._dashboard_stats(), self)

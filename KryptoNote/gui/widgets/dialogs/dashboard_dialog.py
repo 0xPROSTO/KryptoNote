@@ -67,7 +67,7 @@ class DashboardDialog(QDialog):
             self._metric("Links", self.stats.get("link_count", 0))
         )
         summary_layout.addWidget(
-            self._metric("DB Size", self.stats.get("db_size_label", "0 B"))
+            self._metric("Data Size", self.stats.get("content_size_label", "0 B"))
         )
         layout.addWidget(summary)
 
@@ -85,6 +85,7 @@ class DashboardDialog(QDialog):
             ("Media nodes", self.stats.get("media_node_count", 0)),
             ("Text characters", self.stats.get("text_chars_label", "0")),
             ("Text words", self.stats.get("text_words_label", "0")),
+            ("DB file", self.stats.get("db_size_label", "0 B")),
             ("Media payload", self.stats.get("media_size_label", "0 B")),
             ("Last backup", self.stats.get("last_backup_label", "Never")),
         ]

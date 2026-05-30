@@ -7,6 +7,23 @@ class KnowledgeStatsService:
     """Build dashboard stats from already loaded nodes and local DB files."""
 
     @staticmethod
+    def build_overlay(nodes, link_count, db_path):
+        """Build cheap stats for the always-visible arraylist overlay."""
+        nodes = list(nodes or [])
+        node_count = len(nodes)
+        link_count = int(link_count or 0)
+        db_size = KnowledgeStatsService.database_size(db_path)
+        content_size = KnowledgeStatsService.content_size(nodes)
+        return {
+            "node_count": node_count,
+            "link_count": link_count,
+            "db_size": db_size,
+            "db_size_label": KnowledgeStatsService.format_size(db_size),
+            "content_size": content_size,
+            "content_size_label": KnowledgeStatsService.format_size(content_size),
+        }
+
+    @staticmethod
     def build(nodes, link_count, db_path, connections=None):
         nodes = list(nodes or [])
         connections = list(connections or [])
@@ -24,6 +41,7 @@ class KnowledgeStatsService:
             }
             for node_type, count in sorted(type_counts.items())
         ]
+        content_size = KnowledgeStatsService.content_size(nodes)
         media_size = sum(int(node.get("total_size") or 0) for node in nodes)
         text_nodes = [node for node in nodes if node.get("type") == "text"]
         text_chars = sum(len(node.get("content") or "") for node in text_nodes)
@@ -42,6 +60,8 @@ class KnowledgeStatsService:
             "link_count": link_count,
             "db_size": db_size,
             "db_size_label": KnowledgeStatsService.format_size(db_size),
+            "content_size": content_size,
+            "content_size_label": KnowledgeStatsService.format_size(content_size),
             "media_size": media_size,
             "media_size_label": KnowledgeStatsService.format_size(media_size),
             "type_counts": dict(sorted(type_counts.items())),
@@ -63,6 +83,18 @@ class KnowledgeStatsService:
                 backup.get("mtime") if backup else None
             ),
         }
+
+    @staticmethod
+    def content_size(nodes):
+        total = 0
+        for node in nodes or []:
+            node_type = node.get("type")
+            if node_type == "text":
+                total += len((node.get("title") or "").encode("utf-8"))
+                total += len((node.get("content") or "").encode("utf-8"))
+            else:
+                total += int(node.get("total_size") or 0)
+        return total
 
     @staticmethod
     def connected_node_ids(connections):
@@ -127,14 +159,12 @@ class KnowledgeStatsService:
     def database_size(db_path):
         if not db_path or db_path == ":memory:":
             return 0
-        total = 0
-        for path in (db_path, f"{db_path}-wal", f"{db_path}-shm"):
-            try:
-                if os.path.exists(path):
-                    total += os.path.getsize(path)
-            except OSError:
-                pass
-        return total
+        try:
+            if os.path.exists(db_path):
+                return os.path.getsize(db_path)
+        except OSError:
+            pass
+        return 0
 
     @staticmethod
     def latest_backup(db_path):

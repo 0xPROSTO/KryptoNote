@@ -8,7 +8,7 @@ from KryptoNote.gui.theme import Theme
 class AppConfig:
 
     APP_NAME = "ZeroXX-KryptoNote"
-    VERSION = "3.0.2"
+    VERSION = "3.0.3"
     COMPANY_NAME = "ZeroXWare"
 
     CHUNK_SIZE = 4 * 1024 * 1024
