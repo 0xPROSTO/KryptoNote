@@ -591,6 +591,7 @@ class NodeListModel(QAbstractListModel):
         return lines
 
     def _refresh_metadata_fields(self, node):
+        node["content_size"] = self._calculate_content_size(node)
         node["created_at_display"] = self._format_datetime(node.get("created_at"))
         node["updated_at_display"] = self._format_datetime(node.get("updated_at"))
         if node.get("type") in ("image", "video"):
@@ -604,6 +605,15 @@ class NodeListModel(QAbstractListModel):
             node["meta_summary"] = " | ".join(part for part in parts if part and part != "-")
         else:
             node["meta_summary"] = ""
+
+    @staticmethod
+    def _calculate_content_size(node):
+        if node.get("type") == "text":
+            return (
+                len((node.get("title") or "").encode("utf-8"))
+                + len((node.get("content") or "").encode("utf-8"))
+            )
+        return int(node.get("total_size") or 0)
 
     @staticmethod
     def _format_datetime(value):

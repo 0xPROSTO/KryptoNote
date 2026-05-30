@@ -88,6 +88,10 @@ class KnowledgeStatsService:
     def content_size(nodes):
         total = 0
         for node in nodes or []:
+            cached_size = node.get("content_size")
+            if cached_size is not None:
+                total += int(cached_size or 0)
+                continue
             node_type = node.get("type")
             if node_type == "text":
                 total += len((node.get("title") or "").encode("utf-8"))
