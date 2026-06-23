@@ -38,6 +38,7 @@ Item {
     DragHandler {
         id: resizeDrag
         target: null
+        dragThreshold: 0
         property real _startWidth: 0
         property real _startHeight: 0
         property point _startContentPos: Qt.point(0, 0)
