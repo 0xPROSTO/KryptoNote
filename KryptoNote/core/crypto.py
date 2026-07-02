@@ -1,4 +1,5 @@
 import os
+import uuid
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.argon2 import Argon2id
@@ -20,12 +21,15 @@ class CryptoManager:
         """Legacy API: derive and load the payload key directly from password."""
         if salt is None:
             salt = os.urandom(16)
+        else:
+            salt = self.normalize_salt(salt)
 
         self.key = self.derive_password_key(password, salt)
         return salt
 
     @classmethod
     def derive_password_key(cls, password: str, salt: bytes) -> bytes:
+        salt = cls.normalize_salt(salt)
         kdf = Argon2id(
             salt=salt,
             length=32,
@@ -34,6 +38,24 @@ class CryptoManager:
             lanes=cls.KDF_LANES,
         )
         return kdf.derive(password.encode())
+
+    @staticmethod
+    def normalize_salt(salt) -> bytes:
+        if salt is None:
+            raise CryptoError("Salt is required")
+        if isinstance(salt, memoryview):
+            return bytes(salt)
+        if isinstance(salt, bytearray):
+            return bytes(salt)
+        if isinstance(salt, bytes):
+            return salt
+        if isinstance(salt, str):
+            text = salt.strip()
+            try:
+                return uuid.UUID(text).bytes
+            except ValueError:
+                return text.encode("utf-8")
+        raise CryptoError("Invalid salt type")
 
     @staticmethod
     def generate_data_key() -> bytes:

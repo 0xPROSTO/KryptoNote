@@ -13,6 +13,8 @@ Item {
     property bool isCtrlHeld: false
     property bool isShiftHeld: false
     property bool isPanning: false
+    property bool suppressingNextPress: false
+    property bool suppressingMouseSequence: false
 
     MouseArea {
         id: canvasMouseArea
@@ -27,6 +29,14 @@ Item {
         property bool dragging: false
 
         onPressed: function(mouse) {
+            if (input.suppressingNextPress) {
+                input.suppressingNextPress = false
+                input.cancelPointerGesture()
+                input.suppressingMouseSequence = true
+                mouse.accepted = true
+                return
+            }
+
             viewport.stopMotion()
             lastPos = Qt.point(mouse.x, mouse.y)
             pressPos = Qt.point(mouse.x, mouse.y)
@@ -53,6 +63,11 @@ Item {
         }
 
         onPositionChanged: function(mouse) {
+            if (input.suppressingMouseSequence) {
+                mouse.accepted = true
+                return
+            }
+
             var contentPos = mapToItem(contentLayer, mouse.x, mouse.y)
             mouse.accepted = false
 
@@ -87,6 +102,13 @@ Item {
         }
 
         onReleased: function(mouse) {
+            if (input.suppressingMouseSequence) {
+                input.suppressingMouseSequence = false
+                input.cancelPointerGesture()
+                mouse.accepted = true
+                return
+            }
+
             if (input.isEraserMode) {
                 input.isEraserMode = false
                 cursorShape = Qt.ArrowCursor
@@ -120,6 +142,26 @@ Item {
 
     Keys.onReleased: function(event) {
         handleKeyReleased(event)
+    }
+
+    function suppressNextMousePress() {
+        cancelPointerGesture()
+        suppressingNextPress = true
+    }
+
+    function cancelPointerGesture() {
+        suppressingNextPress = false
+        suppressingMouseSequence = false
+        canvasMouseArea.dragging = false
+        isPanning = false
+        isEraserMode = false
+        if (rubberBand && rubberBand.visible) {
+            rubberBand.visible = false
+        }
+        canvasMouseArea.cursorShape = Qt.ArrowCursor
+        if (viewport) {
+            viewport.stopMotion()
+        }
     }
 
     function handleKeyPressed(event) {

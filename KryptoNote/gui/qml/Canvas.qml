@@ -211,6 +211,14 @@ Rectangle {
         viewport.stopKeyboardPan()
     }
 
+    function suppressNextMousePress() {
+        inputLayer.suppressNextMousePress()
+    }
+
+    function cancelPointerGesture() {
+        inputLayer.cancelPointerGesture()
+    }
+
     function openEditorForNode(nodeId) {
         if (!_hasEditorReturn) {
             _editorReturnX = contentLayer.x

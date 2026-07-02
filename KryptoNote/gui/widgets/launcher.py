@@ -177,6 +177,8 @@ class ProjectLauncher(QDialog):
         from KryptoNote.core.crypto import CryptoManager
         from KryptoNote.services.node_service import NodeService
         from KryptoNote.services.auth_service import AuthService
+        from cryptography.exceptions import InvalidTag
+        from KryptoNote.core.exceptions import AuthError
 
         self.auth_data = None
         if getattr(self, '_auth_active', False):
@@ -247,33 +249,38 @@ class ProjectLauncher(QDialog):
                 AuthService.initialize_v2_project(db_conn, crypto, pwd)
                 _success()
             else:
-                auth_check = db_conn.get_auth_check()
-                if not auth_check:
-                    _dismiss()
-                    return
                 migration_started = False
-                try:
-                    if AuthService.is_v2_database(db_conn):
-                        AuthService.unlock_v2_database(db_conn, crypto, pwd, salt)
-                    else:
-                        migration_started = True
-                        self.launcher_overlay.show_message(
-                            "Migrating Database",
-                            "Please wait. Your database is being migrated to the new encryption model. "
-                            "Do not close the program until this finishes.",
-                        )
-                        QApplication.processEvents()
-                        AuthService.unlock_and_migrate_legacy(db_conn, crypto, pwd, salt)
 
-                    if crypto.decrypt(db_conn.get_auth_check()) == AuthService.AUTH_CHECK_PLAINTEXT:
-                        _success()
-                        return
-                except Exception as e:
+                def _show_migration():
+                    nonlocal migration_started
+                    migration_started = True
+                    self.launcher_overlay.show_message(
+                        "Migrating Database",
+                        "Please wait. Your database is being migrated to the new encryption model. "
+                        "Do not close the program until this finishes.",
+                    )
+                    QApplication.processEvents()
+
+                try:
+                    AuthService.unlock_existing_database(
+                        db_conn,
+                        crypto,
+                        pwd,
+                        salt,
+                        before_legacy_migration=_show_migration,
+                    )
+                    _success()
+                    return
+                except InvalidTag:
+                    self.launcher_overlay.show_error("Incorrect password")
+                    return
+                except AuthError as e:
                     if migration_started:
                         self.launcher_overlay.show_overlay("enter", db_name)
                         self.launcher_overlay.show_error(f"Migration failed: {e}")
-                        return
-                self.launcher_overlay.show_error("Incorrect password")
+                    else:
+                        self.launcher_overlay.show_error(str(e))
+                    return
 
         self._overlay_callback = _on_input
         self._set_background_enabled(False)

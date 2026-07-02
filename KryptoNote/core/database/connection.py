@@ -77,6 +77,12 @@ class DatabaseConnection:
     def _migrate_db(self):
         self.cursor.execute("PRAGMA table_info(items)")
         columns = [column[1] for column in self.cursor.fetchall()]
+        if "title" not in columns:
+            self.cursor.execute("ALTER TABLE items ADD COLUMN title BLOB")
+        if "is_chunked" not in columns:
+            self.cursor.execute("ALTER TABLE items ADD COLUMN is_chunked INTEGER DEFAULT 0")
+        if "total_size" not in columns:
+            self.cursor.execute("ALTER TABLE items ADD COLUMN total_size INTEGER DEFAULT 0")
         if "title_size" not in columns:
             self.cursor.execute("ALTER TABLE items ADD COLUMN title_size INTEGER DEFAULT 14")
         if "text_size" not in columns:

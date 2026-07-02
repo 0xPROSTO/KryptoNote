@@ -50,7 +50,7 @@ from ...gui.theme import Theme
 from ...gui.theme.theme_bridge import ThemeBridge
 from ...services.backup_service import BackupService
 from ...services.stats_service import KnowledgeStatsService
-from ...utils.gui_utils import adjust_window_to_screen
+from ...utils.gui_utils import adjust_window_to_screen, center_on_parent_window
 
 
 class ZeroXXWindow(NativeWindowMixin, QMainWindow):
@@ -132,19 +132,13 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
                     prompt = f"Enter password for '{db_name}':"
                 if error_msg:
                     prompt = f"{error_msg}\n\n{prompt}"
-                dlg = QInputDialog(None)
+                dlg = QInputDialog(self)
                 dlg.setWindowTitle("KryptoNote")
                 dlg.setLabelText(prompt)
                 dlg.setTextEchoMode(QLineEdit.EchoMode.Password)
                 dlg.setMinimumWidth(400)
                 dlg.resize(420, 160)
-                screen = QApplication.primaryScreen()
-                if screen:
-                    geo = screen.availableGeometry()
-                    dlg.move(
-                        geo.x() + (geo.width() - dlg.width()) // 2,
-                        geo.y() + (geo.height() - dlg.height()) // 2,
-                    )
+                center_on_parent_window(dlg, self)
                 ok = dlg.exec() == QInputDialog.DialogCode.Accepted
                 pwd = dlg.textValue()
                 return pwd, ok
@@ -405,6 +399,8 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         act_about.triggered.connect(self.open_about)
         help_menu.addAction(act_about)
 
+        self._register_menu_canvas_guard(file_menu, export_menu, add_menu, tools_menu, help_menu)
+
         self.status_label = QLabel(self.default_status)
         self.status_label.setStyleSheet(Theme.Styles.get_status_bar_qss())
 
@@ -420,6 +416,64 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self.statusBar().addWidget(self.status_label, 1)
         self.statusBar().addWidget(self.progress_label)
         self.statusBar().addPermanentWidget(self.coords_label)
+
+    def _register_menu_canvas_guard(self, *menus):
+        for menu in menus:
+            menu.aboutToHide.connect(self._suppress_next_canvas_mouse_press)
+
+    def _suppress_next_canvas_mouse_press(self):
+        self._suppress_next_canvas_press = True
+        self._suppress_canvas_mouse_sequence = False
+        self._invoke_qml_root("suppressNextMousePress")
+        QTimer.singleShot(450, self._clear_canvas_mouse_suppression)
+
+    def _clear_canvas_mouse_suppression(self):
+        self._suppress_next_canvas_press = False
+        self._suppress_canvas_mouse_sequence = False
+        self._invoke_qml_root("cancelPointerGesture")
+
+    def _should_suppress_canvas_mouse_event(self, event):
+        if not hasattr(self, "view"):
+            return False
+        event_type = event.type()
+        mouse_events = (
+            QEvent.Type.MouseButtonPress,
+            QEvent.Type.MouseButtonRelease,
+            QEvent.Type.MouseMove,
+        )
+        if event_type not in mouse_events:
+            return False
+
+        try:
+            global_pos = event.globalPosition().toPoint()
+        except AttributeError:
+            try:
+                global_pos = event.globalPos()
+            except AttributeError:
+                return False
+
+        local_pos = self.view.mapFromGlobal(global_pos)
+        if not self.view.rect().contains(local_pos):
+            return False
+
+        if getattr(self, "_suppress_canvas_mouse_sequence", False):
+            if event_type == QEvent.Type.MouseButtonRelease:
+                self._suppress_canvas_mouse_sequence = False
+            return True
+
+        if not getattr(self, "_suppress_next_canvas_press", False):
+            return False
+
+        if event_type == QEvent.Type.MouseButtonPress:
+            self._suppress_next_canvas_press = False
+            self._suppress_canvas_mouse_sequence = True
+            self._invoke_qml_root("cancelPointerGesture")
+            return True
+        if event_type == QEvent.Type.MouseButtonRelease:
+            self._suppress_next_canvas_press = False
+            self._invoke_qml_root("cancelPointerGesture")
+            return True
+        return False
 
     # ── Status & Progress ───────────────────────────────────────────
 
@@ -618,6 +672,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         overlay = DimOverlay(self)
         overlay.show()
         dialog = AboutDialog(self)
+        center_on_parent_window(dialog, self)
         dialog.exec()
         overlay.fade_out(delete_on_finish=True)
 
@@ -625,6 +680,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         overlay = DimOverlay(self)
         overlay.show()
         dialog = KeybindsDialog(self)
+        center_on_parent_window(dialog, self)
         dialog.exec()
         overlay.fade_out(delete_on_finish=True)
 
@@ -633,6 +689,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         overlay = DimOverlay(self)
         overlay.show()
         dialog = DashboardDialog(self._dashboard_stats(), self)
+        center_on_parent_window(dialog, self)
         dialog.exec()
         overlay.fade_out(delete_on_finish=True)
 
@@ -661,6 +718,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             self._execute_password_change
         )
         self._pwd_change_dialog.finished.connect(self._cleanup_pwd_change_dialog)
+        center_on_parent_window(self._pwd_change_dialog, self)
         self._pwd_change_dialog.show()
 
     def _execute_password_change(self, old_pwd, new_pwd, create_backup):
@@ -722,6 +780,8 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
     # ── Key Events ──────────────────────────────────────────────────
 
     def eventFilter(self, watched, event):
+        if self._should_suppress_canvas_mouse_event(event):
+            return True
         if event.type() == QEvent.Type.ShortcutOverride:
             if self._should_claim_shortcut(event):
                 event.accept()

@@ -2,18 +2,15 @@ import os
 import shutil
 from datetime import datetime
 
+from cryptography.exceptions import InvalidTag
+
 from ..core.crypto import CryptoManager
 from ..core.database import DatabaseConnection, NodeRepository
-from ..core.exceptions import AuthError
-from cryptography.exceptions import InvalidTag
+from ..core.exceptions import AuthError, CryptoError
 
 
 class AuthService:
-    """Handles project authentication: password creation and verification.
-
-    Extracted from ZeroXXWindow._init_core to decouple auth logic
-    from the main window lifecycle.
-    """
+    """Handles project authentication and encryption migration."""
 
     AUTH_CHECK_PLAINTEXT = b"KryptoNote_Auth_OK"
     CRYPTO_VERSION = "2"
@@ -62,8 +59,7 @@ class AuthService:
             if pwd1 == pwd2:
                 AuthService.initialize_v2_project(db_conn, crypto, pwd1)
                 return db_conn.get_salt()
-            else:
-                error_msg = "Passwords do not match"
+            error_msg = "Passwords do not match"
 
     @staticmethod
     def verify_existing_password(db_conn, crypto, salt, db_name, provider):
@@ -74,24 +70,82 @@ class AuthService:
                 raise AuthError("Password entry cancelled")
 
             try:
-                if AuthService.is_v2_database(db_conn):
-                    AuthService.unlock_v2_database(db_conn, crypto, pwd, salt)
-                else:
-                    AuthService.unlock_and_migrate_legacy(db_conn, crypto, pwd, salt)
-
-                if crypto.decrypt(db_conn.get_auth_check()) != AuthService.AUTH_CHECK_PLAINTEXT:
-                    error_msg = "Incorrect password"
-                    continue
+                AuthService.unlock_existing_database(db_conn, crypto, pwd, salt)
                 return
-            except AuthError:
-                raise
             except InvalidTag:
                 error_msg = "Incorrect password"
                 continue
 
     @staticmethod
+    def unlock_existing_database(
+        db_conn,
+        crypto,
+        password,
+        salt,
+        before_legacy_migration=None,
+    ):
+        last_error = None
+        is_v2 = AuthService.is_v2_database(db_conn)
+
+        for candidate_salt in AuthService.salt_candidates(salt):
+            try:
+                if is_v2:
+                    AuthService.unlock_v2_database(
+                        db_conn, crypto, password, candidate_salt
+                    )
+                else:
+                    AuthService.unlock_and_migrate_legacy(
+                        db_conn,
+                        crypto,
+                        password,
+                        candidate_salt,
+                        before_migration=before_legacy_migration,
+                    )
+
+                if crypto.decrypt(db_conn.get_auth_check()) == AuthService.AUTH_CHECK_PLAINTEXT:
+                    return
+            except (InvalidTag, CryptoError, TypeError, ValueError) as exc:
+                last_error = exc
+                continue
+
+        raise InvalidTag() from last_error
+
+    @staticmethod
+    def salt_candidates(salt):
+        if isinstance(salt, str):
+            candidates = []
+            text = salt.strip()
+            try:
+                candidates.append(CryptoManager.normalize_salt(text))
+            except CryptoError:
+                pass
+            encoded = text.encode("utf-8")
+            if encoded not in candidates:
+                candidates.append(encoded)
+            return candidates
+
+        normalized = CryptoManager.normalize_salt(salt)
+        candidates = [normalized]
+        try:
+            text = bytes(normalized).decode("utf-8").strip()
+        except UnicodeDecodeError:
+            text = ""
+        if text:
+            try:
+                uuid_salt = CryptoManager.normalize_salt(text)
+                if uuid_salt not in candidates:
+                    candidates.append(uuid_salt)
+            except CryptoError:
+                pass
+        return candidates
+
+    @staticmethod
     def is_v2_database(db_conn):
-        return db_conn.get_crypto_version() == 2 or db_conn.get_wrapped_data_key() is not None
+        try:
+            version = db_conn.get_crypto_version()
+        except Exception:
+            version = 1
+        return version == 2 or db_conn.get_wrapped_data_key() is not None
 
     @staticmethod
     def initialize_v2_project(db_conn, crypto, password):
@@ -103,7 +157,11 @@ class AuthService:
 
         db_conn.set_metadata("auth_salt", salt, commit=False)
         db_conn.set_metadata("wrapped_data_key", wrapped_data_key, commit=False)
-        db_conn.set_metadata("auth_check", crypto.encrypt(AuthService.AUTH_CHECK_PLAINTEXT), commit=False)
+        db_conn.set_metadata(
+            "auth_check",
+            crypto.encrypt(AuthService.AUTH_CHECK_PLAINTEXT),
+            commit=False,
+        )
         db_conn.set_metadata("crypto_version", AuthService.CRYPTO_VERSION, commit=False)
         db_conn.set_metadata("kdf_name", CryptoManager.KDF_NAME, commit=False)
         db_conn.set_metadata("kdf_iterations", str(CryptoManager.KDF_ITERATIONS), commit=False)
@@ -125,17 +183,69 @@ class AuthService:
         crypto.load_data_key(data_key)
 
     @staticmethod
-    def unlock_and_migrate_legacy(db_conn, crypto, password, salt):
-        auth_check = db_conn.get_auth_check()
-        if not auth_check:
-            raise AuthError("Corrupted database: missing auth check")
-
+    def unlock_and_migrate_legacy(
+        db_conn,
+        crypto,
+        password,
+        salt,
+        before_migration=None,
+    ):
         legacy_crypto = CryptoManager()
         legacy_crypto.derive_key(password, salt)
-        if legacy_crypto.decrypt(auth_check) != AuthService.AUTH_CHECK_PLAINTEXT:
-            raise AuthError("Corrupted database: invalid auth check data")
+
+        auth_check = db_conn.get_auth_check()
+        if auth_check:
+            if legacy_crypto.decrypt(auth_check) != AuthService.AUTH_CHECK_PLAINTEXT:
+                raise InvalidTag()
+        else:
+            AuthService._verify_legacy_payload_decryptable(db_conn, legacy_crypto)
+
+        if before_migration:
+            before_migration()
 
         AuthService.migrate_legacy_to_v2(db_conn, legacy_crypto, crypto, password)
+
+    @staticmethod
+    def _verify_legacy_payload_decryptable(db_conn, legacy_crypto):
+        found_blob = False
+        last_error = None
+        for blob in AuthService._iter_legacy_probe_blobs(db_conn):
+            found_blob = True
+            try:
+                legacy_crypto.decrypt(blob)
+                return
+            except (InvalidTag, CryptoError, TypeError, ValueError) as exc:
+                last_error = exc
+
+        if found_blob:
+            raise InvalidTag() from last_error
+
+    @staticmethod
+    def _iter_legacy_probe_blobs(db_conn):
+        item_columns = AuthService._table_columns(db_conn, "items")
+        for column in ("title", "text_content", "thumbnail", "full_data"):
+            if column not in item_columns:
+                continue
+            db_conn.cursor.execute(
+                f'SELECT "{column}" FROM items WHERE "{column}" IS NOT NULL ORDER BY id LIMIT 3'
+            )
+            for (blob,) in db_conn.cursor.fetchall():
+                if blob:
+                    yield blob
+
+        chunk_columns = AuthService._table_columns(db_conn, "media_chunks")
+        if "data" in chunk_columns:
+            db_conn.cursor.execute(
+                'SELECT "data" FROM media_chunks WHERE "data" IS NOT NULL ORDER BY id LIMIT 3'
+            )
+            for (blob,) in db_conn.cursor.fetchall():
+                if blob:
+                    yield blob
+
+    @staticmethod
+    def _table_columns(db_conn, table_name):
+        db_conn.cursor.execute(f'PRAGMA table_info("{table_name}")')
+        return {row[1] for row in db_conn.cursor.fetchall()}
 
     @staticmethod
     def migrate_legacy_to_v2(db_conn, legacy_crypto, crypto, password):
@@ -185,16 +295,20 @@ class AuthService:
 
             db_conn.set_metadata("auth_salt", new_salt, commit=False)
             db_conn.set_metadata("wrapped_data_key", wrapped_data_key, commit=False)
-            db_conn.set_metadata("auth_check", new_crypto.encrypt(AuthService.AUTH_CHECK_PLAINTEXT), commit=False)
+            db_conn.set_metadata(
+                "auth_check",
+                new_crypto.encrypt(AuthService.AUTH_CHECK_PLAINTEXT),
+                commit=False,
+            )
             db_conn.set_metadata("crypto_version", AuthService.CRYPTO_VERSION, commit=False)
             db_conn.set_metadata("kdf_name", CryptoManager.KDF_NAME, commit=False)
             db_conn.set_metadata("kdf_iterations", str(CryptoManager.KDF_ITERATIONS), commit=False)
             db_conn.set_metadata("kdf_memory_cost", str(CryptoManager.KDF_MEMORY_COST), commit=False)
             db_conn.set_metadata("kdf_lanes", str(CryptoManager.KDF_LANES), commit=False)
             db_conn.conn.commit()
-        except Exception:
+        except Exception as exc:
             db_conn.conn.rollback()
-            raise AuthError("Failed to migrate database encryption")
+            raise AuthError("Failed to migrate database encryption") from exc
 
         crypto.load_data_key(data_key)
         if getattr(db_conn, "db_path", ":memory:") != ":memory:":

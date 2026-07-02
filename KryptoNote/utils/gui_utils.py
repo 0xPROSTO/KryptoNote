@@ -1,5 +1,32 @@
-from PySide6.QtWidgets import QInputDialog, QLineEdit
 from PySide6.QtGui import QGuiApplication
+from PySide6.QtWidgets import QInputDialog, QLineEdit
+
+
+def center_on_parent_window(widget, parent=None):
+    parent = parent or widget.parentWidget()
+    host = parent.window() if parent else None
+
+    if host:
+        host_geo = host.frameGeometry()
+        x = host_geo.x() + (host_geo.width() - widget.width()) // 2
+        y = host_geo.y() + (host_geo.height() - widget.height()) // 2
+        screen = host.screen() or QGuiApplication.screenAt(host_geo.center())
+    else:
+        screen = QGuiApplication.primaryScreen()
+        if not screen:
+            return
+        host_geo = screen.availableGeometry()
+        x = host_geo.x() + (host_geo.width() - widget.width()) // 2
+        y = host_geo.y() + (host_geo.height() - widget.height()) // 2
+
+    if screen:
+        available = screen.availableGeometry()
+        max_x = available.x() + max(0, available.width() - widget.width())
+        max_y = available.y() + max(0, available.height() - widget.height())
+        x = min(max(int(x), available.x()), max_x)
+        y = min(max(int(y), available.y()), max_y)
+
+    widget.move(int(x), int(y))
 
 
 def get_centered_input(parent, title, label, echo_mode=QLineEdit.EchoMode.Normal):
@@ -8,12 +35,7 @@ def get_centered_input(parent, title, label, echo_mode=QLineEdit.EchoMode.Normal
     dialog.setLabelText(label)
     dialog.setTextEchoMode(echo_mode)
     dialog.resize(400, 150)
-    screen = QGuiApplication.primaryScreen()
-    if screen:
-        screen_geom = screen.availableGeometry()
-        x = screen_geom.x() + (screen_geom.width() - dialog.width()) // 2
-        y = screen_geom.y() + (screen_geom.height() - dialog.height()) // 2
-        dialog.move(int(x), int(y))
+    center_on_parent_window(dialog, parent)
 
     if dialog.exec() == QInputDialog.DialogCode.Accepted:
         return dialog.textValue(), True
