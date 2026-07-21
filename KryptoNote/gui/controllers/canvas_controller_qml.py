@@ -1,12 +1,12 @@
-
-import os
-
-from PySide6.QtCore import QObject, Signal, Slot, Property
-from PySide6.QtWidgets import QApplication, QLineEdit, QMessageBox
+from PySide6.QtCore import QObject, Signal, Slot, Property, QTimer
+from PySide6.QtGui import QColor
+from PySide6.QtWidgets import QLineEdit, QMessageBox
 
 from ...config import Config
+from ..theme.palette import Palette
 from ..services.auto_fit_service import AutoFitService
 from ..services.graph_command_service import GraphCommandService
+from ..services.operation_coordinator import OperationCoordinator
 from .delete_controller import DeleteController
 from .import_export_controller import ImportExportController
 
@@ -18,42 +18,52 @@ class QmlCanvasController(QObject):
     snap_to_grid_changed = Signal(bool)
     openTextEditorRequested = Signal(int)
     open_media_viewer_requested = Signal(int)  # node_id
-    _video_transition_show_requested = Signal(str)
-    _video_transition_update_requested = Signal(str)
-    _video_transition_hide_requested = Signal()
+    initial_load_failed = Signal(str)
+    initial_load_finished = Signal()
 
-    def __init__(self, node_model, connection_model, service, parent=None):
+    def __init__(self, node_model, connection_model, service, parent=None,
+                 operation_coordinator=None):
         super().__init__(parent)
         self._node_model = node_model
         self._conn_model = connection_model
         self._service = service
         self._auto_fit_service = AutoFitService()
         self._graph_commands = GraphCommandService(node_model, connection_model, service)
+        self._operations = operation_coordinator or OperationCoordinator(self)
+        self._connection_delete_token = None
+        self._pending_connection_deletes = set()
+        self._initial_load_timer = QTimer(self)
+        self._initial_load_timer.setInterval(0)
+        self._initial_load_timer.timeout.connect(self._load_next_batch)
+        self._initial_load_token = None
+        self._initial_load_phase = "idle"
+        self._initial_load_iterator = None
+        self._initial_tags_by_item = {}
+        self._initial_loaded = 0
+        self._initial_total = 0
 
         # --- Delegate controllers ---
-        self._delete_ctrl = DeleteController(node_model, connection_model, self._graph_commands, self)
+        self._delete_ctrl = DeleteController(
+            node_model,
+            connection_model,
+            self._graph_commands,
+            self,
+            operation_coordinator=self._operations,
+        )
         self._import_export_ctrl = ImportExportController(
-            node_model, service, self._auto_fit_media_node, self
+            node_model, service, self._auto_fit_media_node, self,
+            operation_coordinator=self._operations,
         )
 
-        # Wire video overlay signals through to parent window
-        self._video_transition_show_requested.connect(self._show_video_transition_overlay)
-        self._video_transition_update_requested.connect(self._update_video_transition_overlay)
-        self._video_transition_hide_requested.connect(self._hide_video_transition_overlay)
 
         # Wire delegate signals
         self._delete_ctrl.progress_updated.connect(self.progress_updated)
         self._delete_ctrl.progress_finished.connect(self.progress_finished)
-        self._delete_ctrl._video_transition_show_requested.connect(self._video_transition_show_requested)
-        self._delete_ctrl._video_transition_update_requested.connect(self._video_transition_update_requested)
-        self._delete_ctrl._video_transition_hide_requested.connect(self._video_transition_hide_requested)
+        self._delete_ctrl.status_message.connect(self.status_message)
 
         self._import_export_ctrl.status_message.connect(self.status_message)
         self._import_export_ctrl.progress_updated.connect(self.progress_updated)
         self._import_export_ctrl.progress_finished.connect(self.progress_finished)
-        self._import_export_ctrl._video_transition_show_requested.connect(self._video_transition_show_requested)
-        self._import_export_ctrl._video_transition_update_requested.connect(self._video_transition_update_requested)
-        self._import_export_ctrl._video_transition_hide_requested.connect(self._video_transition_hide_requested)
 
         # Persist position/size changes to DB
         self._node_model.node_position_changed.connect(self._on_position_changed)
@@ -85,15 +95,182 @@ class QmlCanvasController(QObject):
     # ── Loading ─────────────────────────────────────────────────────
 
     def load_from_db(self):
-        self.progress_updated.emit(0.0, "Decrypting database...")
-        QApplication.processEvents()
+        """Load DTOs in event-loop-sized batches so the window can appear first."""
+        if self._initial_load_timer.isActive():
+            return
+        token = self._operations.begin(
+            "initial_load", "Decrypting database...", blocking=False
+        )
+        if token is None:
+            return
+        self._initial_load_token = token
+        try:
+            self._service.ensure_tag("starred", Palette.TAG_STARRED)
+            self._initial_tags_by_item = self._service.get_item_tags_map()
+            item_total = self._service.get_item_count()
+            connection_total = self._service.get_connection_count()
+            self._initial_total = max(1, item_total + connection_total)
+            self._initial_loaded = 0
+            self._node_model.begin_incremental_load()
+            self._conn_model.begin_incremental_load()
+            self._initial_load_iterator = self._service.iter_item_batches(
+                200, include_thumbnails=False
+            )
+            self._initial_load_phase = "nodes"
+            self.progress_updated.emit(0.0, "Decrypting database...")
+            self._initial_load_timer.start()
+        except Exception as exc:
+            self._fail_initial_load(exc)
 
-        self._node_model.load_from_service(self._service)
-        self.progress_updated.emit(0.85, "Loading connections...")
-        QApplication.processEvents()
+    def _load_next_batch(self):
+        try:
+            if self._initial_load_phase == "nodes":
+                try:
+                    batch = next(self._initial_load_iterator)
+                except StopIteration:
+                    self._initial_load_iterator = (
+                        self._service.iter_connection_batches(200)
+                    )
+                    self._initial_load_phase = "connections"
+                    self.progress_updated.emit(
+                        self._initial_loaded / self._initial_total,
+                        "Loading connections...",
+                    )
+                    return
+                self._node_model.append_item_batch(
+                    batch, self._initial_tags_by_item
+                )
+                self._initial_loaded += len(batch)
+                self.progress_updated.emit(
+                    self._initial_loaded / self._initial_total,
+                    "Decrypting database...",
+                )
+                return
 
-        self._conn_model.load_from_service(self._service)
+            if self._initial_load_phase == "connections":
+                try:
+                    batch = next(self._initial_load_iterator)
+                except StopIteration:
+                    self._finish_initial_load()
+                    return
+                self._conn_model.append_connection_batch(batch)
+                self._initial_loaded += len(batch)
+                self.progress_updated.emit(
+                    self._initial_loaded / self._initial_total,
+                    "Loading connections...",
+                )
+        except Exception as exc:
+            self._fail_initial_load(exc)
+
+    def _finish_initial_load(self):
+        self._initial_load_timer.stop()
+        self._close_initial_load_iterator()
+        self._initial_load_phase = "idle"
+        token = self._initial_load_token
+        self._initial_load_token = None
+        if token is not None:
+            self._operations.finish(token)
         self.progress_finished.emit("Ready")
+        self.initial_load_finished.emit()
+
+    def _fail_initial_load(self, error):
+        self._initial_load_timer.stop()
+        self._close_initial_load_iterator()
+        self._initial_load_phase = "idle"
+        token = self._initial_load_token
+        self._initial_load_token = None
+        if token is not None:
+            self._operations.finish(token)
+        self.progress_finished.emit("Load failed")
+        self.initial_load_failed.emit(str(error))
+
+    def cancel_initial_load(self):
+        if self._initial_load_phase == "idle":
+            return False
+        self._initial_load_timer.stop()
+        self._close_initial_load_iterator()
+        self._initial_load_phase = "idle"
+        token = self._initial_load_token
+        self._initial_load_token = None
+        if token is not None:
+            self._operations.finish(token)
+        self.progress_finished.emit("Loading cancelled")
+        return True
+
+    def _close_initial_load_iterator(self):
+        iterator = self._initial_load_iterator
+        self._initial_load_iterator = None
+        close = getattr(iterator, "close", None)
+        if close is not None:
+            close()
+
+    # ── Tags ───────────────────────────────────────────────────────
+
+    @Slot(result=list)
+    def get_all_tags(self):
+        return [
+            {"id": tag.id, "name": tag.name, "color": tag.color}
+            for tag in self._service.get_all_tags()
+        ]
+
+    @Slot(int, result=list)
+    def get_node_tags(self, node_id):
+        node = self._node_model.get_node_data(node_id)
+        return list(node.get("tags", [])) if node else []
+
+    @Slot(str, str, result=int)
+    def create_tag(self, name, color):
+        parsed_color = QColor(color)
+        if not parsed_color.isValid():
+            self.status_message.emit("Invalid tag color.", "error")
+            return 0
+        try:
+            tag_id = self._service.ensure_tag(name, parsed_color.name())
+        except ValueError as exc:
+            self.status_message.emit(str(exc), "error")
+            return 0
+        self.status_message.emit(f"Tag ready: @{name.strip().lstrip('@').casefold()}", "accent")
+        return tag_id
+
+    @Slot(int, str, str, result=bool)
+    def update_tag(self, tag_id, name, color):
+        parsed_color = QColor(color)
+        if not parsed_color.isValid():
+            self.status_message.emit("Invalid tag color.", "error")
+            return False
+        normalized = name.strip().lstrip("@").casefold()
+        try:
+            self._service.update_tag(tag_id, normalized, parsed_color.name())
+        except ValueError as exc:
+            self.status_message.emit(str(exc), "error")
+            return False
+        self._node_model.update_tag_definition(tag_id, normalized, parsed_color.name())
+        self.status_message.emit(f"Updated tag: @{normalized}", "accent")
+        return True
+
+    @Slot(int, int, bool)
+    def set_node_tag(self, node_id, tag_id, enabled):
+        try:
+            self._service.set_item_tag(node_id, tag_id, enabled)
+        except Exception as exc:
+            self.status_message.emit(f"Tag update failed: {exc}", "error")
+            return
+        tags_map = self._service.get_item_tags_map()
+        tags = [
+            {"id": tag.id, "name": tag.name, "color": tag.color}
+            for tag in tags_map.get(node_id, [])
+        ]
+        self._node_model.set_node_tags(node_id, tags)
+
+    @Slot(int, list)
+    def set_node_tag_order(self, node_id, tag_ids):
+        self._service.set_item_tag_order(node_id, [int(tag_id) for tag_id in tag_ids])
+        tags_map = self._service.get_item_tags_map()
+        tags = [
+            {"id": tag.id, "name": tag.name, "color": tag.color}
+            for tag in tags_map.get(node_id, [])
+        ]
+        self._node_model.set_node_tags(node_id, tags)
 
     # ── Node Creation ───────────────────────────────────────────────
 
@@ -156,6 +333,15 @@ class QmlCanvasController(QObject):
                 paths.append(local)
         if paths:
             self._import_export_ctrl.import_files_by_paths(paths, drop_x, drop_y)
+
+    def has_active_synchronous_import(self):
+        return self._import_export_ctrl.has_active_synchronous_import()
+
+    def has_active_background_jobs(self):
+        return self._import_export_ctrl.has_active_background_jobs()
+
+    def shutdown_background_jobs(self, timeout_ms=15000):
+        return self._import_export_ctrl.shutdown_background_jobs(timeout_ms)
 
     # ── Delete (delegated) ──────────────────────────────────────────
 
@@ -254,14 +440,56 @@ class QmlCanvasController(QObject):
         if status:
             self.status_message.emit(status[0], status[1])
 
-    @Slot(int)
+    @Slot(int, result=bool)
     def delete_connection(self, conn_id):
-        self._graph_commands.delete_connection(conn_id)
+        conn_id = int(conn_id)
+        if conn_id in self._pending_connection_deletes:
+            return True
+
+        if self._connection_delete_token is None:
+            token = self._operations.begin(
+                "connection_delete", "Deleting link...", blocking=False
+            )
+            if token is None:
+                self.status_message.emit(
+                    "Another database operation is active.", "warning"
+                )
+                return False
+            self._connection_delete_token = token
+
+        try:
+            if not self._graph_commands.delete_connection(conn_id):
+                self._finish_connection_delete(conn_id)
+                self.status_message.emit("Link no longer exists.", "warning")
+                return False
+            self._pending_connection_deletes.add(conn_id)
+            return True
+        except Exception as exc:
+            self._finish_connection_delete(conn_id)
+            self.status_message.emit(f"Delete failed: {exc}", "error")
+            return False
 
     @Slot(int)
     def perform_delete_connection(self, conn_id):
-        self._graph_commands.delete_connection_after_animation(conn_id)
-        self.status_message.emit("Link deleted.", "normal")
+        try:
+            self._graph_commands.delete_connection_after_animation(conn_id)
+            self.status_message.emit("Link deleted.", "normal")
+        except Exception as exc:
+            self._conn_model.set_deleting(conn_id, False, finalize=True)
+            self.status_message.emit(f"Delete failed: {exc}", "error")
+        finally:
+            self._finish_connection_delete(conn_id)
+
+    def _finish_connection_delete(self, conn_id=None):
+        if conn_id is not None:
+            self._pending_connection_deletes.discard(int(conn_id))
+        if self._pending_connection_deletes:
+            return
+        token = self._connection_delete_token
+        self._connection_delete_token = None
+        if token is not None:
+            self._operations.finish(token)
+
 
     @Slot()
     def toggle_link_mode_off(self):
@@ -373,20 +601,3 @@ class QmlCanvasController(QObject):
         new_w, new_h = self._auto_fit_service.fit_media(node, thumb_image)
         self._node_model.update_size(node_id, float(new_w), float(new_h))
         self._service.update_size(node_id, int(new_w), int(new_h))
-
-    # ── Video Overlay Helpers ───────────────────────────────────────
-
-    def _show_video_transition_overlay(self, message="Processing video..."):
-        parent = self.parent()
-        if parent and hasattr(parent, "show_video_transition_overlay"):
-            parent.show_video_transition_overlay(message)
-
-    def _update_video_transition_overlay(self, message="Processing video..."):
-        parent = self.parent()
-        if parent and hasattr(parent, "update_video_transition_overlay"):
-            parent.update_video_transition_overlay(message)
-
-    def _hide_video_transition_overlay(self):
-        parent = self.parent()
-        if parent and hasattr(parent, "hide_video_transition_overlay"):
-            parent.hide_video_transition_overlay()

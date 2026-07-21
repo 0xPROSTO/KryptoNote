@@ -1,5 +1,10 @@
 from .palette import Palette
 from .style_factory import StyleFactory
+from .theme_manager import (
+    AppearanceSettings,
+    ThemeManager,
+    get_theme_manager,
+)
 from .typography import Typography
 
 

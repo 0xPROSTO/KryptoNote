@@ -2,6 +2,7 @@ import QtQuick
 
 Item {
     id: deleteAnimation
+    required property var canvasController
     property Item targetItem
     property int nodeId: 0
     property bool deleting: false
@@ -11,6 +12,13 @@ Item {
         if (deleting) {
             deletionOpacityAnim.start()
             deletionProgressAnim.start()
+        } else {
+            deletionOpacityAnim.stop()
+            deletionProgressAnim.stop()
+            progress = 0.0
+            if (targetItem) {
+                targetItem.opacity = 1.0
+            }
         }
     }
 
@@ -34,7 +42,7 @@ Item {
         from: 1.0
         to: 0.0
         duration: 240
-        onFinished: canvasController.perform_delete(deleteAnimation.nodeId)
+        onFinished: deleteAnimation.canvasController.perform_delete(deleteAnimation.nodeId)
     }
 
     NumberAnimation {

@@ -3,9 +3,10 @@ import sqlite3
 import time
 from datetime import datetime
 
-from .models import NodeItemDTO, ConnectionDTO
+from .models import NodeItemDTO, ConnectionDTO, TagDTO
 from ..crypto import CryptoManager
-from ...config import Config
+from ..constants import MEDIA_CHUNK_SIZE
+from ..exceptions import OperationCancelledError
 
 
 # Shared chunked-media writer
@@ -14,6 +15,7 @@ def write_chunked_media(
     cursor, conn, crypto, item_type, x, y, w, h, title, thumb,
     file_path, chunk_size, progress_callback=None,
     media_width=0, media_height=0, media_duration=0.0,
+    cancel_check=None,
 ):
     enc_title = crypto.encrypt(title.encode())
     enc_thumb = crypto.encrypt(thumb) if thumb else None
@@ -24,44 +26,52 @@ def write_chunked_media(
 
     total_chunks = (file_size + chunk_size - 1) // chunk_size if file_size > 0 else 1
     now = datetime.now().isoformat(timespec="seconds")
+    item_id = None
 
-    cursor.execute("""
-        INSERT INTO items (type, title, x, y, width, height, thumbnail, is_chunked, total_size,
-                           created_at, updated_at, media_width, media_height, media_duration)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
-    """, (
-        item_type, enc_title, x, y, w, h, enc_thumb, file_size,
-        now, now, media_width, media_height, media_duration,
-    ))
-    item_id = cursor.lastrowid
+    cursor.execute("SAVEPOINT chunked_media_import")
+    try:
+        cursor.execute("""
+            INSERT INTO items (type, title, x, y, width, height, thumbnail, is_chunked, total_size,
+                               created_at, updated_at, media_width, media_height, media_duration)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
+        """, (
+            item_type, enc_title, x, y, w, h, enc_thumb, file_size,
+            now, now, media_width, media_height, media_duration,
+        ))
+        item_id = cursor.lastrowid
 
-    with open(file_path, "rb") as f:
-        index = 0
-        while True:
-            chunk = f.read(chunk_size)
-            if not chunk:
-                break
-            if progress_callback:
-                progress_callback(index + 1, total_chunks, "Encrypting")
+        with open(file_path, "rb") as f:
+            index = 0
+            while True:
+                if cancel_check and cancel_check():
+                    raise OperationCancelledError("Media import cancelled")
+                chunk = f.read(chunk_size)
+                if not chunk:
+                    break
+                enc_chunk = crypto.encrypt(chunk)
+                cursor.execute(
+                    "INSERT INTO media_chunks (item_id, chunk_index, data) VALUES (?, ?, ?)",
+                    (item_id, index, enc_chunk),
+                )
 
-            enc_chunk = crypto.encrypt(chunk)
-            cursor.execute(
-                "INSERT INTO media_chunks (item_id, chunk_index, data) VALUES (?, ?, ?)",
-                (item_id, index, enc_chunk),
-            )
-
-            index += 1
-            if index % 25 == 0:
+                index += 1
                 if progress_callback:
-                    progress_callback(index, total_chunks, "Writing to disk")
-                conn.commit()
+                    status = "Writing to disk" if index % 25 == 0 else "Encrypting"
+                    progress_callback(index, total_chunks, status)
 
-    if progress_callback:
-        progress_callback(total_chunks, total_chunks, "Finalizing")
+        if progress_callback:
+            progress_callback(total_chunks, total_chunks, "Finalizing")
 
-    conn.commit()
-    return item_id
-
+        cursor.execute("RELEASE SAVEPOINT chunked_media_import")
+        conn.commit()
+        return item_id
+    except Exception:
+        try:
+            cursor.execute("ROLLBACK TO SAVEPOINT chunked_media_import")
+            cursor.execute("RELEASE SAVEPOINT chunked_media_import")
+        except sqlite3.Error:
+            conn.rollback()
+        raise
 
 # Repository
 
@@ -72,68 +82,111 @@ class NodeRepository:
         self.cursor = db_conn.cursor
         self.crypto = crypto
         self._background_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        self._closed = False
 
-    def close(self):
-        """Shutdown background executor. Call from window closeEvent."""
-        self._background_executor.shutdown(wait=False)
+    def close(self, wait=True):
+        """Stop accepting work and optionally wait for active DB jobs."""
+        if self._closed:
+            return
+        self._closed = True
+        self._background_executor.shutdown(wait=wait, cancel_futures=False)
 
     # Background execution
 
-    def _execute_on_separate_connection(self, operation, on_start=None, on_finish=None, on_waiting_lock=None, label="operation"):
+    def _execute_on_separate_connection(
+        self,
+        operation,
+        on_start=None,
+        on_finish=None,
+        on_waiting_lock=None,
+        on_success=None,
+        on_error=None,
+        label="operation",
+    ):
         db_path = getattr(self.conn_manager, "db_path", ":memory:")
 
+        def _notify_error(exc):
+            if on_error:
+                on_error(exc)
+
         if db_path == ":memory:":
-            if on_start:
-                on_start()
-            operation(self.cursor, self.conn)
-            self.conn.commit()
-            if on_finish:
-                on_finish()
-            return
+            try:
+                if on_start:
+                    on_start()
+                operation(self.cursor, self.conn)
+                self.conn.commit()
+                if on_success:
+                    on_success()
+            except Exception as exc:
+                self.conn.rollback()
+                _notify_error(exc)
+                raise
+            finally:
+                if on_finish:
+                    on_finish()
+            return None
 
         try:
             if on_start:
                 on_start()
-
-            def _run():
-                try:
-                    last_error = None
-                    for attempt in range(1, 9):
-                        v_conn = None
-                        try:
-                            v_conn = sqlite3.connect(db_path, timeout=1.0)
-                            v_conn.execute("PRAGMA busy_timeout=1000;")
-                            v_conn.execute("PRAGMA journal_mode=WAL;")
-                            v_cursor = v_conn.cursor()
-                            operation(v_cursor, v_conn)
-                            v_conn.commit()
-                            return
-                        except sqlite3.OperationalError as e:
-                            last_error = e
-                            if "locked" not in str(e).lower() and "busy" not in str(e).lower():
-                                raise
-                            if on_waiting_lock:
-                                on_waiting_lock(attempt)
-                            time.sleep(min(0.25 * attempt, 1.5))
-                        finally:
-                            if v_conn is not None:
-                                v_conn.close()
-                    if last_error is not None:
-                        raise last_error
-                except Exception as e:
-                    print(f"Background {label} Error: {e}")
-                finally:
-                    if on_finish:
-                        on_finish()
-
-            self._background_executor.submit(_run)
-        except Exception as e:
-            print(f"CRASH IN {label}: {e}")
+        except Exception as exc:
+            _notify_error(exc)
             if on_finish:
                 on_finish()
+            raise
+
+        def _run():
+            try:
+                last_error = None
+                for attempt in range(1, 9):
+                    v_conn = None
+                    try:
+                        v_conn = sqlite3.connect(db_path, timeout=1.0)
+                        v_conn.execute("PRAGMA foreign_keys=ON;")
+                        v_conn.execute("PRAGMA busy_timeout=1000;")
+                        v_conn.execute("PRAGMA journal_mode=WAL;")
+                        v_cursor = v_conn.cursor()
+                        operation(v_cursor, v_conn)
+                        v_conn.commit()
+                        if on_success:
+                            on_success()
+                        return
+                    except sqlite3.OperationalError as exc:
+                        if v_conn is not None:
+                            v_conn.rollback()
+                        last_error = exc
+                        if "locked" not in str(exc).lower() and "busy" not in str(exc).lower():
+                            raise
+                        if on_waiting_lock:
+                            on_waiting_lock(attempt)
+                        time.sleep(min(0.25 * attempt, 1.5))
+                    except Exception:
+                        if v_conn is not None:
+                            v_conn.rollback()
+                        raise
+                    finally:
+                        if v_conn is not None:
+                            v_conn.close()
+                if last_error is not None:
+                    raise last_error
+            except Exception as exc:
+                print(f"Background {label} Error: {exc}")
+                _notify_error(exc)
+                raise
+            finally:
+                if on_finish:
+                    on_finish()
+
+        try:
+            return self._background_executor.submit(_run)
+        except Exception as exc:
+            print(f"CRASH IN {label}: {exc}")
+            _notify_error(exc)
+            if on_finish:
+                on_finish()
+            raise
 
     # CRUD
-
     def add_item(
             self, item_type, x, y, w, h, title="", text=None, thumb=None,
             data=None, title_size=14, text_size=10, media_width=0,
@@ -171,7 +224,7 @@ class NodeRepository:
         return write_chunked_media(
             self.cursor, self.conn, self.crypto,
             item_type, x, y, w, h, title, thumb,
-            file_path, Config.CHUNK_SIZE, progress_callback,
+            file_path, MEDIA_CHUNK_SIZE, progress_callback,
             media_width, media_height, media_duration,
         )
 
@@ -185,38 +238,164 @@ class NodeRepository:
             return self.crypto.decrypt(row[0])
         return None
 
-    def get_all_items(self):
-        self.cursor.execute(
-            "SELECT id, type, title, x, y, width, height, text_content, thumbnail, is_chunked, total_size, title_size, text_size, created_at, updated_at, media_width, media_height, media_duration FROM items"
+    _ITEM_SELECT = (
+        "SELECT id, type, title, x, y, width, height, text_content, thumbnail, "
+        "is_chunked, total_size, title_size, text_size, created_at, updated_at, "
+        "media_width, media_height, media_duration FROM items ORDER BY id"
+    )
+
+    def get_all_items(self, include_thumbnails=True):
+        items = []
+        for batch in self.iter_item_batches(
+            batch_size=200, include_thumbnails=include_thumbnails
+        ):
+            items.extend(batch)
+        return items
+
+    def iter_item_batches(self, batch_size=200, include_thumbnails=True):
+        """Yield decrypted DTO batches while letting the event loop breathe."""
+        batch_size = max(1, int(batch_size))
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(self._ITEM_SELECT)
+            while True:
+                rows = cursor.fetchmany(batch_size)
+                if not rows:
+                    break
+                yield [
+                    self._decode_item_row(row, include_thumbnails) for row in rows
+                ]
+        finally:
+            cursor.close()
+
+    def get_item_count(self):
+        return int(self.conn.execute("SELECT COUNT(*) FROM items").fetchone()[0])
+
+    def _decode_item_row(self, row, include_thumbnail):
+        (
+            item_id, item_type, encrypted_title, x, y, width, height,
+            encrypted_text, encrypted_thumbnail, is_chunked, total_size,
+            title_size, text_size, created_at, updated_at, media_width,
+            media_height, media_duration,
+        ) = row
+        if self.crypto:
+            title = (
+                self.crypto.decrypt(encrypted_title).decode()
+                if encrypted_title else ""
+            )
+            text = (
+                self.crypto.decrypt(encrypted_text).decode()
+                if encrypted_text else ""
+            )
+            thumbnail = (
+                self.crypto.decrypt(encrypted_thumbnail)
+                if include_thumbnail and encrypted_thumbnail else None
+            )
+        else:
+            title = ""
+            text = ""
+            thumbnail = None
+        return NodeItemDTO(
+            id=item_id, type=item_type, title=title, x=x, y=y,
+            width=width, height=height, text_content=text, thumbnail=thumbnail,
+            is_chunked=bool(is_chunked), total_size=total_size,
+            title_size=title_size, text_size=text_size,
+            created_at=created_at or "", updated_at=updated_at or "",
+            media_width=media_width or 0, media_height=media_height or 0,
+            media_duration=media_duration or 0.0,
         )
 
-        rows = self.cursor.fetchall()
-        decrypted_rows = []
-        for r in rows:
-            (
-                rid, rtype, etitle, x, y, w, h, etext, ethumb, chunked,
-                tsize, tsize_val, text_size_val, created_at, updated_at,
-                media_width, media_height, media_duration,
-            ) = r
-            if self.crypto:
-                dtitle = self.crypto.decrypt(etitle).decode() if etitle else ""
-                dtext = self.crypto.decrypt(etext).decode() if etext else ""
-                dthumb = self.crypto.decrypt(ethumb) if ethumb else None
 
-            else:
-                dtitle = ""
-                dtext = ""
-                dthumb = None
+    # Tags
 
-            decrypted_rows.append(NodeItemDTO(
-                id=rid, type=rtype, title=dtitle, x=x, y=y, width=w, height=h,
-                text_content=dtext, thumbnail=dthumb, is_chunked=bool(chunked), total_size=tsize,
-                title_size=tsize_val, text_size=text_size_val,
-                created_at=created_at or "", updated_at=updated_at or "",
-                media_width=media_width or 0, media_height=media_height or 0,
-                media_duration=media_duration or 0.0,
-            ))
-        return decrypted_rows
+    def get_all_tags(self):
+        self.cursor.execute("SELECT id, name, color FROM tags ORDER BY id")
+        tags = []
+        for tag_id, encrypted_name, color in self.cursor.fetchall():
+            try:
+                name = self.crypto.decrypt(encrypted_name).decode() if encrypted_name else ""
+            except Exception:
+                continue
+            if name:
+                tags.append(TagDTO(tag_id, name, color))
+        return sorted(tags, key=lambda tag: tag.name.casefold())
+
+    def ensure_tag(self, name, color):
+        normalized = (name or "").strip().lstrip("@").casefold()
+        if not normalized:
+            raise ValueError("Tag name cannot be empty")
+        if len(normalized) > 32:
+            raise ValueError("Tag name is too long")
+        if not all(char.isalnum() or char in "_-" for char in normalized):
+            raise ValueError("Use letters, numbers, underscore or hyphen")
+        for tag in self.get_all_tags():
+            if tag.name.casefold() == normalized:
+                return tag.id
+        encrypted_name = self.crypto.encrypt(normalized.encode())
+        now = datetime.now().isoformat(timespec="seconds")
+        self.cursor.execute(
+            "INSERT INTO tags (name, color, created_at) VALUES (?, ?, ?)",
+            (encrypted_name, color, now),
+        )
+        self.conn.commit()
+        return self.cursor.lastrowid
+
+    def update_tag(self, tag_id, name, color):
+        normalized = (name or "").strip().lstrip("@").casefold()
+        if not normalized:
+            raise ValueError("Tag name cannot be empty")
+        if len(normalized) > 32:
+            raise ValueError("Tag name is too long")
+        if not all(char.isalnum() or char in "_-" for char in normalized):
+            raise ValueError("Use letters, numbers, underscore or hyphen")
+        for tag in self.get_all_tags():
+            if tag.id != tag_id and tag.name.casefold() == normalized:
+                raise ValueError("A tag with this name already exists")
+        self.cursor.execute(
+            "UPDATE tags SET name=?, color=? WHERE id=?",
+            (self.crypto.encrypt(normalized.encode()), color, tag_id),
+        )
+        if self.cursor.rowcount == 0:
+            raise ValueError("Tag not found")
+        self.conn.commit()
+
+    def get_item_tags_map(self):
+        tags = {tag.id: tag for tag in self.get_all_tags()}
+        result = {}
+        self.cursor.execute(
+            "SELECT item_id, tag_id FROM item_tags ORDER BY item_id, priority, tag_id"
+        )
+        for item_id, tag_id in self.cursor.fetchall():
+            tag = tags.get(tag_id)
+            if tag:
+                result.setdefault(item_id, []).append(tag)
+        return result
+
+    def set_item_tag(self, item_id, tag_id, enabled):
+        if enabled:
+            self.cursor.execute(
+                "SELECT COALESCE(MAX(priority), -1) + 1 FROM item_tags WHERE item_id=?",
+                (item_id,),
+            )
+            priority = self.cursor.fetchone()[0]
+            self.cursor.execute(
+                "INSERT OR IGNORE INTO item_tags (item_id, tag_id, priority) VALUES (?, ?, ?)",
+                (item_id, tag_id, priority),
+            )
+        else:
+            self.cursor.execute(
+                "DELETE FROM item_tags WHERE item_id=? AND tag_id=?",
+                (item_id, tag_id),
+            )
+        self.conn.commit()
+
+    def set_item_tag_order(self, item_id, tag_ids):
+        for priority, tag_id in enumerate(tag_ids):
+            self.cursor.execute(
+                "UPDATE item_tags SET priority=? WHERE item_id=? AND tag_id=?",
+                (priority, item_id, tag_id),
+            )
+        self.conn.commit()
 
     def get_full_data(self, item_id):
         self.cursor.execute("SELECT full_data FROM items WHERE id=?", (item_id,))
@@ -268,14 +447,44 @@ class NodeRepository:
         self.conn.commit()
 
     def add_connection(self, start_id, end_id, commit=True):
+        low_id, high_id = sorted((int(start_id), int(end_id)))
         self.cursor.execute(
-            "INSERT INTO connections (start_id, end_id) VALUES (?, ?)",
+            """
+            SELECT id
+            FROM connections
+            WHERE min(start_id, end_id)=? AND max(start_id, end_id)=?
+            ORDER BY id
+            LIMIT 1
+            """,
+            (low_id, high_id),
+        )
+        existing = self.cursor.fetchone()
+        if existing:
+            if commit:
+                self.conn.commit()
+            return existing[0]
+
+        self.cursor.execute(
+            "INSERT OR IGNORE INTO connections (start_id, end_id) VALUES (?, ?)",
             (start_id, end_id),
         )
+        connection_id = self.cursor.lastrowid if self.cursor.rowcount else None
+        if connection_id is None:
+            self.cursor.execute(
+                """
+                SELECT id
+                FROM connections
+                WHERE min(start_id, end_id)=? AND max(start_id, end_id)=?
+                """,
+                (low_id, high_id),
+            )
+            row = self.cursor.fetchone()
+            if row is None:
+                raise sqlite3.IntegrityError("Failed to create connection")
+            connection_id = row[0]
         if commit:
             self.conn.commit()
-
-        return self.cursor.lastrowid
+        return connection_id
 
     def commit_changes(self):
         self.conn.commit()
@@ -285,24 +494,52 @@ class NodeRepository:
         on_start_vacuum=None,
         on_finish_vacuum=None,
         on_waiting_lock=None,
+        on_success=None,
+        on_error=None,
     ):
         self.conn.commit()
 
         def do_vacuum(cursor, conn):
             conn.execute("VACUUM")
 
-        self._execute_on_separate_connection(
+        return self._execute_on_separate_connection(
             do_vacuum,
             on_start=on_start_vacuum,
             on_finish=on_finish_vacuum,
             on_waiting_lock=on_waiting_lock,
+            on_success=on_success,
+            on_error=on_error,
             label="VACUUM",
         )
 
     def get_all_connections(self):
-        self.cursor.execute("SELECT id, start_id, end_id FROM connections")
-        rows = self.cursor.fetchall()
-        return [ConnectionDTO(id=r[0], start_id=r[1], end_id=r[2]) for r in rows]
+        connections = []
+        for batch in self.iter_connection_batches(200):
+            connections.extend(batch)
+        return connections
+
+    def iter_connection_batches(self, batch_size=200):
+        batch_size = max(1, int(batch_size))
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                "SELECT id, start_id, end_id FROM connections ORDER BY id"
+            )
+            while True:
+                rows = cursor.fetchmany(batch_size)
+                if not rows:
+                    break
+                yield [
+                    ConnectionDTO(id=row[0], start_id=row[1], end_id=row[2])
+                    for row in rows
+                ]
+        finally:
+            cursor.close()
+
+    def get_connection_count(self):
+        return int(
+            self.conn.execute("SELECT COUNT(*) FROM connections").fetchone()[0]
+        )
 
     def delete_connection(self, conn_id):
         self.cursor.execute("DELETE FROM connections WHERE id=?", (conn_id,))
@@ -314,6 +551,8 @@ class NodeRepository:
         on_start_vacuum=None,
         on_finish_vacuum=None,
         on_waiting_lock=None,
+        on_success=None,
+        on_error=None,
     ):
         self.cursor.execute("SELECT type, total_size FROM items WHERE id=?", (item_id,))
         row = self.cursor.fetchone()
@@ -331,18 +570,21 @@ class NodeRepository:
                     pass
 
         def do_delete(cursor, conn):
-            cursor.execute("DELETE FROM connections WHERE start_id=? OR end_id=?", (item_id, item_id))
-            cursor.execute("DELETE FROM media_chunks WHERE item_id=?", (item_id,))
             cursor.execute("DELETE FROM items WHERE id=?", (item_id,))
             conn.commit()
             if should_vacuum:
-                conn.execute("VACUUM")
+                try:
+                    conn.execute("VACUUM")
+                except sqlite3.Error as exc:
+                    print(f"VACUUM after delete failed: {exc}")
 
-        self._execute_on_separate_connection(
+        return self._execute_on_separate_connection(
             do_delete,
             on_start=on_start_vacuum if should_vacuum else None,
             on_finish=on_finish_vacuum,
             on_waiting_lock=on_waiting_lock,
+            on_success=on_success,
+            on_error=on_error,
             label="DELETE_NODE_CASCADE",
         )
 
@@ -358,6 +600,8 @@ class NodeRepository:
         on_start_vacuum=None,
         on_finish_vacuum=None,
         on_waiting_lock=None,
+        on_success=None,
+        on_error=None,
     ):
         item_ids = [int(item_id) for item_id in item_ids]
         if not item_ids:
@@ -386,25 +630,22 @@ class NodeRepository:
 
         def do_delete(cursor, conn):
             cursor.execute(
-                f"DELETE FROM connections WHERE start_id IN {in_sql} OR end_id IN {in_sql}",
-                in_params + in_params,
-            )
-            cursor.execute(
-                f"DELETE FROM media_chunks WHERE item_id IN {in_sql}",
-                in_params,
-            )
-            cursor.execute(
                 f"DELETE FROM items WHERE id IN {in_sql}",
                 in_params,
             )
             conn.commit()
             if should_vacuum:
-                conn.execute("VACUUM")
+                try:
+                    conn.execute("VACUUM")
+                except sqlite3.Error as exc:
+                    print(f"VACUUM after delete failed: {exc}")
 
-        self._execute_on_separate_connection(
+        return self._execute_on_separate_connection(
             do_delete,
             on_start=on_start_vacuum if should_vacuum else None,
             on_finish=on_finish_vacuum,
             on_waiting_lock=on_waiting_lock,
+            on_success=on_success,
+            on_error=on_error,
             label="DELETE_NODES_CASCADE",
         )

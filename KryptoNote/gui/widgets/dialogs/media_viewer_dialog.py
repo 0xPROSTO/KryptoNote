@@ -1,4 +1,4 @@
-from PySide6.QtCore import Qt, QTimer, QRectF
+from PySide6.QtCore import QRectF, QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QBrush, QPainter, QPixmap, QGuiApplication
 from PySide6.QtWidgets import (
     QGraphicsPixmapItem,
@@ -9,6 +9,9 @@ from PySide6.QtWidgets import (
     QPushButton,
     QGraphicsItem,
 )
+
+from KryptoNote.gui.theme.icons import SvgIcons
+from KryptoNote.gui.theme.palette import Palette
 
 
 class ZoomableView(QGraphicsView):
@@ -88,20 +91,22 @@ class MediaViewerDialog(QDialog):
 
         self.setGeometry(int(x), int(y), int(target_w), int(target_h))
 
-        self.setStyleSheet("""
-            QDialog { background-color: ; }
-            QPushButton { 
-                background-color: rgba(30, 30, 30, 160); 
-                color: rgba(255, 255, 255, 200); 
-                border: 1px solid rgba(255, 255, 255, 30); 
+        self.setStyleSheet(
+            f"QDialog {{ background-color: {Palette.BG_CANVAS}; }}"
+            """
+            QPushButton {
+                background-color: rgba(30, 30, 30, 160);
+                color: rgba(255, 255, 255, 200);
+                border: 1px solid rgba(255, 255, 255, 30);
                 font-size: 16px;
-                border-radius: 8px; 
+                border-radius: 8px;
             }
-            QPushButton:hover { 
-                background-color: rgba(80, 80, 80, 220); 
+            QPushButton:hover {
+                background-color: rgba(80, 80, 80, 220);
                 color: white;
             }
-        """)
+            """
+        )
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -134,20 +139,35 @@ class MediaViewerDialog(QDialog):
 
         self.current_rotation = 0
 
-        self.btn_rot_left = QPushButton("⟲", self)
+        self.btn_rot_left = QPushButton(self)
+        self.btn_rot_left.setIcon(
+            SvgIcons.get_icon("rotate-left", color="#dddddd", active_color="#ffffff")
+        )
+        self.btn_rot_left.setIconSize(QSize(20, 20))
         self.btn_rot_left.setToolTip("Rotate Left")
+        self.btn_rot_left.setAccessibleName("Rotate Left")
         self.btn_rot_left.setFixedSize(45, 45)
         self.btn_rot_left.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_rot_left.clicked.connect(self.rotate_left)
 
-        self.btn_fit = QPushButton("⛶", self)
+        self.btn_fit = QPushButton(self)
+        self.btn_fit.setIcon(
+            SvgIcons.get_icon("fit", color="#dddddd", active_color="#ffffff")
+        )
+        self.btn_fit.setIconSize(QSize(20, 20))
         self.btn_fit.setToolTip("Fit to Window")
+        self.btn_fit.setAccessibleName("Fit to Window")
         self.btn_fit.setFixedSize(45, 45)
         self.btn_fit.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_fit.clicked.connect(self.fit_image)
 
-        self.btn_rot_right = QPushButton("⟳", self)
+        self.btn_rot_right = QPushButton(self)
+        self.btn_rot_right.setIcon(
+            SvgIcons.get_icon("rotate-right", color="#dddddd", active_color="#ffffff")
+        )
+        self.btn_rot_right.setIconSize(QSize(20, 20))
         self.btn_rot_right.setToolTip("Rotate Right")
+        self.btn_rot_right.setAccessibleName("Rotate Right")
         self.btn_rot_right.setFixedSize(45, 45)
         self.btn_rot_right.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_rot_right.clicked.connect(self.rotate_right)

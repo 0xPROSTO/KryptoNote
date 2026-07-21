@@ -3,8 +3,13 @@ import QtQuick
 
 Rectangle {
     id: mediaNode
+    required property var canvasRoot
+    required property var nodeModel
+    required property Item contentLayer
 
+    required property var appTheme
     property int nodeId: 0
+    required property Item delegateItem
     property string nodeTitle: ""
     property string mediaType: "image"
     property string metaSummary: ""
@@ -12,13 +17,14 @@ Rectangle {
     property bool isHovered: false
     property real nodeWidth: 220
     property real nodeHeight: 220
+    property var tags: []
 
     anchors.fill: parent
     radius: 4
-    color: AppTheme.bgNode
+    color: mediaNode.appTheme.bgNode
 
     border.width: isHovered ? 1.65 : (isSelected ? 1.5 : 1.1)
-    border.color: isSelected ? AppTheme.accentMain : (isHovered ? AppTheme.accentMain : AppTheme.borderDefault)
+    border.color: isSelected ? mediaNode.appTheme.accentMain : (isHovered ? mediaNode.appTheme.accentMain : mediaNode.appTheme.borderDefault)
 
     Behavior on border.color { ColorAnimation { duration: 120 } }
     Behavior on border.width { NumberAnimation { duration: 120 } }
@@ -29,7 +35,7 @@ Rectangle {
         y: 5
         width: parent.width - 20
         text: mediaNode.nodeTitle
-        color: AppTheme.textMain
+        color: mediaNode.appTheme.textMain
         font.family: "Segoe UI Semibold"
         font.pointSize: 12
         font.bold: true
@@ -38,13 +44,14 @@ Rectangle {
     }
 
     Rectangle {
+        id: mediaFrame
         x: 10
         y: titleText.y + titleText.contentHeight + 5
         width: parent.width - 20
-        height: parent.height - y - footerLabel.contentHeight - 10
-        color: "#1e1f22"
+        height: Math.max(0, parent.height - y - footerLabel.contentHeight - 10)
+        color: mediaNode.appTheme.bgPanel
         radius: 3
-        border.color: "#333333"
+        border.color: mediaNode.appTheme.borderDefault
         border.width: 1
         visible: height > 10
 
@@ -68,7 +75,7 @@ Rectangle {
         Text {
             anchors.centerIn: parent
             text: "No Thumbnail"
-            color: AppTheme.textMuted
+            color: mediaNode.appTheme.textMuted
             font.pointSize: 10
             visible: thumbImage.status === Image.Error || thumbImage.status === Image.Null
         }
@@ -83,18 +90,36 @@ Rectangle {
         text: mediaNode.metaSummary.length > 0
               ? mediaNode.metaSummary
               : "[" + mediaNode.mediaType.toUpperCase() + "]"
-        color: AppTheme.accentMain
+        color: mediaNode.appTheme.accentMain
         font.family: "Segoe UI"
         font.pointSize: 9
         elide: Text.ElideRight
         maximumLineCount: 1
     }
 
+    TagDots {
+        appTheme: mediaNode.appTheme
+        id: tagSummary
+        z: 2
+        anchors.left: mediaFrame.left
+        anchors.right: mediaFrame.right
+        anchors.bottom: mediaFrame.bottom
+        anchors.leftMargin: 6
+        anchors.rightMargin: 6
+        anchors.bottomMargin: 6
+        tags: mediaNode.tags
+    }
+
     property alias isResizeHovered: resizer._isHovered
 
     ResizeHandle {
+        canvasRoot: mediaNode.canvasRoot
+        nodeModel: mediaNode.nodeModel
+        contentLayer: mediaNode.contentLayer
+        appTheme: mediaNode.appTheme
         id: resizer
         nodeId: mediaNode.nodeId
+        delegateItem: mediaNode.delegateItem
         anchors.right: parent.right
         anchors.bottom: parent.bottom
     }

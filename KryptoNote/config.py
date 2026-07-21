@@ -1,24 +1,26 @@
 import os
 import sys
 
+from .core.constants import MEDIA_CHUNK_SIZE
+from .gui.theme import Theme
+
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-from KryptoNote.gui.theme import Theme
 
 
 class AppConfig:
 
     APP_NAME = "ZeroXX-KryptoNote"
-    VERSION = "3.0.5"
+    VERSION = "3.1.0"
     COMPANY_NAME = "ZeroXWare"
 
-    CHUNK_SIZE = 4 * 1024 * 1024
+    CHUNK_SIZE = MEDIA_CHUNK_SIZE
 
     # Path logic
     IS_FROZEN = getattr(sys, "frozen", False)
     BASE_DIR = os.path.dirname(sys.executable) if IS_FROZEN else os.path.dirname(
         os.path.dirname(os.path.abspath(__file__)))
 
-    DB_PATH = "cases/"
+    DB_PATH = os.path.join(BASE_DIR, "cases")
     ICON_PATH = os.path.join(CURRENT_DIR, "gui", "assets", "icon.png")
 
     # Grid geometry

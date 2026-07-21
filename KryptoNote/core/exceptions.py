@@ -16,3 +16,8 @@ class AuthError(KryptoNoteError):
 class DatabaseError(KryptoNoteError):
     """Raised on database-level failures (corruption, lock timeout)."""
     pass
+
+
+class OperationCancelledError(KryptoNoteError):
+    """Raised when a cooperative background operation is cancelled."""
+    pass

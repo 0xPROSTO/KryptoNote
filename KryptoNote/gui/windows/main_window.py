@@ -1,12 +1,15 @@
+import concurrent.futures
 import datetime
+import importlib
 import os
 import sys
+import threading
 
 from PySide6.QtCore import (
     QEasingCurve,
+    QFile,
     QMetaObject,
     QPropertyAnimation,
-    QSettings,
     QEvent,
     QPoint,
     QTimer,
@@ -34,35 +37,67 @@ from PySide6.QtQuickWidgets import QQuickWidget
 from .native_window import NativeWindowMixin
 from ..controllers.canvas_controller_qml import QmlCanvasController
 from ..controllers.viewer_controller import ViewerController
-from ..models.node_list_model import NodeListModel
+from ..services.frame_clock import HighRefreshFrameClock
+from ..services.window_state_service import WindowStateService
+from ..services.operation_coordinator import OperationCoordinator
+from ..models.node_list_model import NodeListModel, NodeRoles
 from ..models.connection_list_model import ConnectionListModel
 from ..models.thumbnail_provider import ThumbnailProvider
+from ..models.viewport_proxy_model import (
+    ConnectionViewportProxyModel,
+    NodeViewportProxyModel,
+)
 from ..widgets.dialogs.about_dialog import AboutDialog
 from ..widgets.dialogs.dashboard_dialog import DashboardDialog
 from ..widgets.dialogs.keybinds_dialog import KeybindsDialog
-from ..widgets.overlays.dim_overlay import DimOverlay
+from ..widgets.dialogs.theme_dialog import ThemeDialog
+from ..widgets.overlays.dim_overlay import WindowOverlayManager
 from ..widgets.overlays.arraylist_overlay import ArrayListOverlay
 from ..widgets.overlays.node_properties_overlay import NodePropertiesOverlay
 from ..widgets.progress_bar import ProgressBarWidget
 from ..widgets.title_bar import CustomTitleBar
 from ...config import Config
 from ...gui.theme import Theme
+from ...gui.theme.icons import SvgIcons
 from ...gui.theme.theme_bridge import ThemeBridge
+from ...gui.theme.theme_manager import get_theme_manager
 from ...services.backup_service import BackupService
 from ...services.stats_service import KnowledgeStatsService
 from ...utils.gui_utils import adjust_window_to_screen, center_on_parent_window
 
 
+def resolve_canvas_qml_source():
+    """Return a packaged QRC URL when available, otherwise the source file."""
+    resource_module = "KryptoNote.gui.resources_rc"
+    try:
+        importlib.import_module(resource_module)
+    except ModuleNotFoundError as exc:
+        if exc.name != resource_module:
+            raise
+
+    if QFile.exists(":/qml/Canvas.qml"):
+        return QUrl("qrc:/qml/Canvas.qml")
+
+    qml_path = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)), "qml", "Canvas.qml"
+    )
+    if not os.path.isfile(qml_path):
+        raise FileNotFoundError(f"Canvas QML is missing: {qml_path}")
+    return QUrl.fromLocalFile(qml_path)
+
+
 class ZeroXXWindow(NativeWindowMixin, QMainWindow):
-    _manual_vacuum_started = Signal(str)
-    _manual_vacuum_updated = Signal(str)
     _password_change_progress = Signal(int, int, str)
     _password_change_finished = Signal(bool, str)
-    _manual_vacuum_finished = Signal(str)
+    _manual_vacuum_finished = Signal(bool, str)
+    _backup_progress = Signal(int, int, str)
+    _backup_finished = Signal(bool, str)
 
     def __init__(self, db_path, db_conn=None, crypto=None, repo=None, service=None):
         QMainWindow.__init__(self)
         self.is_windows = sys.platform == "win32"
+        self._window_state_service = WindowStateService()
+        self._theme_manager = get_theme_manager()
 
         self.resize(1280, 800)
         self.setMinimumSize(600, 450)
@@ -82,18 +117,25 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             "Ready | Hold [SHIFT] to Link | Hold [CTRL] to Multi-Select"
         )
         self._manual_vacuum_running = False
+        self.operation_coordinator = OperationCoordinator(self)
+        self._operation_blocked_actions = []
         self._ctrl_held = False
         self._shift_held = False
-        self._manual_vacuum_started.connect(self.show_blocking_progress)
-        self._manual_vacuum_updated.connect(self.update_blocking_progress)
         self._manual_vacuum_finished.connect(self._on_manual_vacuum_finished)
+        self._backup_progress.connect(self._on_backup_progress)
+        self._backup_finished.connect(self._on_backup_finished)
         self._password_change_progress.connect(self._on_password_change_progress)
         self._password_change_finished.connect(self._on_password_change_finished)
 
         self._init_core(db_path, db_conn, crypto, repo, service)
         self._setup_canvas()
         self._setup_menubar()
+        self._theme_manager.appearanceChanged.connect(
+            self._apply_runtime_appearance
+        )
 
+        self.operation_coordinator.state_changed.connect(
+            self._on_operation_state_changed)
         try:
             self.canvas_controller.load_from_db()
         except Exception as e:
@@ -103,7 +145,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
                 "Error",
                 f"Failed to decrypt/load DB. Incorrect password?\nError: {e}",
             )
-            self.db_conn.conn.close()
+            self._close_core_resources(wait=False)
             raise RuntimeError("Failed to load DB")
 
         self.search_shortcut = QShortcut(QKeySequence("Ctrl+F"), self)
@@ -144,19 +186,31 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
                 return pwd, ok
 
             self.db_conn, self.crypto, self.repo, self.service = (
-                AuthService.authenticate(db_path, _password_provider)
+                AuthService.authenticate(db_path, _password_provider, mode="open")
             )
 
     def _setup_canvas(self):
         self.node_model = NodeListModel(self)
         self.connection_model = ConnectionListModel(self.node_model, self)
+        self.connection_model.set_connection_style(
+            self._theme_manager.settings.connection_style
+        )
+        self._theme_manager.canvasAppearanceChanged.connect(self._sync_connection_style)
+        self.node_viewport_model = NodeViewportProxyModel(self.node_model, self)
+        self.connection_viewport_model = ConnectionViewportProxyModel(
+            self.connection_model, self
+        )
 
         self.canvas_controller = QmlCanvasController(
-            self.node_model, self.connection_model, self.service, self
+            self.node_model, self.connection_model, self.service, self,
+            operation_coordinator=self.operation_coordinator,
         )
         self.canvas_controller.status_message.connect(self._handle_status_update)
         self.canvas_controller.progress_updated.connect(self._on_progress_updated)
         self.canvas_controller.progress_finished.connect(self._on_progress_finished)
+        self.canvas_controller.initial_load_failed.connect(
+            self._on_initial_load_failed
+        )
 
         self.viewer_controller = ViewerController(
             self.node_model, self.canvas_controller, self.service, self
@@ -171,38 +225,55 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self.view = QQuickWidget()
         self.view.setFormat(format)
         self.view.setResizeMode(QQuickWidget.SizeRootObjectToView)
-        self.view.setClearColor(QColor("#050505"))
+        self.view.setClearColor(QColor(Theme.Palette.BG_CANVAS))
 
         quick_window = self.view.quickWindow()
         if quick_window:
             quick_window.setPersistentGraphics(True)
             quick_window.setPersistentSceneGraph(True)
 
-        self.thumb_provider = ThumbnailProvider(self.node_model)
+        self.frame_clock = HighRefreshFrameClock(self.view.update, self)
+        self.frame_clock.set_screen(self.screen())
+
+        self.thumb_provider = ThumbnailProvider(
+            self.node_model, self.service, max_cache_bytes=64 * 1024 * 1024
+        )
         self.view.engine().addImageProvider("thumbnails", self.thumb_provider)
 
-        self._theme_bridge = ThemeBridge(self)
+        self._theme_bridge = ThemeBridge(self, manager=self._theme_manager)
 
-        ctx = self.view.rootContext()
-        ctx.setContextProperty("AppTheme", self._theme_bridge)
-        ctx.setContextProperty("nodeModel", self.node_model)
-        ctx.setContextProperty("connectionModel", self.connection_model)
-        ctx.setContextProperty("canvasController", self.canvas_controller)
+        self.view.setInitialProperties({
+            "appTheme": self._theme_bridge,
+            "nodeModel": self.node_model,
+            "connectionModel": self.connection_model,
+            "nodeViewportModel": self.node_viewport_model,
+            "connectionViewportModel": self.connection_viewport_model,
+            "canvasController": self.canvas_controller,
+            "frameClock": self.frame_clock,
+        })
 
-        qml_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "qml")
-        qml_path = os.path.join(qml_dir, "Canvas.qml")
-        self._qml_canvas_source = QUrl.fromLocalFile(qml_path)
+        self._qml_canvas_source = resolve_canvas_qml_source()
+        if self._qml_canvas_source.scheme() == "qrc":
+            self.view.engine().addImportPath("qrc:/qml")
+            self.view.engine().addImportPath("qrc:/")
 
         self.view.setSource(self._qml_canvas_source)
 
         if self.view.status() == QQuickWidget.Status.Error:
             errors = self.view.errors()
-            for err in errors:
-                print(f"QML Error: {err.toString()}")
-        else:
-            root = self.view.rootObject()
-            if root is not None:
-                root.textEditorOpenChanged.connect(self._on_text_editor_open_changed)
+            error_text = "\n".join(err.toString() for err in errors)
+            if not error_text:
+                error_text = f"Unable to load {self._qml_canvas_source.toString()}"
+            print(f"QML Error: {error_text}")
+            QMessageBox.critical(self, "QML Error", error_text)
+            raise RuntimeError(f"QML load failed: {error_text}")
+
+        root = self.view.rootObject()
+        if root is None:
+            error_text = f"QML root object is missing: {self._qml_canvas_source.toString()}"
+            QMessageBox.critical(self, "QML Error", error_text)
+            raise RuntimeError(error_text)
+        root.textEditorOpenChanged.connect(self._on_text_editor_open_changed)
 
         self.overlay = ArrayListOverlay(self)
         self.overlay.set_snap_status(Config.SNAP_TO_GRID)
@@ -210,7 +281,10 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self.overlay.stats_clicked.connect(self.open_dashboard)
         self.overlay.raise_()
         self._arraylist_hidden = False
-        self._overlay_stats_update_scheduled = False
+        self._overlay_stats_timer = QTimer(self)
+        self._overlay_stats_timer.setSingleShot(True)
+        self._overlay_stats_timer.setInterval(150)
+        self._overlay_stats_timer.timeout.connect(self._update_overlay_stats)
         self._arraylist_anim = QPropertyAnimation(self.overlay, b"pos", self)
         self._arraylist_anim.setDuration(220)
         self._arraylist_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
@@ -226,25 +300,30 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self.setCentralWidget(central)
         self.view.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
+        self._window_overlay_manager = WindowOverlayManager(self.view, self)
+
     def _connect_overlay_stats_updates(self):
         for signal in (
             self.node_model.rowsInserted,
             self.node_model.rowsRemoved,
             self.node_model.modelReset,
-            self.node_model.dataChanged,
             self.connection_model.rowsInserted,
             self.connection_model.rowsRemoved,
             self.connection_model.modelReset,
-            self.connection_model.dataChanged,
         ):
             signal.connect(self._schedule_overlay_stats_update)
-        QTimer.singleShot(0, self._update_overlay_stats)
+        self.node_model.dataChanged.connect(self._on_node_stats_data_changed)
+        self._schedule_overlay_stats_update()
+
+    def _on_node_stats_data_changed(self, _top_left, _bottom_right, roles):
+        content_roles = {int(NodeRoles.TitleRole), int(NodeRoles.ContentRole)}
+        if not roles or content_roles.intersection(int(role) for role in roles):
+            self._schedule_overlay_stats_update()
 
     def _schedule_overlay_stats_update(self, *args):
-        if getattr(self, "_overlay_stats_update_scheduled", False):
-            return
-        self._overlay_stats_update_scheduled = True
-        QTimer.singleShot(0, self._update_overlay_stats)
+        timer = getattr(self, "_overlay_stats_timer", None)
+        if timer is not None:
+            timer.start()
 
     def _overlay_stats(self):
         db_path = getattr(self.db_conn, "db_path", None)
@@ -264,7 +343,6 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         )
 
     def _update_overlay_stats(self):
-        self._overlay_stats_update_scheduled = False
         if not hasattr(self, "overlay"):
             return
         stats = self._overlay_stats()
@@ -273,6 +351,13 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             stats["link_count"],
             stats["content_size_label"],
         )
+
+    @Slot(str)
+    def _on_initial_load_failed(self, error):
+        QMessageBox.critical(
+            self, "Database Error", f"Failed to load project data.\n{error}"
+        )
+        QTimer.singleShot(0, self.close)
 
     @Slot(bool)
     def _on_text_editor_open_changed(self, opened):
@@ -298,13 +383,16 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         if not animate:
             self._arraylist_anim.stop()
             self.overlay.move(target)
+            self._raise_progress_bar()
             return
         if self.overlay.pos() == target:
+            self._raise_progress_bar()
             return
         self._arraylist_anim.stop()
         self._arraylist_anim.setStartValue(self.overlay.pos())
         self._arraylist_anim.setEndValue(target)
         self._arraylist_anim.start()
+        self._raise_progress_bar()
 
     def _install_key_event_filter(self):
         if getattr(self, "_key_event_filter_installed", False):
@@ -323,59 +411,85 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         file_menu = menubar.addMenu("File")
 
         act_save = QAction("Save\t[Ctrl+S]", self)
+        act_save.setIcon(SvgIcons.get_icon("save"))
         act_save.setShortcut(QKeySequence("Ctrl+S"))
         act_save.triggered.connect(self._on_manual_save)
         file_menu.addAction(act_save)
 
         act_select_all = QAction("Select All\t[Ctrl+A]", self)
+        act_select_all.setIcon(SvgIcons.get_icon("select-all"))
         act_select_all.triggered.connect(self._on_select_all)
         file_menu.addAction(act_select_all)
 
         file_menu.addSeparator()
 
         act_vacuum = QAction("Vacuum", self)
+        act_vacuum.setIcon(SvgIcons.get_icon("database"))
         act_vacuum.triggered.connect(self._on_manual_vacuum)
         file_menu.addAction(act_vacuum)
 
         act_backup = QAction("Backup", self)
+        act_backup.setIcon(SvgIcons.get_icon("backup"))
         act_backup.triggered.connect(self._on_create_backup)
         file_menu.addAction(act_backup)
 
+        self._cancel_operation_action = QAction("Cancel Current Operation", self)
+        self._cancel_operation_action.setIcon(SvgIcons.get_icon("close"))
+        self._cancel_operation_action.setEnabled(False)
+        self._cancel_operation_action.triggered.connect(
+            self._cancel_active_operation
+        )
+        file_menu.addAction(self._cancel_operation_action)
+
         export_menu = file_menu.addMenu("Export")
+        export_menu.setIcon(SvgIcons.get_icon("export"))
 
         act_export_all_md = QAction("Export all text nodes to md", self)
+        act_export_all_md.setIcon(SvgIcons.get_icon("export"))
         act_export_all_md.triggered.connect(self._on_export_all_markdown)
         export_menu.addAction(act_export_all_md)
 
         act_export_selected_md = QAction("Export selected text nodes to md", self)
+        act_export_selected_md.setIcon(SvgIcons.get_icon("export"))
         act_export_selected_md.triggered.connect(self._on_export_selected_markdown)
         export_menu.addAction(act_export_selected_md)
 
         file_menu.addSeparator()
 
         act_change_pwd = QAction("Change Password", self)
+        act_change_pwd.setIcon(SvgIcons.get_icon("lock"))
         act_change_pwd.triggered.connect(self._on_change_password)
         file_menu.addAction(act_change_pwd)
+
+        self._theme_action = QAction("Theme…", self)
+        self._theme_action.setIcon(SvgIcons.get_icon("palette"))
+        self._theme_action.triggered.connect(self.open_theme)
+        file_menu.addAction(self._theme_action)
+
 
         file_menu.addSeparator()
 
         act_close = QAction("Exit", self)
+        act_close.setIcon(SvgIcons.get_icon("exit"))
         act_close.triggered.connect(self.close)
         file_menu.addAction(act_close)
 
         add_menu = menubar.addMenu("Add")
 
         act_note = QAction("Note\t[Ctrl+N]", self)
+        act_note.setIcon(SvgIcons.get_icon("note"))
         act_note.setShortcut(QKeySequence("Ctrl+N"))
         act_note.triggered.connect(self._on_add_text_node)
         add_menu.addAction(act_note)
 
         act_img = QAction("Image\t[Ctrl+M]", self)
+        act_img.setIcon(SvgIcons.get_icon("image"))
         act_img.setShortcut(QKeySequence("Ctrl+M"))
         act_img.triggered.connect(self._on_add_image_node)
         add_menu.addAction(act_img)
 
         act_vid = QAction("Video\t[Ctrl+Shift+M]", self)
+        act_vid.setIcon(SvgIcons.get_icon("video"))
         act_vid.setShortcut(QKeySequence("Ctrl+Shift+M"))
         act_vid.triggered.connect(self._on_add_video_node)
         add_menu.addAction(act_vid)
@@ -383,21 +497,54 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         tools_menu = menubar.addMenu("Tools")
 
         act_search = QAction("Search\t[Ctrl+F]", self)
+        act_search.setIcon(SvgIcons.get_icon("search"))
         act_search.triggered.connect(self.open_search)
         tools_menu.addAction(act_search)
         snap_state = "ON" if getattr(Config, "SNAP_TO_GRID", False) else "OFF"
         self.act_snap = QAction(f"Snap to Grid: {snap_state}\t[G]", self)
+        self.act_snap.setIcon(SvgIcons.get_icon("grid"))
         self.act_snap.triggered.connect(self.toggle_snap_to_grid)
         tools_menu.addAction(self.act_snap)
 
         help_menu = menubar.addMenu("Help")
         act_keybinds = QAction("Show All Keybinds", self)
+        act_keybinds.setIcon(SvgIcons.get_icon("keyboard"))
         act_keybinds.triggered.connect(self.open_keybinds)
         help_menu.addAction(act_keybinds)
 
         act_about = QAction("About", self)
+        act_about.setIcon(SvgIcons.get_icon("info"))
         act_about.triggered.connect(self.open_about)
         help_menu.addAction(act_about)
+
+        self._theme_icon_actions = (
+            (act_save, "save"), (act_select_all, "select-all"),
+            (act_vacuum, "database"), (act_backup, "backup"),
+            (self._cancel_operation_action, "close"),
+            (export_menu.menuAction(), "export"),
+            (act_export_all_md, "export"), (act_export_selected_md, "export"),
+            (act_change_pwd, "lock"), (self._theme_action, "palette"),
+            (act_close, "exit"), (act_note, "note"), (act_img, "image"),
+            (act_vid, "video"), (act_search, "search"),
+            (self.act_snap, "grid"), (act_keybinds, "keyboard"),
+            (act_about, "info"),
+        )
+
+        self._operation_blocked_actions = [
+            act_save,
+            act_select_all,
+            act_vacuum,
+            act_backup,
+            act_export_all_md,
+            act_export_selected_md,
+            act_change_pwd,
+            self._theme_action,
+            act_note,
+            act_img,
+            act_vid,
+            act_search,
+            self.act_snap,
+        ]
 
         self._register_menu_canvas_guard(file_menu, export_menu, add_menu, tools_menu, help_menu)
 
@@ -498,65 +645,82 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self.progress_label.setText(message)
         self.progress_label.setVisible(True)
         self.status_label.setVisible(False)
+        self._layout_progress_bar()
 
     def _on_progress_finished(self, message: str):
         self.progress_bar.finish(message)
         self.progress_label.setVisible(False)
         self.status_label.setVisible(True)
-        self._handle_status_update(message)
+        if message:
+            self._handle_status_update(message)
+
+    # ── Coordinated Operations ──────────────────────────────────────
+
+    @Slot(bool, str, str, bool)
+    def _on_operation_state_changed(self, active, kind, message, blocking):
+        enabled = not active
+        if hasattr(self, "_cancel_operation_action"):
+            self._cancel_operation_action.setEnabled(
+                active and kind in {"backup", "initial_load"}
+            )
+        for action in self._operation_blocked_actions:
+            action.setEnabled(enabled)
+        if hasattr(self, "search_shortcut"):
+            self.search_shortcut.setEnabled(enabled)
+        if hasattr(self, "overlay"):
+            self.overlay.setEnabled(enabled)
+        if hasattr(self, "view"):
+            self.view.setEnabled(not (active and blocking))
+        if active and blocking:
+            self._window_overlay_manager.acquire("operation")
+        else:
+            self._window_overlay_manager.release("operation")
+        if active:
+            if kind == "connection_delete":
+                self.progress_label.setVisible(False)
+                self.status_label.setVisible(True)
+                return
+            display_message = message or "Database operation in progress..."
+            if not self.progress_bar.is_active:
+                self.progress_bar.start(display_message, indeterminate=True)
+            else:
+                self.progress_bar.set_message(display_message)
+            self.progress_label.setText(display_message)
+            self.progress_label.setVisible(True)
+            self.status_label.setVisible(False)
+            self._layout_progress_bar()
+            return
+        self.progress_bar.finish()
+        self.progress_label.setVisible(False)
+        self.status_label.setVisible(True)
+
 
     # ── Blocking Progress Overlay ───────────────────────────────────
 
     @Slot(str)
     def show_blocking_progress(self, msg: str):
-        was_inactive = getattr(self, "_blocking_progress_depth", 0) == 0
-        self._blocking_progress_depth = getattr(self, "_blocking_progress_depth", 0) + 1
-        if was_inactive and hasattr(self, "view"):
-            self.view.setEnabled(False)
-        if not hasattr(self, "global_dim_overlay") or not self.global_dim_overlay:
-            self.global_dim_overlay = DimOverlay(self.view, block_input=True)
-            self.global_dim_overlay.setParent(self.view)
-            self.global_dim_overlay.resize(self.view.size())
-            self.global_dim_overlay.destroyed.connect(self._on_blocking_overlay_destroyed)
-        elif hasattr(self.global_dim_overlay, "fade_in"):
-            self.global_dim_overlay.fade_in()
-
-        self.global_dim_overlay.show()
-        self.global_dim_overlay.raise_()
+        self._window_overlay_manager.acquire("legacy-progress")
+        self.view.setEnabled(False)
         self.progress_bar.start(msg, indeterminate=True)
         self.progress_label.setText(msg)
         self.progress_label.setVisible(True)
         self.status_label.setVisible(False)
+
 
     @Slot(str)
     def update_blocking_progress(self, msg: str):
-        if getattr(self, "_blocking_progress_depth", 0) <= 0:
-            self.show_blocking_progress(msg)
-            return
         self.progress_bar.start(msg, indeterminate=True)
         self.progress_label.setText(msg)
         self.progress_label.setVisible(True)
         self.status_label.setVisible(False)
-        if hasattr(self, "global_dim_overlay") and self.global_dim_overlay:
-            self.global_dim_overlay.raise_()
 
     @Slot()
     def hide_blocking_progress(self):
-        depth = max(0, getattr(self, "_blocking_progress_depth", 0) - 1)
-        self._blocking_progress_depth = depth
-        if depth > 0:
-            return
-        if hasattr(self, "global_dim_overlay") and self.global_dim_overlay:
-            self.global_dim_overlay.fade_out()
-        if hasattr(self, "view"):
-            self.view.setEnabled(True)
+        self._window_overlay_manager.release("legacy-progress")
+        self.view.setEnabled(not self.operation_coordinator.is_blocking)
         self.progress_bar.finish()
         self.progress_label.setVisible(False)
         self.status_label.setVisible(True)
-        self.status_label.setText("Ready")
-
-    def _on_blocking_overlay_destroyed(self, *args):
-        self.global_dim_overlay = None
 
     def show_video_transition_overlay(self, message="Processing video..."):
         self.show_blocking_progress(message)
@@ -601,8 +765,8 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         )
 
     def _on_manual_save(self):
-        if hasattr(self, '_pwd_change_dialog') and self._pwd_change_dialog and self._pwd_change_dialog.is_changing():
-            self._handle_status_update("Cannot save during password change", "warning")
+        if self.operation_coordinator.is_busy:
+            self._handle_status_update("Cannot save during a database operation", "warning")
             return
         self.service.commit_changes()
         self._update_overlay_stats()
@@ -610,43 +774,133 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self._defer_modifier_sync()
 
     def _on_manual_vacuum(self):
-        if self._manual_vacuum_running:
+        token = self.operation_coordinator.begin(
+            "vacuum", "Vacuuming database...", blocking=True)
+        if token is None:
+            self._handle_status_update("Another database operation is active", "warning")
             return
-        if hasattr(self, '_pwd_change_dialog') and self._pwd_change_dialog and self._pwd_change_dialog.is_changing():
-            return
+        self._manual_vacuum_token = token
         self._manual_vacuum_running = True
 
         def on_start():
-            self._manual_vacuum_started.emit("Vacuuming database...")
-
-        def on_finish():
-            self._manual_vacuum_finished.emit("Ready")
+            self.operation_coordinator.update(token, "Vacuuming database...")
 
         def on_waiting_lock(attempt):
-            self._manual_vacuum_updated.emit(
-                f"Waiting for database lock... retry {attempt}/8"
+            message = f"Waiting for database lock... retry {attempt}/8"
+            self.operation_coordinator.update(token, message)
+
+        def on_success():
+            self._manual_vacuum_finished.emit(True, "Database optimized.")
+
+        def on_error(exc):
+            self._manual_vacuum_finished.emit(False, str(exc))
+
+        try:
+            self.service.vacuum_database(
+                on_start_vacuum=on_start,
+                on_waiting_lock=on_waiting_lock,
+                on_success=on_success,
+                on_error=on_error,
             )
+        except Exception as exc:
+            if self.operation_coordinator.owns(token):
+                self._manual_vacuum_finished.emit(False, str(exc))
 
-        self.service.vacuum_database(
-            on_start_vacuum=on_start,
-            on_finish_vacuum=on_finish,
-            on_waiting_lock=on_waiting_lock,
-        )
-
-    @Slot(str)
-    def _on_manual_vacuum_finished(self, message: str):
+    @Slot(bool, str)
+    def _on_manual_vacuum_finished(self, success, message):
         self._manual_vacuum_running = False
-        self.hide_blocking_progress()
-        self._update_overlay_stats()
-        self._handle_status_update(message)
-
-    def _on_create_backup(self):
-        success, message = BackupService.create(self.db_conn, self.service)
+        token = getattr(self, "_manual_vacuum_token", None)
+        self._manual_vacuum_token = None
+        if token is not None:
+            self.operation_coordinator.finish(token)
         if success:
             self._update_overlay_stats()
+            self._handle_status_update(message, "secure")
+        else:
+            self._handle_status_update(f"VACUUM failed: {message}", "error")
+
+    def _on_create_backup(self):
+        if getattr(self, "_backup_executor", None) is not None:
+            return
+        token = self.operation_coordinator.begin(
+            "backup", "Creating backup...", blocking=True)
+        if token is None:
+            self._handle_status_update("Another database operation is active", "warning")
+            return
+        db_path = getattr(self.db_conn, "db_path", None)
+        if not db_path or db_path == ":memory:":
+            self.operation_coordinator.finish(token)
+            self._handle_status_update("Backup requires a file database", "error")
+            return
+        try:
+            self.service.commit_changes()
+            self._backup_operation_token = token
+            self._backup_cancel_event = threading.Event()
+            progress_signal = self._backup_progress
+            finished_signal = self._backup_finished
+
+            def run_backup():
+                success, message = BackupService.create_from_path(
+                    db_path,
+                    cancel_check=self._backup_cancel_event.is_set,
+                    progress_callback=progress_signal.emit,
+                )
+                finished_signal.emit(success, message)
+
+            self._backup_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            self._backup_executor.submit(run_backup)
+        except Exception as exc:
+            self._backup_executor = None
+            self._backup_cancel_event = None
+            self._backup_operation_token = None
+            self.operation_coordinator.finish(token)
+            self._handle_status_update(f"Backup failed: {exc}", "error")
+            QMessageBox.critical(self, "Backup Error", str(exc))
+
+    @Slot(int, int, str)
+    def _on_backup_progress(self, current, total, message):
+        token = getattr(self, "_backup_operation_token", None)
+        if token is not None:
+            self.operation_coordinator.update(token, message)
+        if total > 0:
+            self._on_progress_updated(current / total, message)
+
+    @Slot(bool, str)
+    def _on_backup_finished(self, success, message):
+        executor = getattr(self, "_backup_executor", None)
+        self._backup_executor = None
+        self._backup_cancel_event = None
+        if executor is not None:
+            executor.shutdown(wait=False)
+        token = getattr(self, "_backup_operation_token", None)
+        self._backup_operation_token = None
+        if token is not None:
+            self.operation_coordinator.finish(token)
+        self._on_progress_finished("Backup created" if success else "Backup stopped")
+        if success:
+            self._update_overlay_stats()
+            self._handle_status_update("Backup created", "secure")
             QMessageBox.information(self, "Backup", message)
         else:
+            self._handle_status_update(f"Backup failed: {message}", "error")
             QMessageBox.critical(self, "Backup Error", message)
+
+    def _cancel_backup(self):
+        cancel_event = getattr(self, "_backup_cancel_event", None)
+        if cancel_event is None:
+            return False
+        cancel_event.set()
+        token = getattr(self, "_backup_operation_token", None)
+        if token is not None:
+            self.operation_coordinator.update(token, "Cancelling backup safely...")
+        return True
+
+    def _cancel_active_operation(self):
+        kind = self.operation_coordinator.active_kind
+        if kind == "backup":
+            self._cancel_backup()
+        elif kind == "initial_load":
+            self.canvas_controller.cancel_initial_load()
 
     def _on_add_text_node(self):
         self.canvas_controller.add_text_node()
@@ -669,29 +923,56 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self._defer_modifier_sync()
 
     def open_about(self):
-        overlay = DimOverlay(self)
-        overlay.show()
         dialog = AboutDialog(self)
-        center_on_parent_window(dialog, self)
-        dialog.exec()
-        overlay.fade_out(delete_on_finish=True)
+        self._exec_dimmed_dialog("about", dialog)
 
     def open_keybinds(self):
-        overlay = DimOverlay(self)
-        overlay.show()
         dialog = KeybindsDialog(self)
-        center_on_parent_window(dialog, self)
-        dialog.exec()
-        overlay.fade_out(delete_on_finish=True)
+        self._exec_dimmed_dialog("keybinds", dialog)
 
     def open_dashboard(self):
         self._update_overlay_stats()
-        overlay = DimOverlay(self)
-        overlay.show()
         dialog = DashboardDialog(self._dashboard_stats(), self)
+        self._exec_dimmed_dialog("dashboard", dialog)
+
+    def open_theme(self):
+        dialog = ThemeDialog(self, self._theme_manager)
         center_on_parent_window(dialog, self)
-        dialog.exec()
-        overlay.fade_out(delete_on_finish=True)
+        return dialog.exec()
+
+    def _exec_dimmed_dialog(self, owner, dialog):
+        self._window_overlay_manager.acquire(owner)
+        try:
+            center_on_parent_window(dialog, self)
+            return dialog.exec()
+        finally:
+            self._window_overlay_manager.release(owner)
+
+    def _sync_connection_style(self):
+        self.connection_model.set_connection_style(
+            self._theme_manager.settings.connection_style
+        )
+
+    def _apply_runtime_appearance(self, _settings=None):
+        self.setStyleSheet(Theme.Styles.get_main_window_qss())
+        if getattr(self, "title_bar", None):
+            self.title_bar.refresh_theme()
+        if hasattr(self, "view"):
+            self.view.setClearColor(QColor(Theme.Palette.BG_CANVAS))
+        SvgIcons.clear_cache()
+        for action, icon_name in getattr(self, "_theme_icon_actions", ()):
+            action.setIcon(SvgIcons.get_icon(icon_name))
+        if hasattr(self, "status_label"):
+            self.status_label.setStyleSheet(Theme.Styles.get_status_bar_qss())
+            self.progress_label.setStyleSheet(
+                Theme.Styles.get_status_bar_qss("accent")
+            )
+            self.coords_label.setStyleSheet(
+                Theme.Styles.get_status_bar_qss("coords")
+            )
+        if hasattr(self, "overlay"):
+            self.overlay.update()
+        self.update()
 
     def show_node_properties_overlay(self, metadata_lines):
         """Show themed node properties overlay over the canvas."""
@@ -708,36 +989,44 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         from ..widgets.dialogs.password_change_dialog import PasswordChangeDialog
         if hasattr(self, '_pwd_change_dialog') and self._pwd_change_dialog:
             return
-
-        self._pwd_change_dim = DimOverlay(self.view, block_input=True, auto_show=True)
-        self._pwd_change_dim.setStyleSheet("DimOverlay { background-color: rgba(0, 0, 0, 150); }")
-        self._pwd_change_dim.raise_()
-
-        self._pwd_change_dialog = PasswordChangeDialog(self)
-        self._pwd_change_dialog.passwordChangeRequested.connect(
-            self._execute_password_change
-        )
-        self._pwd_change_dialog.finished.connect(self._cleanup_pwd_change_dialog)
-        center_on_parent_window(self._pwd_change_dialog, self)
-        self._pwd_change_dialog.show()
+        token = self.operation_coordinator.begin(
+            "password_change", "Changing password...", blocking=True)
+        if token is None:
+            self._handle_status_update("Another database operation is active", "warning")
+            return
+        self._password_operation_token = token
+        self._window_overlay_manager.acquire("password")
+        try:
+            self._pwd_change_dialog = PasswordChangeDialog(self)
+            self._pwd_change_dialog.passwordChangeRequested.connect(
+                self._execute_password_change
+            )
+            self._pwd_change_dialog.cancelRequested.connect(
+                self._cancel_password_change
+            )
+            self._pwd_change_dialog.finished.connect(self._cleanup_pwd_change_dialog)
+            center_on_parent_window(self._pwd_change_dialog, self)
+            self._pwd_change_dialog.show()
+        except Exception:
+            self._window_overlay_manager.release("password")
+            self.operation_coordinator.finish(token)
+            raise
 
     def _execute_password_change(self, old_pwd, new_pwd, create_backup):
-        import concurrent.futures
         from ...services.password_change_service import PasswordChangeService
 
-        if create_backup:
-            success, message = BackupService.create(self.db_conn, self.service)
-            if not success:
-                if hasattr(self, '_pwd_change_dialog') and self._pwd_change_dialog:
-                    self._pwd_change_dialog.show_finished(False, f"Backup failed: {message}")
-                return
+        if getattr(self, "_password_change_executor", None) is not None:
+            return
 
         db_path = getattr(self.db_conn, 'db_path', None)
         if not db_path:
+            if self._pwd_change_dialog:
+                self._pwd_change_dialog.show_finished(False, "Database is not ready.")
             return
 
         progress_signal = self._password_change_progress
         finished_signal = self._password_change_finished
+        self._password_change_cancel_event = threading.Event()
 
         def on_progress(current, total, msg):
             progress_signal.emit(current, total, msg)
@@ -745,32 +1034,78 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         def on_finished(success, msg):
             finished_signal.emit(success, msg)
 
-        self._password_change_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        self._password_change_executor.submit(
-            PasswordChangeService.change_password,
-            db_path, old_pwd, new_pwd,
-            on_progress, on_finished,
-        )
+        try:
+            if create_backup:
+                self.service.commit_changes()
+
+            def run_password_change():
+                if create_backup:
+                    on_progress(0, 1, "Creating backup...")
+                    success, message = BackupService.create_from_path(
+                        db_path,
+                        cancel_check=self._password_change_cancel_event.is_set,
+                        progress_callback=on_progress,
+                    )
+                    if not success:
+                        on_finished(False, f"Backup failed: {message}")
+                        return
+                on_progress(0, 1, "Changing password...")
+                PasswordChangeService.change_password(
+                    db_path,
+                    old_pwd,
+                    new_pwd,
+                    on_progress,
+                    on_finished,
+                    cancel_check=self._password_change_cancel_event.is_set,
+                )
+
+            self._password_change_executor = (
+                concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            )
+            self._password_change_executor.submit(run_password_change)
+        except Exception as exc:
+            executor = getattr(self, "_password_change_executor", None)
+            if executor:
+                executor.shutdown(wait=False)
+            self._password_change_executor = None
+            self._on_password_change_finished(False, str(exc))
+
+    def _cancel_password_change(self):
+        cancel_event = getattr(self, "_password_change_cancel_event", None)
+        if cancel_event is not None:
+            cancel_event.set()
+        token = getattr(self, "_password_operation_token", None)
+        if token is not None:
+            self.operation_coordinator.update(token, "Cancelling safely...")
 
     @Slot(int, int, str)
     def _on_password_change_progress(self, current, total, msg):
         if hasattr(self, '_pwd_change_dialog') and self._pwd_change_dialog:
             self._pwd_change_dialog.set_changing(True, msg)
+        token = getattr(self, "_password_operation_token", None)
+        if token is not None:
+            self.operation_coordinator.update(token, msg)
 
     @Slot(bool, str)
     def _on_password_change_finished(self, success, msg):
         if hasattr(self, '_pwd_change_dialog') and self._pwd_change_dialog:
             self._pwd_change_dialog.show_finished(success, msg)
+        status_type = "secure" if success else "error"
+        prefix = "Password changed" if success else "Password change failed"
+        self._handle_status_update(f"{prefix}: {msg}", status_type)
         executor = getattr(self, "_password_change_executor", None)
         if executor:
             executor.shutdown(wait=False)
             self._password_change_executor = None
+        self._password_change_cancel_event = None
 
     def _cleanup_pwd_change_dialog(self, *args):
         self._pwd_change_dialog = None
-        if hasattr(self, "_pwd_change_dim") and self._pwd_change_dim:
-            self._pwd_change_dim.fade_out()
-            self._pwd_change_dim = None
+        self._window_overlay_manager.release("password")
+        token = getattr(self, "_password_operation_token", None)
+        self._password_operation_token = None
+        if token is not None:
+            self.operation_coordinator.finish(token)
 
     # ── Coords ──────────────────────────────────────────────────────
 
@@ -799,10 +1134,12 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         """Return True for shortcuts we want to handle in Python, not QML."""
         if not self.isActiveWindow():
             return False
+        key = event.key()
+        if key == Qt.Key.Key_Escape and self._is_qml_tag_picker_open():
+            return True
         editor_open = self._is_qml_text_editor_open()
         if not editor_open:
             return False
-        key = event.key()
         modifiers = event.modifiers()
         is_s_key = key == Qt.Key.Key_S or event.nativeVirtualKey() == 0x53
         if is_s_key and modifiers & Qt.KeyboardModifier.ControlModifier:
@@ -811,6 +1148,8 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             return True
         if key == Qt.Key.Key_Escape:
             return True
+        if self._is_search_shortcut(event):
+            return True
         if self._is_app_shortcut_while_editor_open(event):
             return True
         return False
@@ -818,14 +1157,28 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
     def _handle_global_key_press(self, event):
         if not self.isActiveWindow() or QApplication.activeModalWidget() is not None:
             return False
+        if self.operation_coordinator.is_busy and self._canvas_has_keyboard_focus():
+            return True
 
         key = event.key()
         modifiers = event.modifiers()
 
+        if key == Qt.Key.Key_Escape and self._is_qml_tag_picker_open():
+            self._invoke_qml_root("closeTagPicker")
+            return True
+
         editor_open = self._is_qml_text_editor_open()
         if editor_open:
+            if self._is_qml_search_panel_open() and key == Qt.Key.Key_Escape:
+                self._invoke_qml_root("closeSearchPanel")
+                return True
+
             if key == Qt.Key.Key_Escape:
                 self._invoke_qml_root("cancelEditor")
+                return True
+
+            if self._is_search_shortcut(event):
+                self.open_search()
                 return True
 
             is_s_key = key == Qt.Key.Key_S or event.nativeVirtualKey() == 0x53
@@ -948,9 +1301,25 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         native = event.nativeVirtualKey()
         is_n_key = key == Qt.Key.Key_N or native == 0x4E
         is_m_key = key == Qt.Key.Key_M or native == 0x4D
-        is_f_key = key == Qt.Key.Key_F or native == 0x46
 
-        return is_n_key or is_f_key or is_m_key
+        return is_n_key or is_m_key
+
+    @staticmethod
+    def _is_search_shortcut(event):
+        modifiers = event.modifiers()
+        if not (modifiers & Qt.KeyboardModifier.ControlModifier):
+            return False
+        if modifiers & (
+            Qt.KeyboardModifier.ShiftModifier
+            | Qt.KeyboardModifier.AltModifier
+            | Qt.KeyboardModifier.MetaModifier
+        ):
+            return False
+        try:
+            native = event.nativeVirtualKey()
+        except AttributeError:
+            native = 0
+        return event.key() == Qt.Key.Key_F or native == 0x46
 
     def _canvas_has_keyboard_focus(self):
         if not hasattr(self, "view"):
@@ -965,6 +1334,12 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             return False
         root = self.view.rootObject()
         return bool(root and root.property("isTextEditorOpen"))
+
+    def _is_qml_tag_picker_open(self):
+        if not hasattr(self, "view"):
+            return False
+        root = self.view.rootObject()
+        return bool(root and root.property("isTagPickerOpen"))
 
     def _is_qml_search_panel_open(self):
         if not hasattr(self, "view"):
@@ -1000,6 +1375,8 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
 
     def _handle_global_modifier_press(self, event):
         if not self.isActiveWindow() or QApplication.activeModalWidget() is not None:
+            return
+        if self.operation_coordinator.is_busy:
             return
         if self._is_qml_text_editor_open():
             return
@@ -1074,11 +1451,23 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
                 animate=False,
             )
             self.overlay.raise_()
-        if hasattr(self, "progress_bar"):
-            sb_y = self.statusBar().y()
-            self.progress_bar.setFixedWidth(self.width())
-            self.progress_bar.move(0, sb_y - self.progress_bar.height())
+        self._layout_progress_bar()
+
+    def _raise_progress_bar(self):
+        if hasattr(self, "progress_bar") and self.progress_bar.isVisible():
             self.progress_bar.raise_()
+
+    def _layout_progress_bar(self):
+        if not hasattr(self, "progress_bar"):
+            return
+        sb_y = self.statusBar().y()
+        self.progress_bar.setGeometry(
+            0,
+            sb_y - self.progress_bar.height(),
+            self.width(),
+            self.progress_bar.height(),
+        )
+        self._raise_progress_bar()
 
     def changeEvent(self, event):
         super().changeEvent(event)
@@ -1095,7 +1484,29 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         super().showEvent(event)
         if self.is_windows:
             self._apply_native_dwm_attributes()
+        self._connect_frame_clock_screen()
         self._schedule_qml_render_recovery()
+
+    def _connect_frame_clock_screen(self):
+        handle = self.windowHandle()
+        previous = getattr(self, "_frame_clock_window_handle", None)
+        if handle is not None and handle is not previous:
+            if previous is not None:
+                try:
+                    previous.screenChanged.disconnect(self._sync_frame_clock_screen)
+                except (RuntimeError, TypeError):
+                    pass
+            handle.screenChanged.connect(self._sync_frame_clock_screen)
+            self._frame_clock_window_handle = handle
+        self._sync_frame_clock_screen(handle.screen() if handle is not None else None)
+
+    def _sync_frame_clock_screen(self, screen=None):
+        frame_clock = getattr(self, "frame_clock", None)
+        if frame_clock is None:
+            return
+        if screen is None:
+            screen = self.screen()
+        frame_clock.set_screen(screen)
 
     def _sync_window_margins(self):
         self.setContentsMargins(0, 0, 0, 0)
@@ -1105,9 +1516,9 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             return
         QTimer.singleShot(0, self._recover_qml_render)
         QTimer.singleShot(40, self._recover_qml_render)
-        QTimer.singleShot(140, lambda: self._recover_qml_render(release_resources=True))
+        QTimer.singleShot(140, self._recover_qml_render)
 
-    def _recover_qml_render(self, release_resources=False):
+    def _recover_qml_render(self):
         if not hasattr(self, "view"):
             return
         if self.windowState() & Qt.WindowState.WindowMinimized:
@@ -1116,8 +1527,6 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         if quick_window:
             quick_window.setPersistentGraphics(True)
             quick_window.setPersistentSceneGraph(True)
-            if release_resources:
-                quick_window.releaseResources()
         root = self.view.rootObject()
         if root is not None:
             root.update()
@@ -1126,28 +1535,63 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
     # ── Settings Persistence ────────────────────────────────────────
 
     def read_settings(self):
-        settings = QSettings("ZeroXware", "KryptoNote")
-        geom = settings.value("geometry")
-        if geom:
-            self.restoreGeometry(geom)
-            if self.width() <= 800:
-                return False
-            state = settings.value("windowState")
-            if state:
-                self.restoreState(state)
-            return True
-        return False
+        return self._window_state_service.restore(self)
 
     def write_settings(self):
-        settings = QSettings("ZeroXware", "KryptoNote")
-        settings.setValue("geometry", self.saveGeometry())
-        settings.setValue("windowState", self.saveState())
+        self._window_state_service.save(self)
+
+    def _close_core_resources(self, wait=True):
+        repo = getattr(self, "repo", None)
+        if repo is not None:
+            try:
+                repo.close(wait=wait)
+            except Exception:
+                pass
+        db_conn = getattr(self, "db_conn", None)
+        if db_conn is not None:
+            try:
+                close = getattr(db_conn, "close", None)
+                if close is not None:
+                    close()
+                else:
+                    db_conn.conn.close()
+            except Exception:
+                pass
 
     def closeEvent(self, event):
-        if hasattr(self, '_pwd_change_dialog') and self._pwd_change_dialog:
-            if self._pwd_change_dialog.is_changing():
+        operation_kind = self.operation_coordinator.active_kind
+        if operation_kind == "initial_load":
+            self.canvas_controller.cancel_initial_load()
+            operation_kind = self.operation_coordinator.active_kind
+        if self.operation_coordinator.is_busy and operation_kind != "video_import":
+            event.ignore()
+            message = self.operation_coordinator.active_message or operation_kind
+            self._handle_status_update(f"Cannot close: {message}", "warning")
+            return
+
+        canvas_controller = getattr(self, "canvas_controller", None)
+        if (
+            canvas_controller is not None
+            and canvas_controller.has_active_synchronous_import()
+        ):
+            event.ignore()
+            self._handle_status_update("Cannot close: image import in progress", "warning")
+            return
+
+        if (
+            canvas_controller is not None
+            and canvas_controller.has_active_background_jobs()
+        ):
+            self._handle_status_update("Stopping media import...", "warning")
+            QApplication.processEvents()
+            if not canvas_controller.shutdown_background_jobs():
                 event.ignore()
-                self._handle_status_update("Cannot close: password change in progress", "warning")
+                QMessageBox.warning(
+                    self,
+                    "Import Still Running",
+                    "The current media chunk is still being processed. "
+                    "Wait a moment and close the application again.",
+                )
                 return
 
         self.write_settings()
@@ -1156,14 +1600,5 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
                 self.service.commit_changes()
             except Exception as e:
                 print(f"Error saving changes on close: {e}")
-        if hasattr(self, "repo"):
-            try:
-                self.repo.close()
-            except Exception:
-                pass
-        if hasattr(self, "db_conn"):
-            try:
-                self.db_conn.conn.close()
-            except Exception:
-                pass
+        self._close_core_resources(wait=True)
         super().closeEvent(event)

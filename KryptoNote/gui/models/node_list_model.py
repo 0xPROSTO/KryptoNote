@@ -1,4 +1,3 @@
-
 from enum import IntEnum
 from datetime import datetime
 
@@ -35,6 +34,7 @@ class NodeRoles(IntEnum):
     CreatedAtRole = Qt.ItemDataRole.UserRole + 16
     UpdatedAtRole = Qt.ItemDataRole.UserRole + 17
     MetaSummaryRole = Qt.ItemDataRole.UserRole + 18
+    TagsRole = Qt.ItemDataRole.UserRole + 19
 
 
 class NodeListModel(QAbstractListModel):
@@ -77,11 +77,12 @@ class NodeListModel(QAbstractListModel):
             NodeRoles.CreatedAtRole: "created_at_display",
             NodeRoles.UpdatedAtRole: "updated_at_display",
             NodeRoles.MetaSummaryRole: "meta_summary",
+            NodeRoles.TagsRole: "tags",
         }
 
         key = role_map.get(role)
         if key == "content":
-            return process_markdown_for_pyside(node.get("content", ""))
+            return node.get("_canvas_preview", "")
         if key is not None:
             return node.get(key)
         return None
@@ -111,6 +112,8 @@ class NodeListModel(QAbstractListModel):
             return False
 
         node[key] = value
+        if key in ("title", "content"):
+            self._refresh_metadata_fields(node)
         self.dataChanged.emit(index, index, [role])
         return True
 
@@ -134,6 +137,7 @@ class NodeListModel(QAbstractListModel):
             NodeRoles.CreatedAtRole: QByteArray(b"nodeCreatedAt"),
             NodeRoles.UpdatedAtRole: QByteArray(b"nodeUpdatedAt"),
             NodeRoles.MetaSummaryRole: QByteArray(b"nodeMetaSummary"),
+            NodeRoles.TagsRole: QByteArray(b"nodeTags"),
         }
 
     def flags(self, index):
@@ -145,51 +149,74 @@ class NodeListModel(QAbstractListModel):
     # Data Loading
 
     def load_from_service(self, service):
-        """
-        Bulk-load all nodes from NodeService.
-        Called once after DB decryption.
-        """
+        """Compatibility path for callers that still need synchronous loading."""
+        tags_by_item = service.get_item_tags_map()
+        self.begin_incremental_load()
+        if hasattr(service, "iter_item_batches"):
+            batches = service.iter_item_batches(200, include_thumbnails=True)
+        else:
+            batches = (service.get_all_items(),)
+        for items in batches:
+            self.append_item_batch(items, tags_by_item)
+
+    def begin_incremental_load(self):
         self.beginResetModel()
         self._nodes.clear()
         self._id_to_index.clear()
         self._selected_ids.clear()
+        self.endResetModel()
 
-        items = service.get_all_items()
+    def append_item_batch(self, items, tags_by_item=None):
+        items = list(items)
+        if not items:
+            return
+        tags_by_item = tags_by_item or {}
+        first_row = len(self._nodes)
+        last_row = first_row + len(items) - 1
+        self.beginInsertRows(QModelIndex(), first_row, last_row)
         for item in items:
-            thumb_image = None
-            if item.thumbnail:
-                thumb_image = QImage.fromData(item.thumbnail)
-
-            node_data = {
-                "id": item.id,
-                "type": item.type,
-                "x": float(item.x),
-                "y": float(item.y),
-                "width": float(item.width) if item.width > 0 else 200.0,
-                "height": float(item.height) if item.height > 0 else 150.0,
-                "title": item.title or "",
-                "content": item.text_content or "",
-                "thumbnail": thumb_image,
-                "is_selected": False,
-                "is_hovered": False,
-                "is_deleting": False,
-                "auto_fit_pending": False,
-                "draft": False,
-                "title_size": item.title_size,
-                "text_size": item.text_size,
-                "media_type": item.type if item.type in ("image", "video") else "",
-                "total_size": int(item.total_size or 0),
-                "created_at": item.created_at or "",
-                "updated_at": item.updated_at or item.created_at or "",
-                "media_width": int(item.media_width or 0),
-                "media_height": int(item.media_height or 0),
-                "media_duration": float(item.media_duration or 0.0),
-            }
-            self._refresh_metadata_fields(node_data)
+            node_data = self._node_data_from_item(item, tags_by_item)
             self._id_to_index[item.id] = len(self._nodes)
             self._nodes.append(node_data)
+        self.endInsertRows()
 
-        self.endResetModel()
+    def _node_data_from_item(self, item, tags_by_item):
+        thumb_image = None
+        if item.thumbnail:
+            image = QImage.fromData(item.thumbnail)
+            if not image.isNull():
+                thumb_image = image
+        node_data = {
+            "id": item.id,
+            "type": item.type,
+            "x": float(item.x),
+            "y": float(item.y),
+            "width": float(item.width) if item.width > 0 else 200.0,
+            "height": float(item.height) if item.height > 0 else 150.0,
+            "title": item.title or "",
+            "content": item.text_content or "",
+            "thumbnail": thumb_image,
+            "is_selected": False,
+            "is_hovered": False,
+            "is_deleting": False,
+            "auto_fit_pending": False,
+            "draft": False,
+            "title_size": item.title_size,
+            "text_size": item.text_size,
+            "media_type": item.type if item.type in ("image", "video") else "",
+            "total_size": int(item.total_size or 0),
+            "created_at": item.created_at or "",
+            "updated_at": item.updated_at or item.created_at or "",
+            "media_width": int(item.media_width or 0),
+            "media_height": int(item.media_height or 0),
+            "media_duration": float(item.media_duration or 0.0),
+            "tags": [
+                {"id": tag.id, "name": tag.name, "color": tag.color}
+                for tag in tags_by_item.get(item.id, [])
+            ],
+        }
+        self._refresh_metadata_fields(node_data)
+        return node_data
 
     # CRUD Operations
 
@@ -226,6 +253,7 @@ class NodeListModel(QAbstractListModel):
             "media_width": int(media_width or 0),
             "media_height": int(media_height or 0),
             "media_duration": float(media_duration or 0.0),
+            "tags": [],
         }
         self._refresh_metadata_fields(node_data)
 
@@ -240,6 +268,7 @@ class NodeListModel(QAbstractListModel):
         if idx is None:
             return
 
+        self._selected_ids.discard(node_id)
         self.beginRemoveRows(QModelIndex(), idx, idx)
         self._nodes.pop(idx)
         del self._id_to_index[node_id]
@@ -545,25 +574,168 @@ class NodeListModel(QAbstractListModel):
         return None
 
     @Slot(str, result=list)
-    def search_nodes(self, query):
-        q = (query or "").strip().lower()
-        if not q:
+    @Slot(str, int, int, str, str, result=list)
+    @Slot(str, int, int, str, str, str, result=list)
+    def search_nodes(
+            self, query, min_chars=0, max_chars=0,
+            created_after="", created_before="", sort_key="relevance"
+    ):
+        tokens = (query or "").strip().casefold().split()
+        tag_names = {
+            token[1:] for token in tokens
+            if token.startswith("@") and len(token) > 1
+        }
+        text_query = " ".join(
+            token for token in tokens if not token.startswith("@")
+        )
+        matching_ids = {
+            int(tag["id"])
+            for node in self._nodes
+            for tag in node.get("tags", [])
+            if tag["name"].casefold() in tag_names
+        }
+        if tag_names and len(matching_ids) < len(tag_names):
+            return []
+        return self.search_nodes_by_filters(
+            text_query, list(matching_ids), min_chars, max_chars,
+            created_after, created_before, sort_key,
+        )
+
+    @Slot(str, list, int, int, str, str, str, result=list)
+    @Slot(str, list, int, int, str, str, str, int, result=list)
+    def search_nodes_by_filters(
+            self, text, tag_ids, min_chars=0, max_chars=0,
+            created_after="", created_before="", sort_key="relevance",
+            limit=200,
+    ):
+        text_query = (text or "").strip().casefold()
+        tag_filters = {int(tag_id) for tag_id in (tag_ids or [])}
+        min_chars = max(0, int(min_chars or 0))
+        max_chars = max(0, int(max_chars or 0))
+        limit = max(1, min(int(limit or 200), 1000))
+        after = self._parse_filter_date(created_after, end_of_day=False)
+        before = self._parse_filter_date(created_before, end_of_day=True)
+
+        if not any((text_query, tag_filters, min_chars, max_chars, after, before)):
             return []
 
-        results = []
+        matches = []
+        needs_date = after is not None or before is not None
+        sortable_keys = {"newest", "oldest", "chars_desc", "chars_asc", "title"}
+        requires_full_scan = sort_key in sortable_keys
         for node in self._nodes:
-            title = node.get("title", "")
-            content = node.get("content", "")
-            if q not in title.lower() and q not in content.lower():
+            if text_query and text_query not in node.get("_search_text", ""):
                 continue
+            if tag_filters:
+                node_tags = {int(tag["id"]) for tag in node.get("tags", [])}
+                if not tag_filters.issubset(node_tags):
+                    continue
+            if min_chars or max_chars:
+                char_count = node.get("_char_count", 0)
+                if min_chars and char_count < min_chars:
+                    continue
+                if max_chars and char_count > max_chars:
+                    continue
+            if needs_date:
+                try:
+                    created_at = datetime.fromisoformat(node.get("created_at", ""))
+                except (TypeError, ValueError):
+                    created_at = None
+                if after and (not created_at or created_at < after):
+                    continue
+                if before and (not created_at or created_at > before):
+                    continue
+            matches.append(node)
+            if not requires_full_scan and len(matches) >= limit:
+                break
+
+        sorters = {
+            "newest": lambda node: node.get("created_at", ""),
+            "oldest": lambda node: node.get("created_at", ""),
+            "chars_desc": lambda node: node.get("_char_count", 0),
+            "chars_asc": lambda node: node.get("_char_count", 0),
+            "title": lambda node: node.get("title", "").casefold(),
+        }
+        if sort_key in sorters:
+            matches.sort(
+                key=sorters[sort_key],
+                reverse=sort_key in ("newest", "chars_desc"),
+            )
+
+        results = []
+        for node in matches[:limit]:
+            char_count = node.get("_char_count", 0)
+            tag_summary = " ".join(
+                "@" + tag["name"] for tag in node.get("tags", [])
+            )
+            meta_parts = [
+                node.get("created_at_display", "-"),
+                f"{char_count} chars",
+                tag_summary,
+            ]
             results.append({
                 "nodeId": node["id"],
                 "type": node["type"],
-                "title": title,
-                "content": process_markdown_for_pyside(content),
-                "meta": node.get("meta_summary", ""),
+                "title": node.get("title", ""),
+                "preview": self._search_preview(node, text_query),
+                "meta": "  ·  ".join(
+                    part for part in meta_parts if part and part != "-"
+                ),
+                "charCount": char_count,
+                "createdSort": node.get("created_at", ""),
             })
         return results
+
+    @staticmethod
+    def _search_preview(node, text_query, limit=400):
+        content = node.get("content", "") or ""
+        title_offset = len(node.get("title", "") or "") + 1
+        folded = node.get("_search_text", "")
+        match_index = (
+            folded.find(text_query, title_offset) - title_offset
+            if text_query else 0
+        )
+        if match_index <= 120:
+            return node.get("_search_preview_default", "")[:limit]
+        start = match_index - 120
+        end = min(len(content), start + limit)
+        excerpt = "…" + content[start:end]
+        if end < len(content):
+            excerpt += "…"
+        return process_markdown_for_pyside(excerpt)[:limit]
+
+    @staticmethod
+    def _parse_filter_date(value, end_of_day=False):
+        value = (value or "").strip()
+        if not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(value)
+            if len(value) == 10 and end_of_day:
+                return parsed.replace(hour=23, minute=59, second=59)
+            return parsed
+        except ValueError:
+            return None
+
+    def set_node_tags(self, node_id, tags):
+        idx = self._id_to_index.get(node_id)
+        if idx is None:
+            return
+        self._nodes[idx]["tags"] = list(tags)
+        model_idx = self.index(idx, 0)
+        self.dataChanged.emit(model_idx, model_idx, [NodeRoles.TagsRole])
+
+    def update_tag_definition(self, tag_id, name, color):
+        for row, node in enumerate(self._nodes):
+            changed = False
+            for tag in node.get("tags", []):
+                if tag["id"] == tag_id:
+                    tag["name"] = name
+                    tag["color"] = color
+                    changed = True
+            if changed:
+                model_idx = self.index(row, 0)
+                self.dataChanged.emit(model_idx, model_idx, [NodeRoles.TagsRole])
 
     @Slot(int, result=list)
     def get_node_metadata_lines(self, node_id):
@@ -586,11 +758,22 @@ class NodeListModel(QAbstractListModel):
                 lines.append(f"Resolution: {node['media_width']} x {node['media_height']}")
             if node.get("media_duration"):
                 lines.append(f"Duration: {self._format_duration(node['media_duration'])}")
-        elif node.get("type") == "text":
+        if node.get("tags"):
+            lines.append("Tags: " + ", ".join("@" + tag["name"] for tag in node["tags"]))
+        if node.get("type") == "text":
             lines.append(f"Characters: {len(node.get('content', ''))}")
         return lines
 
     def _refresh_metadata_fields(self, node):
+        title = node.get("title") or ""
+        content = node.get("content") or ""
+        node["_char_count"] = len(title) + len(content)
+        node["_search_text"] = f"{title}\n{content}".casefold()
+        canvas_excerpt = content[:4000]
+        if len(content) > 4000:
+            canvas_excerpt += "\n…"
+        node["_canvas_preview"] = process_markdown_for_pyside(canvas_excerpt)
+        node["_search_preview_default"] = node["_canvas_preview"][:400]
         node["content_size"] = self._calculate_content_size(node)
         node["created_at_display"] = self._format_datetime(node.get("created_at"))
         node["updated_at_display"] = self._format_datetime(node.get("updated_at"))

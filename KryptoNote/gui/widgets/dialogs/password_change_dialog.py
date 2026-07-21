@@ -1,4 +1,4 @@
-from PySide6.QtCore import Qt, QPoint, Signal
+from PySide6.QtCore import QPoint, QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -11,12 +11,14 @@ from PySide6.QtWidgets import (
 )
 
 from KryptoNote.gui.theme import Theme
+from KryptoNote.gui.theme.icons import SvgIcons
 from KryptoNote.gui.theme.palette import Palette
 from KryptoNote.gui.theme.style_factory import StyleFactory
 
 
 class PasswordChangeDialog(QDialog):
     passwordChangeRequested = Signal(str, str, bool)
+    cancelRequested = Signal()
 
     MIN_PWD = 1
     MAX_PWD = 512
@@ -32,6 +34,7 @@ class PasswordChangeDialog(QDialog):
         self._dragging = False
         self._drag_start_pos = QPoint()
         self._changing = False
+        self._cancel_requested = False
 
         self._init_ui()
 
@@ -49,7 +52,11 @@ class PasswordChangeDialog(QDialog):
         header = QHBoxLayout()
         header.setContentsMargins(0, 5, 0, 0)
         header.addStretch()
-        self.btn_close = QPushButton("×")
+        self.btn_close = QPushButton()
+        self.btn_close.setIcon(SvgIcons.get_icon("close"))
+        self.btn_close.setIconSize(QSize(18, 18))
+        self.btn_close.setToolTip("Close")
+        self.btn_close.setAccessibleName("Close")
         self.btn_close.setObjectName("btn_close")
         self.btn_close.setFixedSize(40, 40)
         self.btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -80,6 +87,8 @@ class PasswordChangeDialog(QDialog):
         layout.addWidget(self.confirm_pwd)
 
         self.backup_check = QCheckBox("Create backup before changing password")
+        self.backup_check.setIcon(SvgIcons.get_icon("backup"))
+        self.backup_check.setIconSize(QSize(16, 16))
         self.backup_check.setChecked(True)
         layout.addWidget(self.backup_check)
 
@@ -96,9 +105,13 @@ class PasswordChangeDialog(QDialog):
         buttons = QHBoxLayout()
         buttons.setSpacing(8)
         self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.setIcon(SvgIcons.get_icon("close"))
+        self.cancel_btn.setIconSize(QSize(16, 16))
         self.cancel_btn.setObjectName("btn_cancel")
         self.cancel_btn.clicked.connect(self.reject)
         self.change_btn = QPushButton("Change")
+        self.change_btn.setIcon(SvgIcons.get_icon("lock"))
+        self.change_btn.setIconSize(QSize(16, 16))
         self.change_btn.setObjectName("btn_submit")
         self.change_btn.clicked.connect(self._submit)
         buttons.addWidget(self.cancel_btn, 1)
@@ -138,16 +151,19 @@ class PasswordChangeDialog(QDialog):
 
     def set_changing(self, changing, message=""):
         self._changing = changing
+        self._cancel_requested = False
         for widget in (
             self.current_pwd,
             self.new_pwd,
             self.confirm_pwd,
             self.backup_check,
-            self.cancel_btn,
             self.change_btn,
-            self.btn_close,
         ):
             widget.setEnabled(not changing)
+        self.cancel_btn.setEnabled(True)
+        self.btn_close.setEnabled(True)
+        if not changing:
+            self.cancel_btn.setText("Cancel")
         if message:
             self.status_label.setText(message)
             self.status_label.setStyleSheet(f"color: {Palette.TEXT_DIM}; font-size: 12px;")
@@ -171,11 +187,19 @@ class PasswordChangeDialog(QDialog):
 
     def reject(self):
         if self._changing:
+            if not self._cancel_requested:
+                self._cancel_requested = True
+                self.cancel_btn.setEnabled(False)
+                self.btn_close.setEnabled(False)
+                self.status_label.setText("Cancelling safely...")
+                self.status_label.setVisible(True)
+                self.cancelRequested.emit()
             return
         super().reject()
 
     def closeEvent(self, event):
         if self._changing:
+            self.reject()
             event.ignore()
             return
         super().closeEvent(event)

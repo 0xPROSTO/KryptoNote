@@ -24,6 +24,13 @@ class NodeItemDTO:
     media_duration: float = 0.0
 
 
+
+@dataclass
+class TagDTO:
+    id: int
+    name: str
+    color: str
+
 @dataclass
 class ConnectionDTO:
     id: int

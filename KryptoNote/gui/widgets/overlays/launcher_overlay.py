@@ -1,5 +1,13 @@
 from PySide6.QtCore import Qt, Signal, QPoint, QSequentialAnimationGroup, QPropertyAnimation
-from PySide6.QtWidgets import QFrame, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton
+from PySide6.QtWidgets import (
+    QFrame,
+    QVBoxLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QSizePolicy,
+)
 
 from KryptoNote.gui.theme.palette import Palette
 from KryptoNote.gui.widgets.overlays.dim_overlay import DimOverlay
@@ -16,8 +24,12 @@ class LauncherOverlay(DimOverlay):
 
     MIN_INPUT_LEN = 1
     MAX_INPUT_LEN = 512
+    CARD_WIDTH = 420
+    PROJECT_NAME_WRAP = 28
 
-    _CARD_QSS = f"""
+    @staticmethod
+    def _card_qss():
+        return f"""
         QFrame#overlay_card {{
             background-color: {Palette.BG_PANEL};
             border: 1px solid {Palette.BORDER_DEFAULT};
@@ -80,7 +92,7 @@ class LauncherOverlay(DimOverlay):
         }}
         QPushButton#btn_submit:disabled {{
             background-color: {Palette.BG_NODE};
-            color: {Palette.TEXT_MUTED};
+            color: {Palette.TEXT_DISABLED};
             border-color: {Palette.BORDER_DEFAULT};
         }}
         QPushButton#btn_danger {{
@@ -101,7 +113,7 @@ class LauncherOverlay(DimOverlay):
             background-color: {Palette.BTN_CANCEL_HOVER};
             border-color: {Palette.DANGER_HOVER};
         }}
-    """
+        """
 
     def __init__(self, parent=None, auto_show=False):
         super().__init__(parent, block_input=True, auto_show=auto_show)
@@ -110,17 +122,17 @@ class LauncherOverlay(DimOverlay):
         self._shake_anim = None
 
         self.setObjectName("launcher_overlay_root")
-        self.setStyleSheet("""
-            LauncherOverlay#launcher_overlay_root {
-                background-color: rgba(0, 0, 0, 200);
-            }
+        self.setStyleSheet(f"""
+            LauncherOverlay#launcher_overlay_root {{
+                background-color: {Palette.overlay_rgba(200)};
+            }}
         """)
 
         # ── Card ──
         card = QFrame(self)
         card.setObjectName("overlay_card")
-        card.setFixedWidth(360)
-        card.setStyleSheet(self._CARD_QSS)
+        card.setFixedWidth(self.CARD_WIDTH)
+        card.setStyleSheet(self._card_qss())
         self._card = card
 
         layout = QVBoxLayout(card)
@@ -135,6 +147,11 @@ class LauncherOverlay(DimOverlay):
         self._subtitle_label = QLabel()
         self._subtitle_label.setObjectName("overlay_subtitle")
         self._subtitle_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._subtitle_label.setWordWrap(True)
+        self._subtitle_label.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Preferred,
+        )
         layout.addWidget(self._subtitle_label)
 
         self._delete_warn_label = QLabel()
@@ -168,18 +185,22 @@ class LauncherOverlay(DimOverlay):
         self._btn_cancel = QPushButton("Cancel")
         self._btn_cancel.setObjectName("btn_cancel")
         self._btn_cancel.setMinimumHeight(36)
+        self._btn_cancel.setAutoDefault(False)
+        self._btn_cancel.setDefault(False)
         self._btn_cancel.clicked.connect(self._on_cancel)
 
         self._btn_submit = QPushButton("Confirm")
         self._btn_submit.setObjectName("btn_submit")
         self._btn_submit.setMinimumHeight(36)
+        self._btn_submit.setAutoDefault(False)
+        self._btn_submit.setDefault(False)
         self._btn_submit.clicked.connect(self._on_submit)
 
         btn_layout.addWidget(self._btn_cancel, 1)
         btn_layout.addWidget(self._btn_submit, 2)
         layout.addLayout(btn_layout)
 
-    def show_message(self, title, message):
+    def show_message(self, title, message, cancellable=False):
         self._mode = "message"
         self._title_label.setText(title)
         self._subtitle_label.setText(message)
@@ -187,7 +208,8 @@ class LauncherOverlay(DimOverlay):
         self._delete_warn_label.setVisible(False)
         self._input_edit.setVisible(False)
         self._error_label.setVisible(False)
-        self._btn_cancel.setVisible(False)
+        self._btn_cancel.setVisible(bool(cancellable))
+        self._btn_cancel.setText("Cancel")
         self._btn_submit.setVisible(False)
         self._card.adjustSize()
 
@@ -196,32 +218,42 @@ class LauncherOverlay(DimOverlay):
         self._center_card()
         self.fade_in()
 
+    def update_message(self, title, message):
+        self._title_label.setText(title)
+        self._subtitle_label.setText(message)
+        self._subtitle_label.setWordWrap(True)
+        self._card.adjustSize()
+        self._center_card()
+
     def show_overlay(self, mode, db_name):
         self._mode = mode
         self._db_name = db_name
+        display_name = self._wrappable_project_name(db_name)
         self._delete_warn_label.setVisible(False)
         self._input_edit.setVisible(True)
         self._btn_cancel.setVisible(True)
         self._btn_submit.setVisible(True)
-        self._subtitle_label.setWordWrap(False)
+        self._subtitle_label.setWordWrap(True)
 
         if mode == "create":
             self._title_label.setText("Create Password")
-            self._subtitle_label.setText(f"Set a password for '{db_name}'")
+            self._subtitle_label.setText(f"Set a password for '{display_name}'")
             self._input_edit.setEchoMode(QLineEdit.EchoMode.Password)
             self._input_edit.setPlaceholderText("Password...")
             self._btn_submit.setObjectName("btn_submit")
             self._btn_submit.setText("Confirm")
         elif mode == "confirm":
             self._title_label.setText("Confirm Password")
-            self._subtitle_label.setText(f"Re-enter password for '{db_name}'")
+            self._subtitle_label.setText(f"Re-enter password for '{display_name}'")
             self._input_edit.setEchoMode(QLineEdit.EchoMode.Password)
             self._input_edit.setPlaceholderText("Password...")
             self._btn_submit.setObjectName("btn_submit")
             self._btn_submit.setText("Confirm")
         elif mode == "delete":
             self._title_label.setText("Delete Project")
-            self._subtitle_label.setText(f"Type '{db_name}' to confirm deletion.")
+            self._subtitle_label.setText(
+                f"Type '{display_name}' to confirm deletion."
+            )
             self._delete_warn_label.setText("This action cannot be undone!")
             self._delete_warn_label.setVisible(True)
             self._input_edit.setEchoMode(QLineEdit.EchoMode.Normal)
@@ -230,13 +262,15 @@ class LauncherOverlay(DimOverlay):
             self._btn_submit.setText("Delete")
         else:
             self._title_label.setText("Enter Password")
-            self._subtitle_label.setText(f"Unlock '{db_name}'")
+            self._subtitle_label.setText(f"Unlock '{display_name}'")
             self._input_edit.setEchoMode(QLineEdit.EchoMode.Password)
             self._input_edit.setPlaceholderText("Password...")
             self._btn_submit.setObjectName("btn_submit")
             self._btn_submit.setText("Confirm")
 
-        self._card.setStyleSheet(self._CARD_QSS)  # Re-apply for btn_danger vs btn_submit changes
+        self._card.setStyleSheet(self._card_qss())
+        self._btn_cancel.setDefault(False)
+        self._btn_submit.setDefault(False)
         self._input_edit.clear()
         self._error_label.setVisible(False)
         self._validate()
@@ -246,6 +280,14 @@ class LauncherOverlay(DimOverlay):
         self._center_card()
         self.fade_in()
         self._input_edit.setFocus()
+
+    @classmethod
+    def _wrappable_project_name(cls, name):
+        text = str(name)
+        return "\u200b".join(
+            text[index:index + cls.PROJECT_NAME_WRAP]
+            for index in range(0, len(text), cls.PROJECT_NAME_WRAP)
+        )
 
     def _validate(self):
         text = self._input_edit.text()

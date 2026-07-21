@@ -1,9 +1,12 @@
+pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls.Basic
 
 Item {
     id: editor
+    required property var canvasController
 
+    required property var appTheme
     property bool open: false
     property int nodeId: 0
     property bool loaded: false
@@ -28,6 +31,7 @@ Item {
     signal requestedClose()
     signal requestedCenter(int nodeId)
     signal requestedReturn()
+    signal requestedTagPicker(int nodeId, var anchorItem)
 
     width: Math.max(minPanelWidth, Math.min(maxPanelWidth, preferredWidth))
     height: parent ? parent.height : 0
@@ -49,7 +53,7 @@ Item {
     }
 
     function openForNode(nextNodeId) {
-        var data = canvasController.get_text_editor_data(nextNodeId)
+        var data = editor.canvasController.get_text_editor_data(nextNodeId)
         if (!data || data.length < 4) {
             return
         }
@@ -63,6 +67,7 @@ Item {
         draftNode = data.length > 4 ? data[4] : false
         createdAt = data.length > 5 ? data[5] : "-"
         updatedAt = data.length > 6 ? data[6] : "-"
+        refreshTags()
         titleInput.text = originalTitle
         bodyInput.text = originalContent
         titleSizeCombo.currentIndex = _fontIndex(originalTitleSize)
@@ -74,11 +79,22 @@ Item {
         requestedCenter(nodeId)
     }
 
+    function refreshTags() {
+        editorTagModel.clear()
+        var tags = editor.canvasController.get_node_tags(nodeId)
+        for (var i = 0; i < tags.length; i++) {
+            editorTagModel.append({
+                "tagName": tags[i].name,
+                "tagColor": tags[i].color
+            })
+        }
+    }
+
     function saveAndClose() {
         if (!hasContent || !loaded) {
             return
         }
-        canvasController.save_text_content(
+        editor.canvasController.save_text_content(
             nodeId,
             titleInput.text,
             bodyInput.text,
@@ -97,11 +113,11 @@ Item {
         if (!hasContent) {
             var deleteId = nodeId
             closeWithoutRestore()
-            canvasController.request_animated_delete(deleteId)
+            editor.canvasController.request_animated_delete(deleteId)
             return
         }
 
-        canvasController.preview_text_content(
+        editor.canvasController.preview_text_content(
             nodeId,
             originalTitle,
             originalContent,
@@ -123,7 +139,7 @@ Item {
         if (_loading || !loaded) {
             return
         }
-        canvasController.preview_text_content(
+        editor.canvasController.preview_text_content(
             nodeId,
             titleInput.text,
             bodyInput.text,
@@ -151,7 +167,7 @@ Item {
 
     Rectangle {
         anchors.fill: parent
-        color: "#1e1e1e"
+        color: editor.appTheme.bgPanel
     }
 
     Rectangle {
@@ -159,7 +175,7 @@ Item {
         anchors.left: parent.left
         anchors.top: parent.top
         anchors.bottom: parent.bottom
-        color: "#303030"
+        color: editor.appTheme.borderDefault
     }
 
     MouseArea {
@@ -176,7 +192,7 @@ Item {
         anchors.left: parent.left
         anchors.top: parent.top
         anchors.bottom: parent.bottom
-        color: resizeMouse.containsMouse || resizeMouse.pressed ? AppTheme.accentMain : "transparent"
+        color: resizeMouse.containsMouse || resizeMouse.pressed ? editor.appTheme.accentMain : "transparent"
         opacity: resizeMouse.containsMouse || resizeMouse.pressed ? 0.55 : 0.0
 
         Behavior on opacity { NumberAnimation { duration: 120 } }
@@ -228,12 +244,13 @@ Item {
             width: parent.width
             height: 34
             radius: 7
-            color: "#26282b"
+            color: editor.appTheme.bgNode
 
             HoverHandler { id: titleHover }
 
             TextField {
                 id: titleInput
+                objectName: "editorTitleInput"
                 anchors.left: parent.left
                 anchors.right: titleSizeCombo.left
                 anchors.verticalCenter: parent.verticalCenter
@@ -242,11 +259,12 @@ Item {
                 text: ""
                 placeholderText: "Title"
                 selectByMouse: true
-                color: "#f4f4f4"
-                placeholderTextColor: "#73777d"
+                color: editor.appTheme.textMain
+                placeholderTextColor: editor.appTheme.textDim
                 font.family: "Segoe UI Semibold"
                 font.pointSize: 12
                 background: Item {}
+                ContextMenu.menu: null
                 onTextChanged: editor._preview()
                 Keys.onPressed: function(event) {
                     if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
@@ -259,6 +277,7 @@ Item {
             }
 
             EditorFontSizeCombo {
+                appTheme: editor.appTheme
                 id: titleSizeCombo
                 anchors.right: parent.right
                 anchors.rightMargin: 4
@@ -272,9 +291,9 @@ Item {
         Rectangle {
             id: bodyField
             width: parent.width
-            height: parent.height - titleField.height - metaRow.height - buttons.height - 30
+            height: parent.height - titleField.height - tagRow.height - metaRow.height - buttons.height - 40
             radius: 7
-            color: "#26282b"
+            color: editor.appTheme.bgNode
 
             HoverHandler { id: bodyHover }
 
@@ -291,7 +310,7 @@ Item {
                 ScrollBar.vertical.contentItem: Rectangle {
                     implicitWidth: 4
                     radius: 2
-                    color: "#5a5a5a"
+                    color: editor.appTheme.borderHover
                 }
                 ScrollBar.vertical.background: Rectangle {
                     color: "transparent"
@@ -299,21 +318,24 @@ Item {
 
                 TextArea {
                     id: bodyInput
+                    objectName: "editorBodyInput"
                     width: bodyScroll.availableWidth
                     implicitHeight: contentHeight + topPadding + bottomPadding
                     placeholderText: "Start typing..."
                     selectByMouse: true
                     wrapMode: TextEdit.WrapAtWordBoundaryOrAnywhere
-                    color: "#f2f2f2"
-                    placeholderTextColor: "#73777d"
+                    color: editor.appTheme.textMain
+                    placeholderTextColor: editor.appTheme.textDim
                     font.family: "Segoe UI"
                     font.pointSize: 10
                     background: Item {}
+                    ContextMenu.menu: null
                     onTextChanged: editor._preview()
                 }
             }
 
             EditorFontSizeCombo {
+                appTheme: editor.appTheme
                 id: bodySizeCombo
                 z: 3
                 anchors.right: parent.right
@@ -326,6 +348,122 @@ Item {
             }
         }
 
+        Rectangle {
+            id: tagRow
+            width: parent.width
+            height: 34
+            radius: 7
+            color: editor.appTheme.bgNode
+            border.width: 1
+            border.color: editor.appTheme.borderDefault
+            clip: true
+
+            Flickable {
+                id: tagChipViewport
+                objectName: "editorTagChipViewport"
+                anchors.left: parent.left
+                anchors.right: addTagsButton.left
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                anchors.leftMargin: 8
+                anchors.rightMargin: 6
+                contentWidth: tagChips.implicitWidth
+                contentHeight: height
+                flickableDirection: Flickable.HorizontalFlick
+                boundsBehavior: Flickable.StopAtBounds
+                interactive: contentWidth > width
+                clip: true
+
+                Row {
+                    id: tagChips
+                    width: implicitWidth
+                    height: parent.height
+                    spacing: 6
+
+                    Repeater {
+                        model: ListModel { id: editorTagModel }
+
+                        Rectangle {
+                            id: editorTagChip
+                            objectName: "editorTagChip"
+                            required property string tagName
+                            required property string tagColor
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: Math.min(220, Math.max(48, chipText.implicitWidth + 30))
+                            height: 22
+                            radius: 6
+                            color: editor.appTheme.whiteAlpha05
+                            border.width: 1
+                            border.color: editorTagChip.tagColor
+
+                            Rectangle {
+                                width: 7
+                                height: 7
+                                radius: 4
+                                color: editorTagChip.tagColor
+                                anchors.left: parent.left
+                                anchors.leftMargin: 7
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
+
+                            Text {
+                                id: chipText
+                                objectName: "editorTagChipText"
+                                anchors.left: parent.left
+                                anchors.leftMargin: 18
+                                anchors.right: parent.right
+                                anchors.rightMargin: 6
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: "@" + editorTagChip.tagName
+                                color: editor.appTheme.textMain
+                                elide: Text.ElideRight
+                                font.family: "Segoe UI"
+                                font.pointSize: 8
+                            }
+                        }
+                    }
+                }
+            }
+
+            ToolButton {
+                id: addTagsButton
+                width: 70
+                height: 26
+                anchors.right: parent.right
+                anchors.rightMargin: 4
+                anchors.verticalCenter: parent.verticalCenter
+                hoverEnabled: true
+                focusPolicy: Qt.TabFocus
+                display: AbstractButton.TextBesideIcon
+                text: "Tags"
+                spacing: 5
+                leftPadding: 7
+                rightPadding: 7
+                font.family: "Segoe UI Semibold"
+                font.pointSize: 8
+                palette.buttonText: hovered || visualFocus
+                                    ? editor.appTheme.textMain : editor.appTheme.textDim
+                icon.source: "../assets/icons/tag.svg"
+                icon.width: 13
+                icon.height: 13
+                icon.color: hovered || visualFocus
+                            ? editor.appTheme.textMain : editor.appTheme.textDim
+                background: Rectangle {
+                    radius: 6
+                    color: addTagsButton.down ? editor.appTheme.whiteAlpha15
+                         : addTagsButton.hovered ? editor.appTheme.whiteAlpha10
+                         : "transparent"
+                    border.width: addTagsButton.visualFocus ? 1 : 0
+                    border.color: editor.appTheme.accentMain
+                }
+                Accessible.name: "Manage tags"
+                ToolTip.visible: hovered
+                ToolTip.text: Accessible.name
+                ToolTip.delay: 500
+                onClicked: editor.requestedTagPicker(editor.nodeId, addTagsButton)
+            }
+        }
+
         Row {
             id: metaRow
             width: parent.width
@@ -335,7 +473,7 @@ Item {
             Text {
                 width: (parent.width - parent.spacing) / 2
                 text: "Added: " + editor.createdAt
-                color: "#8d949e"
+                color: editor.appTheme.textMuted
                 font.family: "Segoe UI"
                 font.pointSize: 8
                 elide: Text.ElideRight
@@ -344,7 +482,7 @@ Item {
             Text {
                 width: (parent.width - parent.spacing) / 2
                 text: "Edited: " + editor.updatedAt
-                color: "#8d949e"
+                color: editor.appTheme.textMuted
                 font.family: "Segoe UI"
                 font.pointSize: 8
                 elide: Text.ElideRight
@@ -358,89 +496,90 @@ Item {
             height: 30
             spacing: 10
 
-            Rectangle {
+            ToolButton {
                 id: saveButton
                 width: (parent.width - parent.spacing) / 2
                 height: parent.height
-                radius: 6
-                scale: saveMouse.pressed && editor.hasContent ? 0.97 : 1.0
-                color: !editor.hasContent ? "#3a3d41"
-                       : (saveMouse.pressed ? "#1e6b3d"
-                          : (saveMouse.containsMouse ? "#185733" : "#124326"))
+                enabled: editor.hasContent
                 opacity: editor.hasContent ? 1.0 : 0.85
+                hoverEnabled: true
+                focusPolicy: Qt.TabFocus
+                display: AbstractButton.TextBesideIcon
+                text: "Save"
+                spacing: 6
+                font.family: "Segoe UI Semibold"
+                font.pointSize: 9
+                palette.buttonText: enabled ? editor.appTheme.btnApplyText : editor.appTheme.textDim
+                icon.source: "../assets/icons/save.svg"
+                icon.width: 14
+                icon.height: 14
+                icon.color: enabled ? editor.appTheme.btnApplyText : editor.appTheme.textDim
+                scale: down ? 0.97 : 1.0
 
-                Behavior on color { ColorAnimation { duration: 180 } }
-                Behavior on opacity { NumberAnimation { duration: 180 } }
+                background: Rectangle {
+                    radius: 6
+                    color: !saveButton.enabled ? editor.appTheme.bgNode
+                         : saveButton.down ? editor.appTheme.successHover
+                         : saveButton.hovered ? editor.appTheme.btnApplyHover
+                         : editor.appTheme.btnApply
+                    border.width: saveButton.visualFocus ? 1.5 : 1
+                    border.color: saveButton.visualFocus
+                                  ? editor.appTheme.accentMain : editor.appTheme.btnApplyBorder
+                    Behavior on color { ColorAnimation { duration: 140 } }
+                }
+
+                Behavior on opacity { NumberAnimation { duration: 140 } }
                 Behavior on scale { NumberAnimation { duration: 80 } }
-
-                Text {
-                    anchors.centerIn: parent
-                    text: "Save"
-                    color: editor.hasContent ? "#ffffff" : "#a3a7ad"
-                    font.family: "Segoe UI Semibold"
-                    font.pointSize: 10
-                }
-
-                MouseArea {
-                    id: saveMouse
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: editor.hasContent ? Qt.PointingHandCursor : Qt.ArrowCursor
-                    enabled: editor.hasContent
-                    onClicked: editor.saveAndClose()
-                }
-
-                ToolTip.visible: saveMouse.containsMouse
+                Accessible.name: text
+                ToolTip.visible: hovered
                 ToolTip.text: "Save: Ctrl+S / Ctrl+Enter"
                 ToolTip.delay: 450
+                onClicked: editor.saveAndClose()
             }
 
-            Rectangle {
+            ToolButton {
                 id: cancelButton
+                property bool destructive: !editor.hasContent
                 width: (parent.width - parent.spacing) / 2
                 height: parent.height
-                radius: 6
-                scale: cancelMouse.pressed ? 0.97 : 1.0
-                color: editor.hasContent
-                       ? (cancelMouse.pressed ? "#682529"
-                          : (cancelMouse.containsMouse ? "#512024" : "#3b1718"))
-                       : (cancelMouse.pressed ? "#59343b"
-                          : (cancelMouse.containsMouse ? "#442a30" : "#342326"))
+                hoverEnabled: true
+                focusPolicy: Qt.TabFocus
+                display: AbstractButton.TextBesideIcon
+                text: destructive ? "Delete" : "Cancel"
+                spacing: 6
+                font.family: "Segoe UI"
+                font.pointSize: 9
+                palette.buttonText: destructive
+                                    ? editor.appTheme.btnCancelText : editor.appTheme.textMain
+                icon.source: destructive
+                             ? "../assets/icons/delete.svg" : "../assets/icons/close.svg"
+                icon.width: 14
+                icon.height: 14
+                icon.color: destructive
+                            ? editor.appTheme.btnCancelText : editor.appTheme.textDim
+                scale: down ? 0.97 : 1.0
 
-                Behavior on color { ColorAnimation { duration: 180 } }
+                background: Rectangle {
+                    radius: 6
+                    color: cancelButton.destructive
+                         ? (cancelButton.down || cancelButton.hovered
+                            ? editor.appTheme.btnCancelHover : editor.appTheme.btnCancel)
+                         : cancelButton.down ? editor.appTheme.whiteAlpha15
+                         : cancelButton.hovered ? editor.appTheme.whiteAlpha10
+                         : editor.appTheme.bgNode
+                    border.width: cancelButton.visualFocus ? 1.5 : 1
+                    border.color: cancelButton.visualFocus ? editor.appTheme.accentMain
+                                : cancelButton.destructive
+                                  ? editor.appTheme.btnCancelBorder : editor.appTheme.borderDefault
+                    Behavior on color { ColorAnimation { duration: 140 } }
+                }
+
                 Behavior on scale { NumberAnimation { duration: 80 } }
-
-                Text {
-                    anchors.centerIn: parent
-                    text: "Delete"
-                    opacity: editor.hasContent ? 0.0 : 1.0
-                    color: "#f1d8dc"
-                    font.family: "Segoe UI"
-                    font.pointSize: 10
-                    Behavior on opacity { NumberAnimation { duration: 130 } }
-                }
-
-                Text {
-                    anchors.centerIn: parent
-                    text: "Cancel"
-                    opacity: editor.hasContent ? 1.0 : 0.0
-                    color: "#ffffff"
-                    font.family: "Segoe UI"
-                    font.pointSize: 10
-                    Behavior on opacity { NumberAnimation { duration: 130 } }
-                }
-
-                MouseArea {
-                    id: cancelMouse
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: editor.cancelOrDelete()
-                }
-
-                ToolTip.visible: cancelMouse.containsMouse
+                Accessible.name: text
+                ToolTip.visible: hovered
                 ToolTip.text: editor.hasContent ? "Cancel: Esc" : "Delete: Esc"
                 ToolTip.delay: 450
+                onClicked: editor.cancelOrDelete()
             }
         }
     }
@@ -455,4 +594,5 @@ Item {
             }
         }
     }
+
 }

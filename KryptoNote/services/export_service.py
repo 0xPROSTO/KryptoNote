@@ -62,8 +62,8 @@ class MarkdownExportService:
     def _render_header(self, nodes: list[NodeItemDTO], connections: list[ConnectionDTO]) -> list[str]:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
         lines = [
-            f"# KryptoNote Export",
-            f"",
+            "# KryptoNote Export",
+            "",
             f"> Exported: {timestamp}  ",
             f"> Nodes: {len(nodes)} | Connections: {len(connections)}",
             "",

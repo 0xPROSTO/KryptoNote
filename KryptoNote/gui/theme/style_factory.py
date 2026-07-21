@@ -1,5 +1,4 @@
 from .palette import Palette
-from .typography import Typography
 
 
 class StyleFactory:
@@ -25,43 +24,43 @@ class StyleFactory:
     @staticmethod
     def get_main_window_qss():
         return f"""
-            QMainWindow {{ 
+            QMainWindow {{
                 background-color: {Palette.BG_CANVAS};
-            }} 
-            QStatusBar {{ 
+            }}
+            QStatusBar {{
                 background-color: {Palette.BG_PANEL};
                 color: {Palette.TEXT_MUTED};
                 border-top: 1px solid {Palette.BORDER_DEFAULT};
-            }} 
-            QMenuBar {{ 
+            }}
+            QMenuBar {{
                 background-color: {Palette.BG_PANEL};
                 color: {Palette.TEXT_DIM};
                 border-bottom: 1px solid {Palette.BORDER_DEFAULT};
-            }} 
-            QMenuBar::item:selected {{ 
-                background-color: {Palette.BG_NODE};
-                color: {Palette.ACCENT_MAIN};
-            }} 
-            QMenu {{ 
-                background-color: {Palette.BG_PANEL};
+            }}
+            QMenuBar::item:selected {{
+                background-color: {Palette.BG_CONTROL};
+                color: {Palette.TEXT_MAIN};
+            }}
+            QMenu {{
+                background-color: {Palette.BG_POPOVER};
                 color: {Palette.TEXT_MAIN};
                 border: 1px solid {Palette.BORDER_DEFAULT};
                 border-radius: 4px;
-            }} 
-            QMenu::item:selected {{ 
-                background-color: {Palette.ACCENT_LOW};
-                color: {Palette.ACCENT_MAIN};
-            }} 
+            }}
+            QMenu::item:selected {{
+                background-color: {Palette.BG_CONTROL_HOVER};
+                color: {Palette.TEXT_MAIN};
+            }}
         """
 
     @staticmethod
     def get_node_editor_qss():
         return f"""
-            QDialog {{ 
+            QDialog {{
                 background-color: {Palette.BG_PANEL};
                 color: {Palette.TEXT_MAIN};
-            }} 
-            QLineEdit#title_edit {{ 
+            }}
+            QLineEdit#title_edit {{
                 background-color: {Palette.BG_INPUT};
                 color: {Palette.ACCENT_MAIN};
                 border: 1px solid {Palette.BORDER_DEFAULT};
@@ -69,17 +68,17 @@ class StyleFactory:
                 padding: 8px 10px;
                 font-size: 14px;
                 font-weight: bold;
-            }} 
-            QLineEdit#title_edit:focus {{ 
+            }}
+            QLineEdit#title_edit:focus {{
                 border-color: {Palette.ACCENT_MAIN};
-            }} 
-            QFrame#separator {{ 
+            }}
+            QFrame#separator {{
                 background-color: {Palette.WHITE_ALPHA_05};
                 border: none;
                 max-height: 1px;
                 margin: 5px 0px;
-            }} 
-            QTextEdit {{ 
+            }}
+            QTextEdit {{
                 background-color: {Palette.BG_INPUT};
                 color: {Palette.TEXT_MAIN};
                 border: 1px solid {Palette.BORDER_DEFAULT};
@@ -87,8 +86,8 @@ class StyleFactory:
                 padding: 10px;
                 font-size: 13px;
                 line-height: 1.4;
-            }} 
-            QPushButton {{ 
+            }}
+            QPushButton {{
                 border: 1px solid {Palette.BORDER_DEFAULT};
                 padding: 8px 15px;
                 font-size: 12px;
@@ -96,7 +95,7 @@ class StyleFactory:
                 border-radius: 4px;
                 text-transform: uppercase;
                 color: {Palette.TEXT_MAIN};
-            }} 
+            }}
             {StyleFactory._generate_button_qss(Palette.BTN_APPLY, Palette.BTN_APPLY_BORDER, Palette.BTN_APPLY_TEXT, Palette.BTN_APPLY_HOVER, Palette.SUCCESS_HOVER, "QPushButton#btn_apply")}
             {StyleFactory._generate_button_qss(Palette.BTN_CANCEL, Palette.BTN_CANCEL_BORDER, Palette.BTN_CANCEL_TEXT, Palette.BTN_CANCEL_HOVER, Palette.DANGER_HOVER, "QPushButton#btn_cancel")}
             QComboBox#font_combo {{
@@ -121,16 +120,16 @@ class StyleFactory:
     @staticmethod
     def get_launcher_qss():
         return f"""
-            QDialog {{ 
+            QDialog {{
                 background-color: {Palette.BG_PANEL};
                 color: {Palette.TEXT_MAIN};
-            }} 
-            QLabel {{ 
+            }}
+            QLabel {{
                 color: {Palette.TEXT_DIM};
                 font-size: 11px;
                 font-weight: bold;
-            }} 
-            QListWidget {{ 
+            }}
+            QListWidget {{
                 background-color: {Palette.BG_INPUT};
                 color: {Palette.TEXT_MAIN};
                 border: 1px solid {Palette.BORDER_DEFAULT};
@@ -138,50 +137,50 @@ class StyleFactory:
                 outline: none;
                 padding: 2px;
                 font-size: 13px;
-            }} 
-            QListWidget::item {{ 
+            }}
+            QListWidget::item {{
                 padding: 6px 10px;
                 border-bottom: 1px solid {Palette.GRID_SUB};
                 border-radius: 4px;
                 margin-bottom: 1px;
-            }} 
-            QListWidget::item:hover {{ 
-                background-color: {Palette.BG_TITLE_BAR};
-            }} 
-            QListWidget::item:selected {{ 
+            }}
+            QListWidget::item:hover {{
+                background-color: {Palette.BG_CONTROL_HOVER};
+            }}
+            QListWidget::item:selected {{
                 background-color: {Palette.BG_NODE};
                 color: {Palette.ACCENT_MAIN};
                 border: 1px solid {Palette.ACCENT_LOW};
-            }} 
-            QLineEdit {{ 
+            }}
+            QLineEdit {{
                 background-color: {Palette.BG_INPUT};
                 color: {Palette.TEXT_MAIN};
                 border: 1px solid {Palette.BORDER_DEFAULT};
                 border-radius: 4px;
                 padding: 5px 8px;
                 font-size: 13px;
-            }} 
-            QLineEdit:focus {{ 
+            }}
+            QLineEdit:focus {{
                 border-color: {Palette.ACCENT_MAIN};
-            }} 
-            QPushButton {{ 
-                background-color: {Palette.BG_NODE};
+            }}
+            QPushButton {{
+                background-color: {Palette.BG_CONTROL};
                 color: {Palette.TEXT_MAIN};
                 border: 1px solid {Palette.BORDER_DEFAULT};
                 padding: 6px 10px;
                 font-size: 12px;
                 font-weight: bold;
                 border-radius: 4px;
-            }} 
-            QPushButton:hover {{ 
+            }}
+            QPushButton:hover {{
                 border-color: {Palette.ACCENT_MAIN};
-                background-color: {Palette.BORDER_HOVER};
-            }} 
-            QPushButton#btn_create {{ 
+                background-color: {Palette.BG_CONTROL_HOVER};
+            }}
+            QPushButton#btn_create {{
                 background-color: {Palette.BG_INPUT};
                 border-color: {Palette.BORDER_DEFAULT};
                 color: {Palette.TEXT_DIM};
-            }} 
+            }}
             QPushButton#btn_danger {{
                 background-color: {Palette.BTN_CANCEL};
                 border-color: {Palette.BTN_CANCEL_BORDER};
@@ -205,93 +204,240 @@ class StyleFactory:
     @staticmethod
     def get_about_dialog_qss():
         return f"""
-            QDialog {{ 
+            QDialog {{
                 background: transparent;
-            }} 
-            QWidget#about_container {{ 
+            }}
+            QWidget#about_container {{
                 background-color: {Palette.BG_PANEL};
                 border: 1px solid {Palette.BORDER_DEFAULT};
                 border-radius: 12px;
-            }} 
-            QLabel {{ 
+            }}
+            QLabel {{
                 background: transparent;
                 border: none;
-            }} 
-            QLabel#logo_label {{ 
+            }}
+            QLabel#logo_label {{
                 margin-top: 5px;
                 margin-bottom: 25px;
-            }} 
-            QLabel#app_name {{ 
+            }}
+            QLabel#app_name {{
                 color: {Palette.ACCENT_MAIN};
                 font-size: 20px;
                 font-weight: bold;
-            }} 
-            QLabel#author_label {{ 
+            }}
+            QLabel#author_label {{
                 color: {Palette.TEXT_MAIN};
                 font-size: 14px;
-            }} 
-            QLabel#version_label {{ 
+            }}
+            QLabel#version_label {{
                 color: {Palette.TEXT_DIM};
                 font-size: 12px;
-            }} 
-            QLabel#desc_label {{ 
+            }}
+            QLabel#desc_label {{
                 color: {Palette.TEXT_MUTED};
                 font-size: 12px;
                 line-height: 1.5;
                 margin-bottom: 20px;
-            }} 
-            QLabel#github_link {{ 
+            }}
+            QLabel#github_link {{
                 color: {Palette.ACCENT_MAIN};
                 margin-bottom: 20px;
-            }} 
-            QPushButton#btn_close {{ 
+            }}
+            QPushButton#btn_close {{
                 background: transparent;
                 color: {Palette.TEXT_MUTED};
                 border: none;
                 font-size: 24px;
                 font-weight: 900;
                 padding: 5px;
-            }} 
-            QPushButton#btn_close:hover {{ 
+            }}
+            QPushButton#btn_close:hover {{
                 color: {Palette.ACCENT_MAIN};
-            }} 
+            }}
         """
 
     @staticmethod
-    def get_search_dialog_qss():
+    def get_theme_dialog_qss():
         return f"""
-            QDialog {{ 
-                background-color: {Palette.BG_PANEL}; 
-                color: {Palette.TEXT_MAIN}; 
+            QDialog#theme_dialog {{
+                background: transparent;
+                font-family: 'Segoe UI', sans-serif;
+                color: {Palette.TEXT_MAIN};
             }}
-            QLineEdit {{ 
-                background-color: {Palette.BG_INPUT}; 
-                color: {Palette.TEXT_MAIN}; 
-                border: 1px solid {Palette.BORDER_DEFAULT}; 
-                border-radius: 4px;
-                padding: 6px 10px; 
+            QWidget#theme_container {{
+                background: {Palette.BG_PANEL};
+                border: 1px solid {Palette.BORDER_DEFAULT};
+                border-radius: 10px;
             }}
-            QLineEdit:focus {{
-                border-color: {Palette.ACCENT_MAIN};
+            QWidget#theme_header,
+            QWidget#theme_footer,
+            QWidget#theme_settings {{
+                background: transparent;
+                border: none;
             }}
-            QPushButton {{ 
-                background-color: {Palette.BG_NODE}; 
-                color: {Palette.TEXT_MAIN}; 
-                border: 1px solid {Palette.BORDER_DEFAULT}; 
-                padding: 6px 12px; 
-                border-radius: 4px;
+            QLabel {{
+                background: transparent;
+                color: {Palette.TEXT_DIM};
+                border: none;
+                font-size: 10pt;
             }}
-            QPushButton:hover {{ 
-                background-color: {Palette.BORDER_HOVER}; 
-                border-color: {Palette.ACCENT_MAIN};
+            QLabel#theme_title {{
+                color: {Palette.TEXT_MAIN};
+                font-size: 14pt;
+                font-weight: 600;
             }}
-            QPushButton:disabled {{
+            QLabel[sectionTitle="true"] {{
+                color: {Palette.TEXT_MAIN};
+                font-size: 12pt;
+                font-weight: 600;
+            }}
+            QLabel[controlLabel="true"] {{
+                color: {Palette.TEXT_DIM};
+                font-size: 9pt;
+            }}
+            QFrame#theme_separator {{
+                background: {Palette.BORDER_SUBTLE};
+                border: none;
+                min-height: 1px;
+                max-height: 1px;
+            }}
+            QPushButton {{
+                min-height: 28px;
+                padding: 0 12px;
+                color: {Palette.TEXT_MAIN};
+                background: {Palette.BG_CONTROL};
+                border: 1px solid {Palette.BORDER_DEFAULT};
+                border-radius: 5px;
+                font-size: 9pt;
+            }}
+            QPushButton:hover {{
+                background: {Palette.BG_CONTROL_HOVER};
+                border-color: {Palette.BORDER_HOVER};
+            }}
+            QPushButton:pressed {{
+                background: {Palette.BG_CONTROL_PRESSED};
+            }}
+            QPushButton:focus {{
+                border: 2px solid {Palette.ACCENT_MAIN};
+            }}
+            QPushButton:checked {{
+                color: {Palette.TEXT_MAIN};
+                background: {Palette.ACCENT_LOW};
+                border: 2px solid {Palette.ACCENT_MAIN};
+            }}
+            QPushButton[sectionReset="true"] {{
+                min-height: 22px;
+                padding: 0 6px;
                 color: {Palette.TEXT_MUTED};
-                background-color: {Palette.BG_CANVAS};
-                border-color: {Palette.BORDER_DEFAULT};
+                background: transparent;
+                border: none;
+                font-size: 9pt;
             }}
-            QLabel {{ 
-                color: {Palette.TEXT_DIM}; 
+            QPushButton[sectionReset="true"]:hover {{
+                color: {Palette.ACCENT_MAIN};
+                background: {Palette.ACCENT_LOW};
+            }}
+            QPushButton#theme_close {{
+                min-width: 34px;
+                max-width: 34px;
+                min-height: 34px;
+                max-height: 34px;
+                padding: 0;
+                background: transparent;
+                border: none;
+            }}
+            QPushButton#theme_close:hover {{
+                background: {Palette.BG_CONTROL_HOVER};
+            }}
+            QPushButton#theme_apply {{
+                color: {Palette.ON_ACCENT};
+                background: {Palette.ACCENT_MAIN};
+                border-color: {Palette.ACCENT_MAIN};
+                font-weight: 600;
+            }}
+            QPushButton#theme_apply:hover {{
+                background: {Palette.ACCENT_HOVER};
+                border-color: {Palette.ACCENT_HOVER};
+            }}
+            QComboBox {{
+                min-height: 28px;
+                padding: 0 40px 0 10px;
+                color: {Palette.TEXT_MAIN};
+                background: {Palette.BG_INPUT};
+                border: 1px solid {Palette.BORDER_DEFAULT};
+                border-radius: 5px;
+                font-size: 9pt;
+            }}
+            QComboBox:hover,
+            QComboBox:focus {{
+                border-color: {Palette.ACCENT_MAIN};
+            }}
+            QComboBox::drop-down {{
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+                width: 32px;
+                background: {Palette.BG_CONTROL};
+                border: none;
+                border-left: 1px solid {Palette.BORDER_DEFAULT};
+                border-top-right-radius: 4px;
+                border-bottom-right-radius: 4px;
+            }}
+            QComboBox::drop-down:hover {{
+                background: {Palette.BG_CONTROL_HOVER};
+            }}
+            QComboBox::down-arrow {{
+                image: none;
+                width: 0;
+                height: 0;
+            }}
+            QComboBox QAbstractItemView {{
+                color: {Palette.TEXT_MAIN};
+                background: {Palette.BG_POPOVER};
+                selection-color: {Palette.ON_ACCENT};
+                selection-background-color: {Palette.ACCENT_MAIN};
+                border: 1px solid {Palette.BORDER_DEFAULT};
+                outline: none;
+                padding: 3px;
+            }}
+            QScrollBar:vertical {{
+                width: 10px;
+                margin: 0;
+                background: {Palette.BG_INPUT};
+                border: none;
+                border-radius: 5px;
+            }}
+            QScrollBar::handle:vertical {{
+                min-height: 28px;
+                margin: 2px;
+                background: {Palette.BG_CONTROL_HOVER};
+                border-radius: 3px;
+            }}
+            QScrollBar:horizontal {{
+                height: 10px;
+                margin: 0;
+                background: {Palette.BG_INPUT};
+                border: none;
+                border-radius: 5px;
+            }}
+            QScrollBar::handle:horizontal {{
+                min-width: 28px;
+                margin: 2px;
+                background: {Palette.BG_CONTROL_HOVER};
+                border-radius: 3px;
+            }}
+            QScrollBar::handle:hover {{
+                background: {Palette.BORDER_HOVER};
+            }}
+            QScrollBar::add-line,
+            QScrollBar::sub-line {{
+                width: 0;
+                height: 0;
+                background: transparent;
+                border: none;
+            }}
+            QScrollBar::add-page,
+            QScrollBar::sub-page {{
+                background: transparent;
             }}
         """
 
@@ -317,22 +463,27 @@ class StyleFactory:
                 margin: 0;
             }}
             QMenuBar::item:selected {{
-                background-color: {Palette.BG_NODE};
+                background-color: {Palette.BG_CONTROL};
                 color: {Palette.TEXT_MAIN};
             }}
             QMenu {{
-                background-color: {Palette.BG_PANEL};
+                background-color: {Palette.BG_POPOVER};
                 color: {Palette.TEXT_MAIN};
                 border: 1px solid {Palette.BORDER_DEFAULT};
                 font-size: 13px;
                 margin-top: 0;
             }}
             QMenu::item {{
-                padding: 8px 32px;
+                padding: 8px 28px 8px 16px;
+            }}
+            QMenu::icon {{
+                left: 10px;
+                width: 16px;
+                height: 16px;
             }}
             QMenu::item:selected {{
-                background-color: {Palette.ACCENT_LOW};
-                color: {Palette.ACCENT_MAIN};
+                background-color: {Palette.BG_CONTROL_HOVER};
+                color: {Palette.TEXT_MAIN};
             }}
             QMenu::separator {{
                 height: 1px;
@@ -349,8 +500,8 @@ class StyleFactory:
     @staticmethod
     def get_player_qss():
         return f"""
-            QDialog {{ background-color: {Palette.BG_CANVAS}; }} 
-            QWidget {{ color: {Palette.TEXT_MAIN}; }} 
+            QDialog {{ background-color: {Palette.BG_CANVAS}; }}
+            QWidget {{ color: {Palette.TEXT_MAIN}; }}
         """
 
     @staticmethod
@@ -397,7 +548,7 @@ class StyleFactory:
             }}
             QLabel {{
                 color: {Palette.WHITE_ALPHA_85};
-                font-family: 'Segoe UI', 'SF Pro Display', monospace;
+                font-family: 'Segoe UI', sans-serif;
                 font-size: 13px;
                 font-weight: 500;
             }}

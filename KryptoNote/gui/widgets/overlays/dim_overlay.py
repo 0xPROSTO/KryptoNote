@@ -1,5 +1,7 @@
-from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve
-from PySide6.QtWidgets import QWidget, QFrame, QGraphicsOpacityEffect
+from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve, QObject
+from PySide6.QtWidgets import QFrame, QGraphicsOpacityEffect
+
+from KryptoNote.gui.theme.palette import Palette
 
 
 class DimOverlay(QFrame):
@@ -12,7 +14,11 @@ class DimOverlay(QFrame):
         if not block_input:
             self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 
-        self.setStyleSheet("DimOverlay { background-color: rgba(0, 0, 0, 80); }")
+        self.setStyleSheet(
+            "DimOverlay { "
+            f"background-color: {Palette.overlay_rgba(Palette.OVERLAY_DIM_ALPHA)}; "
+            "}"
+        )
 
         self.opacity_effect = QGraphicsOpacityEffect(self)
         self.opacity_effect.setOpacity(0.0)
@@ -80,3 +86,54 @@ class DimOverlay(QFrame):
         if obj == self.parent() and event.type() == event.Type.Resize:
             self.setGeometry(self.parent().rect())
         return super().eventFilter(obj, event)
+
+
+class WindowOverlayManager(QObject):
+    """Owns one reusable dim layer shared by every window-level overlay."""
+
+    def __init__(self, parent_widget, parent=None):
+        super().__init__(parent or parent_widget)
+        self._owners = {}
+        self._overlay = DimOverlay(
+            parent_widget,
+            block_input=True,
+            auto_show=False,
+        )
+
+    @property
+    def overlay(self):
+        return self._overlay
+
+    @property
+    def active(self):
+        return bool(self._owners)
+
+    def acquire(self, owner, alpha=Palette.OVERLAY_DIM_ALPHA):
+        if not owner:
+            raise ValueError("Overlay owner cannot be empty")
+        self._owners[str(owner)] = max(
+            Palette.OVERLAY_DIM_ALPHA,
+            min(255, int(alpha)),
+        )
+        self._refresh()
+
+    def release(self, owner):
+        self._owners.pop(str(owner), None)
+        self._refresh()
+
+    def clear(self):
+        self._owners.clear()
+        self._refresh()
+
+    def _refresh(self):
+        if self._owners:
+            alpha = max(self._owners.values())
+            self._overlay.setStyleSheet(
+                "DimOverlay { "
+                f"background-color: {Palette.overlay_rgba(alpha)}; "
+                "}"
+            )
+            self._overlay.fade_in()
+            return
+        if self._overlay.isVisible():
+            self._overlay.fade_out(delete_on_finish=False)

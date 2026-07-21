@@ -5,14 +5,18 @@ from PySide6.QtGui import QIcon, QImageReader
 from PySide6.QtWidgets import QApplication, QDialog
 
 from KryptoNote.config import Config
-from KryptoNote.gui.widgets.launcher import ProjectLauncher
-from KryptoNote.gui.windows.main_window import ZeroXXWindow
+from KryptoNote.gui.theme.theme_manager import get_theme_manager
 
 
 def main():
     app = QApplication(sys.argv)
-    QImageReader.setAllocationLimit(0)
+    QImageReader.setAllocationLimit(256)
     app.setStyle("Fusion")
+
+    get_theme_manager().load()
+
+    from KryptoNote.gui.widgets.launcher import ProjectLauncher
+    from KryptoNote.gui.windows.main_window import ZeroXXWindow
 
     app_icon = QIcon(Config.ICON_PATH)
     app.setWindowIcon(app_icon)
@@ -33,7 +37,11 @@ def main():
                 except Exception as e:
                     print(f"Application error: {e}")
                     try:
-                        db_conn.conn.close()
+                        repo.close(wait=False)
+                    except Exception:
+                        pass
+                    try:
+                        db_conn.close()
                     except Exception:
                         pass
         else:

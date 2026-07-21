@@ -2,9 +2,11 @@ import QtQuick
 
 Rectangle {
     id: rubberBand
+    required property var nodeModel
+    required property var appTheme
     visible: false
     color: "transparent"
-    border.color: AppTheme ? AppTheme.accentMain : "#e6158b"
+    border.color: rubberBand.appTheme ? rubberBand.appTheme.accentMain : "#e6158b"
     border.width: 1
     opacity: 0.4
     z: 100
@@ -13,7 +15,7 @@ Rectangle {
 
     Rectangle {
         anchors.fill: parent
-        color: AppTheme ? AppTheme.accentMain : "#e6158b"
+        color: rubberBand.appTheme ? rubberBand.appTheme.accentMain : "#e6158b"
         opacity: 0.08
     }
 
@@ -38,9 +40,9 @@ Rectangle {
         var ry1 = (y - contentLayer.y) / contentScale
         var rx2 = ((x + width) - contentLayer.x) / contentScale
         var ry2 = ((y + height) - contentLayer.y) / contentScale
-        var selected = nodeModel.get_nodes_in_rect(rx1, ry1, rx2, ry2)
+        var selected = rubberBand.nodeModel.get_nodes_in_rect(rx1, ry1, rx2, ry2)
         for (var i = 0; i < selected.length; i++) {
-            nodeModel.set_selected(selected[i], true)
+            rubberBand.nodeModel.set_selected(selected[i], true)
         }
         visible = false
     }

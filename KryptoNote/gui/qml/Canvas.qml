@@ -2,14 +2,21 @@ import QtQuick
 
 Rectangle {
     id: root
-    color: AppTheme ? AppTheme.bgCanvas : "#1a1a2e"
+    required property var appTheme
+    required property var nodeModel
+    required property var connectionModel
+    required property var nodeViewportModel
+    required property var connectionViewportModel
+    required property var canvasController
+    required property var frameClock
+    color: root.appTheme ? root.appTheme.bgCanvas : "#1a1a2e"
     clip: true
     focus: true
 
     property alias contentScale: viewport.contentScale
     property real gridSize: 100.0
     property real gridMain: 500.0
-    property bool snapToGrid: canvasController ? canvasController.snap_to_grid : false
+    property bool snapToGrid: root.canvasController ? root.canvasController.snap_to_grid : false
 
     property alias isLinkMode: inputLayer.isLinkMode
     property alias isEraserMode: inputLayer.isEraserMode
@@ -19,8 +26,16 @@ Rectangle {
     property alias isEditorResizing: textEditorPanel.resizing
     property alias isSearchResizing: searchPanel.resizing
     property bool isTextEditorOpen: textEditorPanel.open
+    property bool isTagPickerOpen: globalTagPicker.visible
     property bool isSearchPanelOpen: searchPanel.open
     property int hoveredConnectionId: 0
+    property point _pendingConnectionHit: Qt.point(0, 0)
+    property real _pendingConnectionRadius: 0
+    property bool _connectionHitPending: false
+    property bool _viewportUpdatePending: false
+    readonly property bool frameClockNeeded: _connectionHitPending
+            || _viewportUpdatePending
+            || viewport.frameClockNeeded
 
     signal textEditorOpenChanged(bool open)
 
@@ -31,12 +46,30 @@ Rectangle {
     property bool _hasEditorReturn: false
     property bool _searchCameraOffsetActive: false
 
-    Component.onCompleted: viewport.initialize()
-    onWidthChanged: viewport.ensureInitialized()
-    onHeightChanged: viewport.ensureInitialized()
-    onIsTextEditorOpenChanged: textEditorOpenChanged(isTextEditorOpen)
+    Component.onCompleted: {
+        viewport.initialize()
+        root.updateViewportModels()
+        root.frameClock.setActive(root.frameClockNeeded)
+    }
+    Component.onDestruction: root.frameClock.setActive(false)
+    onFrameClockNeededChanged: root.frameClock.setActive(root.frameClockNeeded)
+    onWidthChanged: {
+        viewport.ensureInitialized()
+        root.scheduleViewportUpdate()
+    }
+    onHeightChanged: {
+        viewport.ensureInitialized()
+        root.scheduleViewportUpdate()
+    }
+    onIsTextEditorOpenChanged: {
+        textEditorOpenChanged(isTextEditorOpen)
+        if (!isTextEditorOpen && globalTagPicker.visible) {
+            globalTagPicker.close()
+        }
+    }
 
     GridLayer {
+        appTheme: root.appTheme
         anchors.fill: parent
         contentLayer: contentLayer
         contentScale: root.contentScale
@@ -53,15 +86,42 @@ Rectangle {
         scale: root.contentScale
 
         ConnectionLayer {
+            viewportModel: root.connectionViewportModel
+            canvasRoot: root
+            canvasController: root.canvasController
+        appTheme: root.appTheme
             anchors.fill: parent
+            onContextMenuRequested: function(connId, sourceItem, localX, localY) {
+                canvasContextMenu.openForConnection(connId, sourceItem, localX, localY)
+            }
         }
 
         NodeLayer {
+            viewportModel: root.nodeViewportModel
+            canvasRoot: root
+            nodeModel: root.nodeModel
+            canvasController: root.canvasController
+            contentLayer: contentLayer
+        appTheme: root.appTheme
             anchors.fill: parent
+            onContextMenuRequested: function(nodeId, nodeType, sourceItem, localX, localY) {
+                canvasContextMenu.openForNode(nodeId, nodeType, sourceItem, localX, localY)
+            }
+        }
+    }
+
+    NodeContextMenu {
+        canvasController: root.canvasController
+        appTheme: root.appTheme
+        id: canvasContextMenu
+        onRequestedTags: function(nodeId, anchorItem) {
+            root.openTagPickerForNode(nodeId, anchorItem)
         }
     }
 
     RubberBandSelection {
+        nodeModel: root.nodeModel
+        appTheme: root.appTheme
         id: rubberBand
         z: 2
     }
@@ -71,13 +131,22 @@ Rectangle {
         anchors.fill: parent
         contentLayer: contentLayer
         onZoomChanged: function(scale) {
-            if (canvasController) {
-                canvasController.report_zoom(scale)
+            if (root.canvasController) {
+                root.canvasController.report_zoom(scale)
+            }
+        }
+        onViewportCenterShifted: function(deltaX, deltaY) {
+            if (root._hasEditorReturn) {
+                root._editorReturnX += deltaX
+                root._editorReturnY += deltaY
             }
         }
     }
 
     CanvasInputLayer {
+        nodeModel: root.nodeModel
+        connectionModel: root.connectionModel
+        canvasController: root.canvasController
         id: inputLayer
         anchors.fill: parent
         focus: true
@@ -90,6 +159,9 @@ Rectangle {
     }
 
     SearchPanel {
+        nodeModel: root.nodeModel
+        canvasController: root.canvasController
+        appTheme: root.appTheme
         id: searchPanel
         z: 19
         height: parent.height
@@ -103,11 +175,13 @@ Rectangle {
         }
 
         onStatusChanged: function(message) {
-            canvasController.set_status_message(message, message === "Ready" ? "normal" : "accent")
+            root.canvasController.set_status_message(message, message === "Ready" ? "normal" : "accent")
         }
     }
 
     TextEditorPanel {
+        canvasController: root.canvasController
+        appTheme: root.appTheme
         id: textEditorPanel
         z: 20
         height: parent.height
@@ -122,10 +196,26 @@ Rectangle {
         onRequestedReturn: {
             root.returnFromEditor()
         }
+
+        onRequestedTagPicker: function(nodeId, anchorItem) {
+            root.openTagPickerForNode(nodeId, anchorItem)
+        }
+    }
+
+    TagPicker {
+        canvasController: root.canvasController
+        appTheme: root.appTheme
+        id: globalTagPicker
+        onTagsChanged: {
+            if (textEditorPanel.open && textEditorPanel.nodeId === globalTagPicker.nodeId) {
+                textEditorPanel.refreshTags()
+            }
+            searchPanel.syncTagsAndRefresh()
+        }
     }
 
     Connections {
-        target: canvasController
+        target: root.canvasController
         function onOpenTextEditorRequested(nodeId) {
             root.openEditorForNode(nodeId)
         }
@@ -135,20 +225,40 @@ Rectangle {
         id: globalHover
         onHoveredChanged: {
             if (!hovered) {
+                root._connectionHitPending = false
                 root.hoveredConnectionId = 0
             }
         }
         onPointChanged: {
             if (!point) return
             var contentPos = root.mapToItem(contentLayer, point.position.x, point.position.y)
-            root.hoveredConnectionId = connectionModel.hit_test_connection(
-                contentPos.x,
-                contentPos.y,
-                10 / Math.max(root.contentScale, 0.12)
-            )
+            root._pendingConnectionHit = Qt.point(contentPos.x, contentPos.y)
+            root._pendingConnectionRadius = 10 / Math.max(root.contentScale, 0.12)
+            root._connectionHitPending = true
             if (!coordThrottleTimer.running) {
-                canvasController.report_mouse_position(contentPos.x, contentPos.y)
+                root.canvasController.report_mouse_position(contentPos.x, contentPos.y)
                 coordThrottleTimer.start()
+            }
+        }
+    }
+
+    Connections {
+        target: root.frameClock
+        function onTick(frameTime) {
+            viewport.advanceFrame(frameTime)
+            if (root._viewportUpdatePending) {
+                root._viewportUpdatePending = false
+                root.updateViewportModels()
+            }
+            if (root._connectionHitPending) {
+                root._connectionHitPending = false
+                if (globalHover.hovered) {
+                    root.hoveredConnectionId = root.connectionModel.hit_test_connection(
+                        root._pendingConnectionHit.x,
+                        root._pendingConnectionHit.y,
+                        root._pendingConnectionRadius
+                    )
+                }
             }
         }
     }
@@ -157,6 +267,17 @@ Rectangle {
         id: coordThrottleTimer
         interval: 32
         repeat: false
+    }
+
+    Connections {
+        target: contentLayer
+        function onXChanged() { root.scheduleViewportUpdate() }
+        function onYChanged() { root.scheduleViewportUpdate() }
+    }
+
+    Connections {
+        target: viewport
+        function onContentScaleChanged() { root.scheduleViewportUpdate() }
     }
 
     onActiveFocusChanged: {
@@ -176,6 +297,31 @@ Rectangle {
     function resetModifiers() {
         inputLayer.resetModifiers()
         viewport.stopKeyboardPan()
+    }
+
+    function updateViewportModels() {
+        var scale = Math.max(root.contentScale, 0.12)
+        var margin = 480 / scale
+        var left = (-contentLayer.x / scale) - margin
+        var top = (-contentLayer.y / scale) - margin
+        var right = ((root.width - contentLayer.x) / scale) + margin
+        var bottom = ((root.height - contentLayer.y) / scale) + margin
+        root.nodeViewportModel.updateViewport(left, top, right, bottom)
+        root.connectionViewportModel.updateViewport(left, top, right, bottom)
+    }
+
+    function scheduleViewportUpdate() {
+        // Coalesce changes and apply them on the next rendered frame. Unlike a
+        // fixed 16 ms timer, this follows the actual display refresh rate.
+        root._viewportUpdatePending = true
+    }
+
+    function openTagPickerForNode(nodeId, anchorItem) {
+        globalTagPicker.openForNodeAt(nodeId, anchorItem)
+    }
+
+    function closeTagPicker() {
+        globalTagPicker.close()
     }
 
     function syncModifiers(ctrlHeld, shiftHeld) {
@@ -229,7 +375,7 @@ Rectangle {
     }
 
     function centerOnNodeForEditor(nodeId) {
-        var bounds = nodeModel.get_node_bounds(nodeId)
+        var bounds = root.nodeModel.get_node_bounds(nodeId)
         if (!bounds || bounds.length < 4) {
             return
         }
@@ -248,13 +394,13 @@ Rectangle {
     }
 
     function centerOnNodeFromSearch(nodeId) {
-        var bounds = nodeModel.get_node_bounds(nodeId)
+        var bounds = root.nodeModel.get_node_bounds(nodeId)
         if (!bounds || bounds.length < 4) {
             return
         }
 
-        nodeModel.clear_selection()
-        nodeModel.set_selected(nodeId, true)
+        root.nodeModel.clear_selection()
+        root.nodeModel.set_selected(nodeId, true)
 
         var targetX = bounds[0] + bounds[2] / 2
         var targetY = bounds[1] + bounds[3] / 2
@@ -287,7 +433,7 @@ Rectangle {
             if (drop.hasUrls) {
                 var canvasX = (drop.x - contentLayer.x) / viewport.contentScale
                 var canvasY = (drop.y - contentLayer.y) / viewport.contentScale
-                canvasController.handle_dropped_files(drop.urls, canvasX, canvasY)
+                root.canvasController.handle_dropped_files(drop.urls, canvasX, canvasY)
                 drop.accept()
             }
         }

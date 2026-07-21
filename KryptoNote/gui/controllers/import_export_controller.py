@@ -1,11 +1,12 @@
 import os
 
-from PySide6.QtCore import QObject, Signal, Slot, QThread, QSettings
+from PySide6.QtCore import QEventLoop, QObject, QSettings, QThread, Signal, Slot
 from PySide6.QtWidgets import QFileDialog, QMessageBox, QApplication
 
 from ...config import Config
 from ..services.media_import_service import MediaImportService, MediaImportWorker
 from ..services.media_export_service import MediaExportService
+from ..services.operation_coordinator import OperationCoordinator
 
 
 class ImportExportController(QObject):
@@ -17,11 +18,9 @@ class ImportExportController(QObject):
     status_message = Signal(str, str)
     progress_updated = Signal(float, str)
     progress_finished = Signal(str)
-    _video_transition_show_requested = Signal(str)
-    _video_transition_update_requested = Signal(str)
-    _video_transition_hide_requested = Signal()
 
-    def __init__(self, node_model, service, auto_fit_callback, parent=None):
+    def __init__(self, node_model, service, auto_fit_callback, parent=None,
+                 operation_coordinator=None):
         super().__init__(parent)
         self._node_model = node_model
         self._service = service
@@ -30,6 +29,9 @@ class ImportExportController(QObject):
         self._media_export_service = MediaExportService(service)
         self._active_media_import_thread = None
         self._active_media_import_worker = None
+        self._media_import_token = None
+        self._operations = operation_coordinator or OperationCoordinator(self)
+        self._synchronous_import_active = False
         self._settings = QSettings(Config.APP_NAME, Config.APP_NAME)
 
     def _last_dir(self, category):
@@ -48,8 +50,54 @@ class ImportExportController(QObject):
             return parent.get_viewport_center()
         return [0.0, 0.0]
 
+    @staticmethod
+    def _format_file_size(size):
+        gib = size / (1024 ** 3)
+        if gib >= 1:
+            return f"{gib:.2f} GiB"
+        return f"{size / (1024 ** 2):.0f} MiB"
+
+    def _warn_about_large_files(self, paths):
+        large_files = self._media_import_service.get_large_files(paths)
+        if not large_files:
+            return
+
+        details = [
+            f"• {os.path.basename(path)} — {self._format_file_size(size)}"
+            for path, size in large_files[:5]
+        ]
+        if len(large_files) > 5:
+            details.append(f"• and {len(large_files) - 5} more")
+
+        QMessageBox.warning(
+            None,
+            "Large Media Files",
+            "There is no import size limit; these files will still be imported.\n\n"
+            "Large media can use significant memory, make the application respond "
+            "slowly, and take a long time to import:\n\n"
+            + "\n".join(details),
+        )
+
+    def _add_imported_media_node(self, item):
+        self._node_model.add_node(
+            item.node_id, item.node_type, item.x, item.y, item.width, item.height,
+            title=item.title, thumbnail_bytes=None,
+            total_size=item.total_size,
+            media_width=item.media_width, media_height=item.media_height,
+            media_duration=item.media_duration,
+        )
+        self._auto_fit_callback(item.node_id, item.thumbnail_bytes)
+
     @Slot(str)
     def add_media_node(self, mtype, viewport_center=None):
+        if self._operations.is_busy:
+            QMessageBox.information(None, "Import", "Another database operation is active.")
+            return
+
+        if self.has_active_media_import():
+            QMessageBox.information(None, "Import", "A media import is already running.")
+            return
+
         center = viewport_center or self.get_viewport_center_func()
         center_x, center_y = center[0], center[1]
 
@@ -75,45 +123,14 @@ class ImportExportController(QObject):
                 )
         if not valid_paths:
             return
-
+        self._warn_about_large_files(valid_paths)
         if mtype == "video":
             self._start_video_import(valid_paths, center_x, center_y)
-            return
-
-        def progress_cb(file_index, file_count, current, total, status):
-            total = max(total, 1)
-            val = (file_index + current / total) / max(file_count, 1)
-            self.progress_updated.emit(
-                val, f"{status} {mtype} {file_index + 1}/{file_count}"
-            )
-            QApplication.processEvents()
-
-        try:
-            imported = self._media_import_service.import_paths(
-                mtype, valid_paths, center_x, center_y, progress_cb
-            )
-        except ValueError as e:
-            QMessageBox.critical(None, "Invalid File", str(e))
-            self.progress_finished.emit("Ready")
-            return
-        finally:
-            if mtype == "video":
-                self._video_transition_hide_requested.emit()
-
-        for item in imported:
-            self._node_model.add_node(
-                item.node_id, item.node_type, item.x, item.y, item.width, item.height,
-                title=item.title, thumbnail_bytes=item.thumbnail_bytes,
-                total_size=item.total_size,
-                media_width=item.media_width, media_height=item.media_height,
-                media_duration=item.media_duration,
-            )
-            self._auto_fit_callback(item.node_id, item.thumbnail_bytes)
-
-        self.progress_finished.emit("Ready")
+        else:
+            self._import_image_batch(valid_paths, center_x, center_y)
 
     def _start_video_import(self, paths, center_x, center_y):
-        if self._active_media_import_thread is not None:
+        if self.has_active_media_import():
             QMessageBox.information(None, "Import", "Video import is already running.")
             return
 
@@ -123,54 +140,129 @@ class ImportExportController(QObject):
             QMessageBox.critical(None, "Import Error", "Database is not ready.")
             return
 
-        self._video_transition_show_requested.emit("Importing video...")
-        thread = QThread(self)
-        worker = MediaImportWorker(db_path, crypto_clone, "video", paths, center_x, center_y)
-        worker.moveToThread(thread)
+        token = self._operations.begin("video_import", "Importing video...", blocking=True)
+        if token is None:
+            QMessageBox.information(None, "Import", "Another database operation is active.")
+            return
+        self._media_import_token = token
+        thread = None
+        try:
+            thread = QThread(self)
+            worker = MediaImportWorker(
+                db_path,
+                crypto_clone,
+                "video",
+                paths,
+                center_x,
+                center_y,
+            )
+            worker.moveToThread(thread)
 
-        thread.started.connect(worker.run)
-        worker.progress.connect(self._on_async_media_import_progress)
-        worker.finished.connect(self._on_async_media_import_finished)
-        worker.failed.connect(self._on_async_media_import_failed)
-        worker.finished.connect(thread.quit)
-        worker.failed.connect(thread.quit)
-        worker.finished.connect(worker.deleteLater)
-        worker.failed.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(self._clear_active_media_import)
+            thread.started.connect(worker.run)
+            worker.progress.connect(self._on_async_media_import_progress)
+            worker.item_imported.connect(self._on_async_media_item_imported)
+            worker.finished.connect(self._on_async_media_import_finished)
+            worker.cancelled.connect(self._on_async_media_import_cancelled)
+            worker.failed.connect(self._on_async_media_import_failed)
+            worker.finished.connect(thread.quit)
+            worker.cancelled.connect(thread.quit)
+            worker.failed.connect(thread.quit)
+            worker.finished.connect(worker.deleteLater)
+            worker.cancelled.connect(worker.deleteLater)
+            worker.failed.connect(worker.deleteLater)
+            thread.finished.connect(thread.deleteLater)
+            thread.finished.connect(
+                lambda: self._clear_active_media_import(thread)
+            )
 
-        self._active_media_import_thread = thread
-        self._active_media_import_worker = worker
-        thread.start()
+            self._active_media_import_thread = thread
+            self._active_media_import_worker = worker
+            thread.start()
+        except Exception as exc:
+            self._active_media_import_thread = None
+            self._active_media_import_worker = None
+            self._finish_media_import()
+            if thread is not None:
+                thread.deleteLater()
+            QMessageBox.critical(None, "Import Error", str(exc))
 
     @Slot(float, str)
     def _on_async_media_import_progress(self, value, message):
+        self._operations.update(self._media_import_token, message)
         self.progress_updated.emit(value, message)
 
-    @Slot(list)
-    def _on_async_media_import_finished(self, imported):
-        for item in imported:
-            self._node_model.add_node(
-                item.node_id, item.node_type, item.x, item.y, item.width, item.height,
-                title=item.title, thumbnail_bytes=item.thumbnail_bytes,
-                total_size=item.total_size,
-                media_width=item.media_width, media_height=item.media_height,
-                media_duration=item.media_duration,
-            )
-            self._auto_fit_callback(item.node_id, item.thumbnail_bytes)
-        self._video_transition_hide_requested.emit()
-        self.progress_finished.emit("Ready")
+    @Slot(object)
+    def _on_async_media_item_imported(self, item):
+        self._add_imported_media_node(item)
+
+    @Slot(int)
+    def _on_async_media_import_finished(self, imported_count):
+        self.status_message.emit(f"Imported {imported_count} video(s).", "normal")
+        self._finish_media_import()
+        self.progress_finished.emit("")
+
+    @Slot()
+    def _on_async_media_import_cancelled(self):
+        self.status_message.emit("Video import cancelled.", "warning")
+        self._finish_media_import()
+        self.progress_finished.emit("")
 
     @Slot(str)
     def _on_async_media_import_failed(self, message):
-        self._video_transition_hide_requested.emit()
-        self.progress_finished.emit("Ready")
+        self.status_message.emit(f"Import failed: {message}", "error")
+        self._finish_media_import()
+        self.progress_finished.emit("")
         QMessageBox.critical(None, "Import Error", message)
 
-    @Slot()
-    def _clear_active_media_import(self):
-        self._active_media_import_thread = None
-        self._active_media_import_worker = None
+    def _clear_active_media_import(self, thread):
+        if self._active_media_import_thread is thread:
+            self._active_media_import_thread = None
+            self._active_media_import_worker = None
+            self._finish_media_import()
+
+    def _finish_media_import(self):
+        token = self._media_import_token
+        self._media_import_token = None
+        if token is not None:
+            self._operations.finish(token)
+
+    def has_active_synchronous_import(self):
+        return self._synchronous_import_active
+
+    def has_active_background_jobs(self):
+        thread = self._active_media_import_thread
+        if thread is None:
+            return False
+        try:
+            return thread.isRunning()
+        except RuntimeError:
+            self._active_media_import_thread = None
+            self._active_media_import_worker = None
+            self._finish_media_import()
+            return False
+
+    def has_active_media_import(self):
+        return self.has_active_synchronous_import() or self.has_active_background_jobs()
+
+    def shutdown_background_jobs(self, timeout_ms=15000):
+        """Cooperatively stop active imports before their QThread is destroyed."""
+        thread = self._active_media_import_thread
+        if thread is None:
+            return True
+
+        try:
+            if not thread.isRunning():
+                self._clear_active_media_import(thread)
+                return True
+            thread.requestInterruption()
+            thread.quit()
+            stopped = thread.wait(timeout_ms)
+        except RuntimeError:
+            stopped = True
+        if stopped:
+            QApplication.processEvents()
+            self._clear_active_media_import(thread)
+        return stopped
 
     @Slot(int)
     def export_node_to_disk(self, node_id):
@@ -263,6 +355,14 @@ class ImportExportController(QObject):
     @Slot(list, float, float)
     def import_files_by_paths(self, file_paths, center_x, center_y):
         """Import files dropped onto the canvas. Supports mixed types."""
+        if self._operations.is_busy:
+            QMessageBox.information(None, "Import", "Another database operation is active.")
+            return
+
+        if self.has_active_media_import():
+            QMessageBox.information(None, "Import", "A media import is already running.")
+            return
+
         image_paths = []
         video_paths = []
         invalid_paths = []
@@ -285,6 +385,8 @@ class ImportExportController(QObject):
                 f"Skipped unsupported files:\n{names}",
             )
 
+        self._warn_about_large_files(image_paths + video_paths)
+
         if image_paths:
             self._import_image_batch(image_paths, center_x, center_y)
 
@@ -293,29 +395,45 @@ class ImportExportController(QObject):
 
     def _import_image_batch(self, paths, center_x, center_y):
         """Import a batch of image files (synchronous)."""
+        if self.has_active_media_import():
+            QMessageBox.information(
+                None,
+                "Import",
+                "A media import is already running.",
+            )
+            return
+        token = self._operations.begin("image_import", "Importing images...", blocking=True)
+        if token is None:
+            QMessageBox.information(None, "Import", "Another database operation is active.")
+            return
+        self._media_import_token = token
+
+        self._synchronous_import_active = True
+
         def progress_cb(file_index, file_count, current, total, status):
             total = max(total, 1)
-            val = (file_index + current / total) / max(file_count, 1)
-            self.progress_updated.emit(val, f"{status} image {file_index + 1}/{file_count}")
-            QApplication.processEvents()
+            value = (file_index + current / total) / max(file_count, 1)
+            message = f"{status} image {file_index + 1}/{file_count}"
+            self._operations.update(self._media_import_token, message)
+            self.progress_updated.emit(value, message)
+            QApplication.processEvents(
+                QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents
+            )
 
         try:
             imported = self._media_import_service.import_paths(
-                "image", paths, center_x, center_y, progress_cb
+                "image",
+                paths,
+                center_x,
+                center_y,
+                progress_callback=progress_cb,
+                imported_callback=self._add_imported_media_node,
             )
-        except ValueError as e:
-            QMessageBox.critical(None, "Invalid File", str(e))
-            self.progress_finished.emit("Ready")
-            return
-
-        for item in imported:
-            self._node_model.add_node(
-                item.node_id, item.node_type, item.x, item.y, item.width, item.height,
-                title=item.title, thumbnail_bytes=item.thumbnail_bytes,
-                total_size=item.total_size,
-                media_width=item.media_width, media_height=item.media_height,
-                media_duration=item.media_duration,
-            )
-            self._auto_fit_callback(item.node_id, item.thumbnail_bytes)
-
-        self.progress_finished.emit("Ready")
+            self.status_message.emit(f"Imported {len(imported)} image(s).", "normal")
+        except Exception as exc:
+            self.status_message.emit(f"Import failed: {exc}", "error")
+            QMessageBox.critical(None, "Import Error", str(exc))
+        finally:
+            self._synchronous_import_active = False
+            self._finish_media_import()
+            self.progress_finished.emit("")

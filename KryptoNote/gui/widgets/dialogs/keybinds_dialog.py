@@ -1,4 +1,4 @@
-from PySide6.QtCore import QPoint, Qt
+from PySide6.QtCore import QPoint, QSize, Qt
 from PySide6.QtWidgets import (
     QDialog,
     QFrame,
@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 )
 
 from KryptoNote.gui.theme import Theme
+from KryptoNote.gui.theme.icons import SvgIcons
 
 
 class KeybindsDialog(QDialog):
@@ -46,7 +47,11 @@ class KeybindsDialog(QDialog):
         title.setObjectName("keybinds_title")
         header_layout.addWidget(title, 1)
 
-        btn_close = QPushButton("×")
+        btn_close = QPushButton()
+        btn_close.setIcon(SvgIcons.get_icon("close"))
+        btn_close.setIconSize(QSize(18, 18))
+        btn_close.setToolTip("Close")
+        btn_close.setAccessibleName("Close")
         btn_close.setObjectName("btn_close")
         btn_close.setFixedSize(40, 40)
         btn_close.setCursor(Qt.CursorShape.PointingHandCursor)

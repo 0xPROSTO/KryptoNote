@@ -22,14 +22,27 @@ class TitleBarButton(QPushButton):
         self.setFixedSize(46, 32)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setStyleSheet(f"""
-            QPushButton {{ 
+            QPushButton {{
                 background: transparent;
                 border: none;
-            }} 
-            QPushButton:hover {{ 
+            }}
+            QPushButton:hover {{
                 background-color: {self._hover_color};
-            }} 
+            }}
         """)
+
+    def set_hover_color(self, color):
+        self._hover_color = color
+        self.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent;
+                border: none;
+            }}
+            QPushButton:hover {{
+                background-color: {self._hover_color};
+            }}
+        """)
+        self.update()
 
     def paintEvent(self, event):
         super().paintEvent(event)
@@ -38,7 +51,7 @@ class TitleBarButton(QPushButton):
 
         is_hovered = self.underMouse()
         color = Theme.Palette.TEXT_MAIN if is_hovered else Theme.Palette.TEXT_DIM
-        
+
         pen = QPen(QColor(color))
         pen.setWidthF(1.2)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
@@ -46,7 +59,6 @@ class TitleBarButton(QPushButton):
         painter.setPen(pen)
 
         cx, cy = self.width() / 2.0, self.height() / 2.0
-        size = 10.0
 
         if self._btn_type == 'min':
             painter.drawLine(cx - 5, cy, cx + 5, cy)
@@ -133,6 +145,13 @@ class CustomTitleBar(QWidget):
 
     def set_title(self, text: str):
         self.title_label.setText(text)
+
+    def refresh_theme(self):
+        self.setStyleSheet(Theme.Styles.get_title_bar_qss())
+        self.btn_minimize.set_hover_color(Theme.Palette.BTN_HOVER_DEFAULT)
+        self.btn_maximize.set_hover_color(Theme.Palette.BTN_HOVER_DEFAULT)
+        self.btn_close.set_hover_color(Theme.Palette.ACCENT_MAIN)
+        self.update()
 
     def _on_minimize(self):
         self.window().showMinimized()

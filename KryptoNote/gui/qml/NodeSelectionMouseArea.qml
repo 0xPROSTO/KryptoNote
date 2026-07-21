@@ -2,27 +2,31 @@ import QtQuick
 
 MouseArea {
     id: selector
+    required property var canvasRoot
+    required property var nodeModel
+    required property var canvasController
     property int nodeId: 0
     property string nodeType: ""
-    property var contextMenu
+    signal contextMenuRequested(int nodeId, string nodeType, var sourceItem, real localX, real localY)
     property point _pressPos: Qt.point(0, 0)
 
     acceptedButtons: Qt.LeftButton | Qt.RightButton
     hoverEnabled: true
+    preventStealing: false
 
-    onEntered: nodeModel.set_hovered(nodeId, true)
-    onExited: nodeModel.set_hovered(nodeId, false)
+    onEntered: selector.nodeModel.set_hovered(nodeId, true)
+    onExited: selector.nodeModel.set_hovered(nodeId, false)
 
     onPressed: function(mouse) {
         _pressPos = Qt.point(mouse.x, mouse.y)
-        if (mouse.button === Qt.LeftButton && root.isLinkMode) {
-            canvasController.handle_link_click(nodeId)
+        if (mouse.button === Qt.LeftButton && selector.canvasRoot.isLinkMode) {
+            selector.canvasController.handle_link_click(nodeId)
             mouse.accepted = true
         }
     }
 
     onClicked: function(mouse) {
-        if (mouse.button === Qt.LeftButton && root.isLinkMode) {
+        if (mouse.button === Qt.LeftButton && selector.canvasRoot.isLinkMode) {
             return
         }
 
@@ -33,25 +37,21 @@ MouseArea {
         }
 
         if (mouse.button === Qt.RightButton) {
-            contextMenu.nodeId = nodeId
-            contextMenu.nodeType = nodeType
-            contextMenu.x = mouse.x
-            contextMenu.y = mouse.y
-            contextMenu.open()
+            contextMenuRequested(nodeId, nodeType, selector, mouse.x, mouse.y)
         } else if (mouse.button === Qt.LeftButton) {
-            if (root.isCtrlHeld) {
-                nodeModel.toggle_selected(nodeId)
+            if (selector.canvasRoot.isCtrlHeld) {
+                selector.nodeModel.toggle_selected(nodeId)
             } else {
-                nodeModel.clear_selection()
-                nodeModel.clear_hovered()
-                nodeModel.set_selected(nodeId, true)
+                selector.nodeModel.clear_selection()
+                selector.nodeModel.clear_hovered()
+                selector.nodeModel.set_selected(nodeId, true)
             }
         }
     }
 
     onDoubleClicked: function(mouse) {
         if (mouse.button === Qt.LeftButton) {
-            canvasController.request_open_editor(nodeId)
+            selector.canvasController.request_open_editor(nodeId)
         }
     }
 }

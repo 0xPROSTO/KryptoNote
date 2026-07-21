@@ -1,168 +1,159 @@
-from PySide6.QtCore import QObject, Property
+from PySide6.QtCore import QObject, Property, Signal
 
 from .palette import Palette
+from .theme_manager import CONNECTION_WIDTHS, GRID_OPACITIES, get_theme_manager
 
 
 class ThemeBridge(QObject):
-    """Exposes the Python Palette as QML context properties.
+    """Live QML view of the active Python theme."""
 
-    Register as contextProperty("Theme") so QML can use
-    Theme.bgCanvas, Theme.accentMain, etc. instead of hardcoded hex values.
-    """
+    paletteChanged = Signal()
+    canvasAppearanceChanged = Signal()
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, manager=None):
         super().__init__(parent)
+        self._manager = manager or get_theme_manager()
+        self._manager.paletteChanged.connect(self.paletteChanged.emit)
+        self._manager.canvasAppearanceChanged.connect(
+            self.canvasAppearanceChanged.emit
+        )
 
-    # ── Background ──────────────────────────────────────────────────
+    bgCanvas = Property(str, lambda self: Palette.BG_CANVAS, notify=paletteChanged)
+    bgPanel = Property(str, lambda self: Palette.BG_PANEL, notify=paletteChanged)
+    bgNode = Property(str, lambda self: Palette.BG_NODE, notify=paletteChanged)
+    bgInput = Property(str, lambda self: Palette.BG_INPUT, notify=paletteChanged)
+    bgTitleBar = Property(str, lambda self: Palette.BG_TITLE_BAR, notify=paletteChanged)
+    bgPopover = Property(str, lambda self: Palette.BG_POPOVER, notify=paletteChanged)
+    bgControl = Property(str, lambda self: Palette.BG_CONTROL, notify=paletteChanged)
+    bgControlHover = Property(
+        str, lambda self: Palette.BG_CONTROL_HOVER, notify=paletteChanged
+    )
+    bgControlPressed = Property(
+        str, lambda self: Palette.BG_CONTROL_PRESSED, notify=paletteChanged
+    )
+    overlayDim = Property(str, lambda self: Palette.OVERLAY_DIM, notify=paletteChanged)
 
-    @Property(str, constant=True)
-    def bgCanvas(self):
-        return Palette.BG_CANVAS
+    accentMain = Property(str, lambda self: Palette.ACCENT_MAIN, notify=paletteChanged)
+    accentHover = Property(str, lambda self: Palette.ACCENT_HOVER, notify=paletteChanged)
+    accentLow = Property(str, lambda self: Palette.ACCENT_LOW, notify=paletteChanged)
+    accentHigh = Property(str, lambda self: Palette.ACCENT_HIGH, notify=paletteChanged)
+    accentUltra = Property(str, lambda self: Palette.ACCENT_ULTRA, notify=paletteChanged)
+    onAccent = Property(str, lambda self: Palette.ON_ACCENT, notify=paletteChanged)
 
-    @Property(str, constant=True)
-    def bgPanel(self):
-        return Palette.BG_PANEL
+    textMain = Property(str, lambda self: Palette.TEXT_MAIN, notify=paletteChanged)
+    textDim = Property(str, lambda self: Palette.TEXT_DIM, notify=paletteChanged)
+    textMuted = Property(str, lambda self: Palette.TEXT_MUTED, notify=paletteChanged)
+    textDisabled = Property(
+        str, lambda self: Palette.TEXT_DISABLED, notify=paletteChanged
+    )
+    textAccent = Property(str, lambda self: Palette.TEXT_ACCENT, notify=paletteChanged)
 
-    @Property(str, constant=True)
-    def bgNode(self):
-        return Palette.BG_NODE
+    tagStarred = Property(str, lambda self: Palette.TAG_STARRED, notify=paletteChanged)
+    tagDefault = Property(str, lambda self: Palette.TAG_DEFAULT, notify=paletteChanged)
+    tagSelectedBg = Property(
+        str, lambda self: Palette.TAG_SELECTED_BG, notify=paletteChanged
+    )
 
-    @Property(str, constant=True)
-    def bgInput(self):
-        return Palette.BG_INPUT
+    borderDefault = Property(
+        str, lambda self: Palette.BORDER_DEFAULT, notify=paletteChanged
+    )
+    borderSubtle = Property(
+        str, lambda self: Palette.BORDER_SUBTLE, notify=paletteChanged
+    )
+    borderHover = Property(str, lambda self: Palette.BORDER_HOVER, notify=paletteChanged)
+    borderSelected = Property(
+        str, lambda self: Palette.BORDER_SELECTED, notify=paletteChanged
+    )
+    borderTitleBar = Property(
+        str, lambda self: Palette.BORDER_TITLE_BAR, notify=paletteChanged
+    )
+    resizeHandle = Property(
+        str, lambda self: Palette.RESIZE_HANDLE, notify=paletteChanged
+    )
 
-    @Property(str, constant=True)
-    def bgTitleBar(self):
-        return Palette.BG_TITLE_BAR
+    gridSub = Property(str, lambda self: Palette.GRID_SUB, notify=paletteChanged)
+    gridMain = Property(str, lambda self: Palette.GRID_MAIN, notify=paletteChanged)
+    gridIntensity = Property(
+        str,
+        lambda self: self._manager.settings.grid_intensity,
+        notify=canvasAppearanceChanged,
+    )
+    gridOpacity = Property(
+        float,
+        lambda self: GRID_OPACITIES[self._manager.settings.grid_intensity],
+        notify=canvasAppearanceChanged,
+    )
+    gridEnabled = Property(
+        bool,
+        lambda self: self._manager.settings.grid_intensity != "off",
+        notify=canvasAppearanceChanged,
+    )
 
-    # ── Accent ──────────────────────────────────────────────────────
+    connectionStyle = Property(
+        str,
+        lambda self: self._manager.settings.connection_style,
+        notify=canvasAppearanceChanged,
+    )
+    connectionCurved = Property(
+        bool,
+        lambda self: self._manager.settings.connection_style == "curved",
+        notify=canvasAppearanceChanged,
+    )
+    connectionStrokeWidth = Property(
+        float,
+        lambda self: CONNECTION_WIDTHS[self._manager.settings.connection_thickness],
+        notify=canvasAppearanceChanged,
+    )
+    connectionHighlightWidth = Property(
+        float,
+        lambda self: CONNECTION_WIDTHS[self._manager.settings.connection_thickness] + 0.6,
+        notify=canvasAppearanceChanged,
+    )
 
-    @Property(str, constant=True)
-    def accentMain(self):
-        return Palette.ACCENT_MAIN
+    greenSecure = Property(str, lambda self: Palette.GREEN_SECURE, notify=paletteChanged)
+    successHover = Property(
+        str, lambda self: Palette.SUCCESS_HOVER, notify=paletteChanged
+    )
+    dangerHover = Property(str, lambda self: Palette.DANGER_HOVER, notify=paletteChanged)
 
-    @Property(str, constant=True)
-    def accentHover(self):
-        return Palette.ACCENT_HOVER
+    whiteAlpha05 = Property(
+        str, lambda self: Palette.WHITE_ALPHA_05, notify=paletteChanged
+    )
+    whiteAlpha10 = Property(
+        str, lambda self: Palette.WHITE_ALPHA_10, notify=paletteChanged
+    )
+    whiteAlpha15 = Property(
+        str, lambda self: Palette.WHITE_ALPHA_15, notify=paletteChanged
+    )
+    whiteAlpha85 = Property(
+        str, lambda self: Palette.WHITE_ALPHA_85, notify=paletteChanged
+    )
 
-    @Property(str, constant=True)
-    def accentLow(self):
-        return Palette.ACCENT_LOW
+    btnApply = Property(str, lambda self: Palette.BTN_APPLY, notify=paletteChanged)
+    btnApplyBorder = Property(
+        str, lambda self: Palette.BTN_APPLY_BORDER, notify=paletteChanged
+    )
+    btnApplyText = Property(
+        str, lambda self: Palette.BTN_APPLY_TEXT, notify=paletteChanged
+    )
+    btnApplyHover = Property(
+        str, lambda self: Palette.BTN_APPLY_HOVER, notify=paletteChanged
+    )
+    btnCancel = Property(str, lambda self: Palette.BTN_CANCEL, notify=paletteChanged)
+    btnCancelBorder = Property(
+        str, lambda self: Palette.BTN_CANCEL_BORDER, notify=paletteChanged
+    )
+    btnCancelText = Property(
+        str, lambda self: Palette.BTN_CANCEL_TEXT, notify=paletteChanged
+    )
+    btnCancelHover = Property(
+        str, lambda self: Palette.BTN_CANCEL_HOVER, notify=paletteChanged
+    )
 
-    # ── Text ────────────────────────────────────────────────────────
-
-    @Property(str, constant=True)
-    def textMain(self):
-        return Palette.TEXT_MAIN
-
-    @Property(str, constant=True)
-    def textDim(self):
-        return Palette.TEXT_DIM
-
-    @Property(str, constant=True)
-    def textMuted(self):
-        return Palette.TEXT_MUTED
-
-    # ── Borders ─────────────────────────────────────────────────────
-
-    @Property(str, constant=True)
-    def borderDefault(self):
-        return Palette.BORDER_DEFAULT
-
-    @Property(str, constant=True)
-    def borderHover(self):
-        return Palette.BORDER_HOVER
-
-    @Property(str, constant=True)
-    def borderTitleBar(self):
-        return Palette.BORDER_TITLE_BAR
-
-    # ── Grid ────────────────────────────────────────────────────────
-
-    @Property(str, constant=True)
-    def gridSub(self):
-        return Palette.GRID_SUB
-
-    @Property(str, constant=True)
-    def gridMain(self):
-        return Palette.GRID_MAIN
-
-    # ── Status Colors ───────────────────────────────────────────────
-
-    @Property(str, constant=True)
-    def greenSecure(self):
-        return Palette.GREEN_SECURE
-
-    @Property(str, constant=True)
-    def successHover(self):
-        return Palette.SUCCESS_HOVER
-
-    @Property(str, constant=True)
-    def dangerHover(self):
-        return Palette.DANGER_HOVER
-
-    # ── White Alpha ─────────────────────────────────────────────────
-
-    @Property(str, constant=True)
-    def whiteAlpha05(self):
-        return Palette.WHITE_ALPHA_05
-
-    @Property(str, constant=True)
-    def whiteAlpha10(self):
-        return Palette.WHITE_ALPHA_10
-
-    @Property(str, constant=True)
-    def whiteAlpha15(self):
-        return Palette.WHITE_ALPHA_15
-
-    @Property(str, constant=True)
-    def whiteAlpha85(self):
-        return Palette.WHITE_ALPHA_85
-
-    # ── Buttons ─────────────────────────────────────────────────────
-
-    @Property(str, constant=True)
-    def btnApply(self):
-        return Palette.BTN_APPLY
-
-    @Property(str, constant=True)
-    def btnApplyBorder(self):
-        return Palette.BTN_APPLY_BORDER
-
-    @Property(str, constant=True)
-    def btnApplyText(self):
-        return Palette.BTN_APPLY_TEXT
-
-    @Property(str, constant=True)
-    def btnApplyHover(self):
-        return Palette.BTN_APPLY_HOVER
-
-    @Property(str, constant=True)
-    def btnCancel(self):
-        return Palette.BTN_CANCEL
-
-    @Property(str, constant=True)
-    def btnCancelBorder(self):
-        return Palette.BTN_CANCEL_BORDER
-
-    @Property(str, constant=True)
-    def btnCancelText(self):
-        return Palette.BTN_CANCEL_TEXT
-
-    @Property(str, constant=True)
-    def btnCancelHover(self):
-        return Palette.BTN_CANCEL_HOVER
-
-    # ── Slider ──────────────────────────────────────────────────────
-
-    @Property(str, constant=True)
-    def sliderTrack(self):
-        return Palette.SLIDER_TRACK
-
-    @Property(str, constant=True)
-    def sliderHandle(self):
-        return Palette.SLIDER_HANDLE
-
-    @Property(str, constant=True)
-    def sliderHandleHover(self):
-        return Palette.SLIDER_HANDLE_HOVER
+    sliderTrack = Property(str, lambda self: Palette.SLIDER_TRACK, notify=paletteChanged)
+    sliderHandle = Property(
+        str, lambda self: Palette.SLIDER_HANDLE, notify=paletteChanged
+    )
+    sliderHandleHover = Property(
+        str, lambda self: Palette.SLIDER_HANDLE_HOVER, notify=paletteChanged
+    )

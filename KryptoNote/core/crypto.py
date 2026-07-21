@@ -13,6 +13,9 @@ class CryptoManager:
     KDF_ITERATIONS = 4
     KDF_MEMORY_COST = 1024 * 128
     KDF_LANES = 4
+    KDF_ITERATIONS_RANGE = (1, 20)
+    KDF_MEMORY_COST_RANGE = (8 * 1024, 512 * 1024)
+    KDF_LANES_RANGE = (1, 16)
 
     def __init__(self):
         self.key = None
@@ -28,16 +31,40 @@ class CryptoManager:
         return salt
 
     @classmethod
-    def derive_password_key(cls, password: str, salt: bytes) -> bytes:
+    def derive_password_key(
+        cls,
+        password: str,
+        salt: bytes,
+        iterations=None,
+        memory_cost=None,
+        lanes=None,
+    ) -> bytes:
         salt = cls.normalize_salt(salt)
+        iterations = cls.KDF_ITERATIONS if iterations is None else int(iterations)
+        memory_cost = cls.KDF_MEMORY_COST if memory_cost is None else int(memory_cost)
+        lanes = cls.KDF_LANES if lanes is None else int(lanes)
+        cls.validate_kdf_params(iterations, memory_cost, lanes)
         kdf = Argon2id(
             salt=salt,
             length=32,
-            iterations=cls.KDF_ITERATIONS,
-            memory_cost=cls.KDF_MEMORY_COST,
-            lanes=cls.KDF_LANES,
+            iterations=iterations,
+            memory_cost=memory_cost,
+            lanes=lanes,
         )
         return kdf.derive(password.encode())
+
+    @classmethod
+    def validate_kdf_params(cls, iterations, memory_cost, lanes):
+        values = (
+            ("iterations", int(iterations), cls.KDF_ITERATIONS_RANGE),
+            ("memory_cost", int(memory_cost), cls.KDF_MEMORY_COST_RANGE),
+            ("lanes", int(lanes), cls.KDF_LANES_RANGE),
+        )
+        for name, value, (minimum, maximum) in values:
+            if not minimum <= value <= maximum:
+                raise CryptoError(
+                    f"Invalid Argon2 {name}: expected {minimum}..{maximum}, got {value}"
+                )
 
     @staticmethod
     def normalize_salt(salt) -> bytes:

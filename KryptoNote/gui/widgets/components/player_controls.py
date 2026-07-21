@@ -1,7 +1,6 @@
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QWidget, QHBoxLayout, QPushButton, QSlider, QLabel
 from ...theme.icons import VectorIcons
-from ...theme.palette import Palette
 from ...theme.style_factory import StyleFactory
 
 class ClickableSlider(QSlider):

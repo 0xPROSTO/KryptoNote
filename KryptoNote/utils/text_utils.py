@@ -1,11 +1,11 @@
 def process_markdown_for_pyside(text: str) -> str:
     if not text:
         return ""
-        
+
     lines = text.split('\n')
     processed = []
     in_code_block = False
-    
+
     for line in lines:
         stripped = line.rstrip()
         if stripped.startswith('```'):
@@ -18,5 +18,5 @@ def process_markdown_for_pyside(text: str) -> str:
                 processed.append(stripped + "  ")
             else:
                 processed.append("")
-                
+
     return '\n'.join(processed)

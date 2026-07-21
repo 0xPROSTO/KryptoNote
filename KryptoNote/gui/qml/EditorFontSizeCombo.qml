@@ -6,6 +6,7 @@ import QtQuick.Controls.Basic
 ComboBox {
     id: combo
 
+    required property var appTheme
     property var fontSizes: []
     property bool reveal: false
 
@@ -19,14 +20,14 @@ ComboBox {
 
     background: Rectangle {
         radius: 6
-        color: "#1b1b1b"
+        color: combo.appTheme.bgInput
         border.width: 1
-        border.color: "#3a3a3a"
+        border.color: combo.appTheme.borderDefault
     }
 
     contentItem: Text {
         text: combo.displayText
-        color: "#f2f2f2"
+        color: combo.appTheme.textMain
         font: combo.font
         rightPadding: 14
         horizontalAlignment: Text.AlignHCenter
@@ -41,7 +42,7 @@ ComboBox {
         onPaint: {
             var ctx = getContext("2d")
             ctx.reset()
-            ctx.strokeStyle = "#cfcfcf"
+            ctx.strokeStyle = combo.appTheme.textDim
             ctx.lineWidth = 1.7
             ctx.lineCap = "round"
             ctx.lineJoin = "round"
@@ -54,9 +55,9 @@ ComboBox {
     }
 
     popup.background: Rectangle {
-        color: "#1b1b1b"
+        color: combo.appTheme.bgPopover
         border.width: 1
-        border.color: "#3a3a3a"
+        border.color: combo.appTheme.borderDefault
     }
 
     delegate: ItemDelegate {
@@ -68,13 +69,13 @@ ComboBox {
 
         contentItem: Text {
             text: option.modelData + "pt"
-            color: "#f2f2f2"
+            color: combo.appTheme.textMain
             font.pointSize: 10
             verticalAlignment: Text.AlignVCenter
         }
 
         background: Rectangle {
-            color: option.highlighted ? "#2d2d2d" : "#1b1b1b"
+            color: option.highlighted ? combo.appTheme.bgControlHover : combo.appTheme.bgPopover
         }
     }
 

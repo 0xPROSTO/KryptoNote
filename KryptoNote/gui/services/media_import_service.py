@@ -2,10 +2,11 @@ import os
 import sqlite3
 from dataclasses import dataclass
 
-from PySide6.QtCore import QObject, Signal, Slot
+from PySide6.QtCore import QObject, QThread, Signal, Slot
 
 from ...config import Config
-from ...core.crypto import CryptoManager
+from ...core.constants import MEDIA_CHUNK_SIZE
+from ...core.exceptions import OperationCancelledError
 from ...utils.media_proc import create_thumbnail, read_media_metadata
 
 
@@ -28,6 +29,8 @@ class ImportedMediaNode:
 class MediaImportService:
     """Validate and import selected media paths into the encrypted store."""
 
+    LARGE_FILE_WARNING_BYTES = 256 * 1024 * 1024
+
     VALID_EXTENSIONS = {
         "image": {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp"},
         "video": {".mp4", ".avi", ".mkv", ".mov", ".webm"},
@@ -49,7 +52,27 @@ class MediaImportService:
             return True
         return os.path.splitext(path)[1].lower() in valid
 
-    def import_paths(self, media_type, paths, center_x, center_y, progress_callback=None):
+    def get_large_files(self, paths):
+        """Return existing files large enough to deserve a UI warning."""
+        result = []
+        for path in paths:
+            try:
+                size = os.path.getsize(path)
+            except OSError:
+                continue
+            if size >= self.LARGE_FILE_WARNING_BYTES:
+                result.append((path, size))
+        return result
+
+    def import_paths(
+        self,
+        media_type,
+        paths,
+        center_x,
+        center_y,
+        progress_callback=None,
+        imported_callback=None,
+    ):
         imported = []
         for index, path in enumerate(paths):
             if not self.validate_path(media_type, path):
@@ -76,28 +99,31 @@ class MediaImportService:
                 media_type, x, y, width, height, title, thumbnail, path,
                 chunk_progress, metadata.width, metadata.height, metadata.duration
             )
-            imported.append(
-                ImportedMediaNode(
-                    node_id=node_id,
-                    node_type=media_type,
-                    x=x,
-                    y=y,
-                    width=width,
-                    height=height,
-                    title=title,
-                    thumbnail_bytes=thumbnail,
-                    total_size=file_size,
-                    media_width=metadata.width,
-                    media_height=metadata.height,
-                    media_duration=metadata.duration,
-                )
+            item = ImportedMediaNode(
+                node_id=node_id,
+                node_type=media_type,
+                x=x,
+                y=y,
+                width=width,
+                height=height,
+                title=title,
+                thumbnail_bytes=thumbnail,
+                total_size=file_size,
+                media_width=metadata.width,
+                media_height=metadata.height,
+                media_duration=metadata.duration,
             )
+            imported.append(item)
+            if imported_callback:
+                imported_callback(item)
         return imported
 
 
 class MediaImportWorker(QObject):
     progress = Signal(float, str)
-    finished = Signal(list)
+    item_imported = Signal(object)
+    finished = Signal(int)
+    cancelled = Signal()
     failed = Signal(str)
 
     def __init__(self, db_path, crypto_manager, media_type, paths, center_x, center_y):
@@ -109,29 +135,43 @@ class MediaImportWorker(QObject):
         self._center_x = center_x
         self._center_y = center_y
 
+    @staticmethod
+    def _is_cancelled():
+        return QThread.currentThread().isInterruptionRequested()
+
     @Slot()
     def run(self):
         from ...core.database.repository import write_chunked_media
 
         conn = None
         try:
-            crypto = self._crypto
             conn = sqlite3.connect(self._db_path, timeout=30.0)
+            conn.execute("PRAGMA foreign_keys=ON;")
             conn.execute("PRAGMA journal_mode=WAL;")
             conn.execute("PRAGMA synchronous=NORMAL;")
             conn.execute("PRAGMA temp_store=MEMORY;")
             cursor = conn.cursor()
 
-            imported = []
+            imported_count = 0
             file_count = max(len(self._paths), 1)
 
             for file_index, path in enumerate(self._paths):
+                if self._is_cancelled():
+                    raise OperationCancelledError("Media import cancelled")
                 self.progress.emit(
                     file_index / file_count,
-                    f"Processing {self._media_type} {file_index + 1}/{len(self._paths)}",
+                    self._format_progress_message(
+                        "Processing",
+                        file_index,
+                        file_count,
+                        0,
+                        0,
+                    ),
                 )
 
                 thumbnail = create_thumbnail(path)
+                if self._is_cancelled():
+                    raise OperationCancelledError("Media import cancelled")
                 metadata = read_media_metadata(path)
                 file_size = os.path.getsize(path)
                 title = os.path.basename(path)
@@ -144,34 +184,72 @@ class MediaImportWorker(QObject):
                 def _progress_adapter(chunk_idx, total_chunks, status,
                                       _fi=file_index, _fc=file_count):
                     val = (_fi + chunk_idx / max(total_chunks, 1)) / _fc
-                    self.progress.emit(val, f"{status} {self._media_type} {_fi + 1}/{_fc}")
+                    self.progress.emit(
+                        val,
+                        self._format_progress_message(
+                            status,
+                            _fi,
+                            _fc,
+                            chunk_idx,
+                            total_chunks,
+                        ),
+                    )
 
                 node_id = write_chunked_media(
-                    cursor, conn, crypto,
+                    cursor, conn, self._crypto,
                     self._media_type, x, y, width, height, title, thumbnail,
-                    path, Config.CHUNK_SIZE, _progress_adapter,
+                    path, MEDIA_CHUNK_SIZE, _progress_adapter,
                     metadata.width, metadata.height, metadata.duration,
+                    cancel_check=self._is_cancelled,
                 )
-                imported.append(
-                    ImportedMediaNode(
-                        node_id=node_id,
-                        node_type=self._media_type,
-                        x=x,
-                        y=y,
-                        width=width,
-                        height=height,
-                        title=title,
-                        thumbnail_bytes=thumbnail,
-                        total_size=file_size,
-                        media_width=metadata.width,
-                        media_height=metadata.height,
-                        media_duration=metadata.duration,
-                    )
+                item = ImportedMediaNode(
+                    node_id=node_id,
+                    node_type=self._media_type,
+                    x=x,
+                    y=y,
+                    width=width,
+                    height=height,
+                    title=title,
+                    thumbnail_bytes=thumbnail,
+                    total_size=file_size,
+                    media_width=metadata.width,
+                    media_height=metadata.height,
+                    media_duration=metadata.duration,
                 )
+                imported_count += 1
+                self.item_imported.emit(item)
 
-            self.finished.emit(imported)
-        except Exception as e:
-            self.failed.emit(str(e))
+            self.finished.emit(imported_count)
+        except OperationCancelledError:
+            self.cancelled.emit()
+        except Exception as exc:
+            self.failed.emit(str(exc))
         finally:
             if conn is not None:
                 conn.close()
+
+    def _format_progress_message(
+        self,
+        status,
+        file_index,
+        file_count,
+        chunk_index,
+        chunk_count,
+    ):
+        safe_file_count = max(int(file_count), 1)
+        safe_file_index = min(max(int(file_index), 0), safe_file_count - 1)
+        file_progress = safe_file_index / safe_file_count
+        details = ""
+        if chunk_count:
+            safe_chunk_count = max(int(chunk_count), 1)
+            safe_chunk_index = min(max(int(chunk_index), 0), safe_chunk_count)
+            file_progress = (
+                safe_file_index + safe_chunk_index / safe_chunk_count
+            ) / safe_file_count
+            details = f" · Chunk {safe_chunk_index}/{safe_chunk_count}"
+        percent = round(file_progress * 100)
+        media_label = self._media_type.capitalize()
+        return (
+            f"{status} {media_label} {safe_file_index + 1}/{safe_file_count}"
+            f"{details} · {percent}%"
+        )

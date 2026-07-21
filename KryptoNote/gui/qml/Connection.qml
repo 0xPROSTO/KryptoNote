@@ -1,35 +1,41 @@
 import QtQuick
 import QtQuick.Shapes
-import QtQuick.Controls
 
 Item {
     id: connectionItem
+    required property var model
+    required property var canvasRoot
+    required property var canvasController
+    required property var appTheme
+    signal contextMenuRequested(int connId, var sourceItem, real localX, real localY)
     z: showHighlight ? 1 : 0
 
-    property real minX: Math.min(model.connStartEdgeX, model.connEndEdgeX)
-    property real minY: Math.min(model.connStartEdgeY, model.connEndEdgeY)
-    property real maxX: Math.max(model.connStartEdgeX, model.connEndEdgeX)
-    property real maxY: Math.max(model.connStartEdgeY, model.connEndEdgeY)
+    property real minX: Math.min(connectionItem.model.connStartEdgeX, connectionItem.model.connEndEdgeX)
+    property real minY: Math.min(connectionItem.model.connStartEdgeY, connectionItem.model.connEndEdgeY)
+    property real maxX: Math.max(connectionItem.model.connStartEdgeX, connectionItem.model.connEndEdgeX)
+    property real maxY: Math.max(connectionItem.model.connStartEdgeY, connectionItem.model.connEndEdgeY)
 
-    property bool isHighlighted: model.connIsHighlighted
-    property bool isDeleting: model.connIsDeleting || false
-    property bool curveHovered: root.hoveredConnectionId === model.connId
+    property bool isHighlighted: connectionItem.model.connIsHighlighted
+    property bool isDeleting: connectionItem.model.connIsDeleting || false
+    property bool curveHovered: connectionItem.canvasRoot.hoveredConnectionId === connectionItem.model.connId
     property bool showHighlight: isHighlighted || curveHovered
     property bool _isDeleting: false
     property bool _deleteFinalizes: true
-    property real _viewportMargin: 360 / Math.max(root.contentScale, 0.12)
-    property real _visibleLeft: (-root._contentLayerX / root.contentScale) - _viewportMargin
-    property real _visibleTop: (-root._contentLayerY / root.contentScale) - _viewportMargin
-    property real _visibleRight: ((root.width - root._contentLayerX) / root.contentScale) + _viewportMargin
-    property real _visibleBottom: ((root.height - root._contentLayerY) / root.contentScale) + _viewportMargin
+    property real _viewportMargin: 360 / Math.max(connectionItem.canvasRoot.contentScale, 0.12)
+    property real _visibleLeft: (-connectionItem.canvasRoot._contentLayerX / connectionItem.canvasRoot.contentScale) - _viewportMargin
+    property real _visibleTop: (-connectionItem.canvasRoot._contentLayerY / connectionItem.canvasRoot.contentScale) - _viewportMargin
+    property real _visibleRight: ((connectionItem.canvasRoot.width - connectionItem.canvasRoot._contentLayerX) / connectionItem.canvasRoot.contentScale) + _viewportMargin
+    property real _visibleBottom: ((connectionItem.canvasRoot.height - connectionItem.canvasRoot._contentLayerY) / connectionItem.canvasRoot.contentScale) + _viewportMargin
     property bool isInViewport: (maxX >= _visibleLeft
                                  && minX <= _visibleRight
                                  && maxY >= _visibleTop
                                  && minY <= _visibleBottom)
-    property real lodLineAmount: Math.max(0.0, Math.min(1.0, (0.45 - root.contentScale) / 0.25))
-    property real screenStrokeWidth: showHighlight ? 2.1 : (1.5 - lodLineAmount * 0.2)
-    property real effectiveStrokeWidth: screenStrokeWidth / Math.max(root.contentScale, 0.12)
-    property real hitRadius: Math.max(10.0 / Math.max(root.contentScale, 0.12), effectiveStrokeWidth * 2.0)
+    property real lodLineAmount: Math.max(0.0, Math.min(1.0, (0.45 - connectionItem.canvasRoot.contentScale) / 0.25))
+    property real screenStrokeWidth: showHighlight
+            ? connectionItem.appTheme.connectionHighlightWidth
+            : (connectionItem.appTheme.connectionStrokeWidth - lodLineAmount * 0.2)
+    property real effectiveStrokeWidth: screenStrokeWidth / Math.max(connectionItem.canvasRoot.contentScale, 0.12)
+    property real hitRadius: Math.max(10.0 / Math.max(connectionItem.canvasRoot.contentScale, 0.12), effectiveStrokeWidth * 2.0)
     property real hitPadding: hitRadius + 8.0
     visible: isInViewport || _isDeleting
 
@@ -40,7 +46,11 @@ Item {
 
     onIsDeletingChanged: {
         if (isDeleting) {
-            animateDeletion(model.connDeleteFinalizes)
+            animateDeletion(connectionItem.model.connDeleteFinalizes)
+        } else {
+            deleteAnim.stop()
+            _isDeleting = false
+            opacity = 1.0
         }
     }
 
@@ -51,8 +61,8 @@ Item {
 
         ShapePath {
             id: shapePath
-            strokeColor: connectionItem._isDeleting ? "#8c8c8c" :
-                         (connectionItem.showHighlight ? AppTheme.accentMain : AppTheme.borderDefault)
+            strokeColor: connectionItem._isDeleting ? connectionItem.appTheme.textMuted :
+                         (connectionItem.showHighlight ? connectionItem.appTheme.accentMain : connectionItem.appTheme.borderDefault)
             strokeWidth: connectionItem.effectiveStrokeWidth
             fillColor: "transparent"
             capStyle: ShapePath.RoundCap
@@ -60,21 +70,29 @@ Item {
             Behavior on strokeColor { ColorAnimation { duration: 120 } }
             Behavior on strokeWidth { NumberAnimation { duration: 120 } }
 
-            startX: model.connStartEdgeX - connectionItem.x
-            startY: model.connStartEdgeY - connectionItem.y
+            startX: connectionItem.model.connStartEdgeX - connectionItem.x
+            startY: connectionItem.model.connStartEdgeY - connectionItem.y
 
             PathCubic {
                 id: bezierPath
-                x: model.connEndEdgeX - connectionItem.x
-                y: model.connEndEdgeY - connectionItem.y
+                x: connectionItem.model.connEndEdgeX - connectionItem.x
+                y: connectionItem.model.connEndEdgeY - connectionItem.y
 
                 property real dx: x - shapePath.startX
                 property real dy: y - shapePath.startY
 
-                control1X: shapePath.startX + dx * 0.4
-                control1Y: shapePath.startY
-                control2X: x - dx * 0.4
-                control2Y: y
+                control1X: connectionItem.appTheme.connectionCurved
+                        ? shapePath.startX + dx * 0.4
+                        : shapePath.startX + dx / 3.0
+                control1Y: connectionItem.appTheme.connectionCurved
+                        ? shapePath.startY
+                        : shapePath.startY + dy / 3.0
+                control2X: connectionItem.appTheme.connectionCurved
+                        ? x - dx * 0.4
+                        : shapePath.startX + dx * 2.0 / 3.0
+                control2Y: connectionItem.appTheme.connectionCurved
+                        ? y
+                        : shapePath.startY + dy * 2.0 / 3.0
             }
         }
     }
@@ -87,22 +105,19 @@ Item {
         enabled: connectionItem.visible
 
         onPressed: function(mouse) {
-            if (!checkDistance(mouse.x, mouse.y)) {
+            if (!connectionItem.checkDistance(mouse.x, mouse.y)) {
                 mouse.accepted = false;
                 return;
             }
         }
 
         onClicked: function(mouse) {
-            if (!checkDistance(mouse.x, mouse.y)) {
+            if (!connectionItem.checkDistance(mouse.x, mouse.y)) {
                 mouse.accepted = false;
                 return;
             }
             if (mouse.button === Qt.RightButton) {
-                connectionContextMenu.connId = model.connId;
-                connectionContextMenu.x = mouse.x;
-                connectionContextMenu.y = mouse.y;
-                connectionContextMenu.popup();
+                connectionItem.contextMenuRequested(connectionItem.model.connId, connectionHover, mouse.x, mouse.y)
             }
         }
     }
@@ -154,14 +169,11 @@ Item {
         return (px - cx) * (px - cx) + (py - cy) * (py - cy);
     }
 
-    function requestDeletion() {
-        if (_isDeleting) return;
-        canvasController.delete_connection(model.connId);
-    }
 
     function animateDeletion(finalizeAfterAnimation) {
         if (_isDeleting) return;
         _deleteFinalizes = finalizeAfterAnimation;
+        opacity = 1.0;
         _isDeleting = true;
         deleteAnim.start();
     }
@@ -177,59 +189,10 @@ Item {
         ScriptAction {
             script: {
                 if (connectionItem._deleteFinalizes) {
-                    canvasController.perform_delete_connection(model.connId)
+                    connectionItem.canvasController.perform_delete_connection(connectionItem.model.connId)
                 }
             }
         }
     }
 
-    Popup {
-        id: connectionContextMenu
-        width: 140
-        padding: 4
-        modal: true
-        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-        opacity: 0.0
-        property int connId: 0
-        enter: Transition {
-            NumberAnimation { property: "opacity"; from: 0.0; to: 1.0; duration: 140; easing.type: Easing.OutQuad }
-        }
-        exit: Transition {
-            NumberAnimation { property: "opacity"; from: 1.0; to: 0.0; duration: 120; easing.type: Easing.OutQuad }
-        }
-        Overlay.modal: Rectangle {
-            color: "#1a000000"
-            opacity: connectionContextMenu.opened ? 1.0 : 0.0
-            Behavior on opacity { NumberAnimation { duration: 140; easing.type: Easing.OutQuad } }
-        }
-        background: Rectangle {
-            color: "#333333"
-            radius: 4
-            border.color: "#444444"
-            border.width: 1
-        }
-        contentItem: Rectangle {
-            width: 132
-            height: 28
-            color: removeMouseArea.containsMouse ? "#444444" : "transparent"
-            radius: 3
-            Text {
-                anchors.verticalCenter: parent.verticalCenter
-                x: 10
-                text: "Remove Link"
-                color: "#ffffff"
-                font.family: "Segoe UI"
-                font.pointSize: 9
-            }
-            MouseArea {
-                id: removeMouseArea
-                anchors.fill: parent
-                hoverEnabled: true
-                onClicked: {
-                    connectionItem.requestDeletion();
-                    connectionContextMenu.close();
-                }
-            }
-        }
-    }
 }

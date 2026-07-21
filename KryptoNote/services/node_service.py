@@ -1,12 +1,29 @@
+import sqlite3
+from contextlib import closing
+from pathlib import Path
+
+from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QRect, QSize
+from PySide6.QtGui import QImageReader
+
+from ..core.constants import MEDIA_CHUNK_SIZE
 from ..core.database.models import NodeItemDTO, ConnectionDTO
+from ..core.io.stream import BlockEncryptedStream
 
 
 class NodeService:
     def __init__(self, repo):
         self.repo = repo
 
-    def get_all_items(self) -> list[NodeItemDTO]:
-        return self.repo.get_all_items()
+    def get_all_items(self, include_thumbnails=True) -> list[NodeItemDTO]:
+        return self.repo.get_all_items(include_thumbnails=include_thumbnails)
+
+    def iter_item_batches(self, batch_size=200, include_thumbnails=False):
+        return self.repo.iter_item_batches(
+            batch_size=batch_size, include_thumbnails=include_thumbnails
+        )
+
+    def get_item_count(self):
+        return self.repo.get_item_count()
 
     def search_items(self, query: str) -> list[NodeItemDTO]:
         """In-memory search across decrypted node titles and text content."""
@@ -18,6 +35,30 @@ class NodeService:
 
     def get_all_connections(self) -> list[ConnectionDTO]:
         return self.repo.get_all_connections()
+
+    def iter_connection_batches(self, batch_size=200):
+        return self.repo.iter_connection_batches(batch_size=batch_size)
+
+    def get_connection_count(self):
+        return self.repo.get_connection_count()
+
+    def get_all_tags(self):
+        return self.repo.get_all_tags()
+
+    def ensure_tag(self, name, color):
+        return self.repo.ensure_tag(name, color)
+
+    def update_tag(self, tag_id, name, color):
+        self.repo.update_tag(tag_id, name, color)
+
+    def get_item_tags_map(self):
+        return self.repo.get_item_tags_map()
+
+    def set_item_tag(self, item_id, tag_id, enabled):
+        self.repo.set_item_tag(item_id, tag_id, enabled)
+
+    def set_item_tag_order(self, item_id, tag_ids):
+        self.repo.set_item_tag_order(item_id, tag_ids)
 
     def add_item(
             self, item_type, x, y, w, h, title="", text=None, thumb=None,
@@ -48,12 +89,16 @@ class NodeService:
             on_start_vacuum=None,
             on_finish_vacuum=None,
             on_waiting_lock=None,
+            on_success=None,
+            on_error=None,
     ):
-        self.repo.delete_node_cascade(
+        return self.repo.delete_node_cascade(
             item_id,
             on_start_vacuum,
             on_finish_vacuum,
             on_waiting_lock,
+            on_success,
+            on_error,
         )
 
     def delete_nodes_cascade(
@@ -62,12 +107,16 @@ class NodeService:
             on_start_vacuum=None,
             on_finish_vacuum=None,
             on_waiting_lock=None,
+            on_success=None,
+            on_error=None,
     ):
-        self.repo.delete_nodes_cascade(
+        return self.repo.delete_nodes_cascade(
             item_ids,
             on_start_vacuum,
             on_finish_vacuum,
             on_waiting_lock,
+            on_success,
+            on_error,
         )
 
     def delete_connection(self, conn_id):
@@ -96,17 +145,161 @@ class NodeService:
 
     def get_item_data(self, item_id):
         item = self.get_item_info(item_id)
-        if item and item.is_chunked and item.total_size > 0:
-            chunks = []
-            chunk_index = 0
-            while True:
+        if item and item.is_chunked:
+            total_size = int(item.total_size or 0)
+            if total_size == 0:
+                return b""
+            chunk_count = (total_size + MEDIA_CHUNK_SIZE - 1) // MEDIA_CHUNK_SIZE
+            data = bytearray()
+            for chunk_index in range(chunk_count):
                 chunk = self.get_chunk(item_id, chunk_index)
-                if not chunk:
-                    break
-                chunks.append(chunk)
-                chunk_index += 1
-            return b"".join(chunks)
+                if chunk is None:
+                    raise ValueError(f"Missing media chunk {chunk_index} for item {item_id}")
+                data.extend(chunk)
+            if len(data) != total_size:
+                raise ValueError(
+                    f"Incomplete media data for item {item_id}: expected {total_size}, got {len(data)}"
+                )
+            return bytes(data)
         return self.get_full_data(item_id)
+
+    def open_item_stream(self, item_id):
+        """Open a seekable decrypted stream without materialising all chunks."""
+        item = self.get_item_info(item_id)
+        if item is None:
+            raise ValueError(f"Media item {item_id} does not exist")
+        if not item.is_chunked:
+            raise ValueError(f"Media item {item_id} is not stored as a chunked stream")
+        db_path = self.get_db_path()
+        if not db_path:
+            raise ValueError("Database path is unavailable")
+        stream = BlockEncryptedStream(
+            db_path,
+            self.create_crypto_clone(),
+            item_id,
+            int(item.total_size or 0),
+            MEDIA_CHUNK_SIZE,
+        )
+        if not stream.isOpen():
+            error = stream.errorString() or "unable to open encrypted stream"
+            stream.close()
+            raise OSError(error)
+        return stream
+
+    def read_image_preview(self, item_id, target_size, clip_rect=None):
+        """Decode a bounded preview directly from encrypted storage."""
+        max_decode_bytes = 256 * 1024 * 1024
+        QImageReader.setAllocationLimit(256)
+        device = None
+        try:
+            item = self.get_item_info(item_id)
+            if item is None:
+                raise ValueError(f"Image item {item_id} does not exist")
+            if item.is_chunked:
+                device = self.open_item_stream(item_id)
+            else:
+                payload = self.get_full_data(item_id)
+                if not payload:
+                    raise ValueError("Image data is empty")
+                byte_array = QByteArray(payload)
+                device = QBuffer(byte_array)
+                if not device.open(QIODevice.OpenModeFlag.ReadOnly):
+                    raise OSError(device.errorString() or "unable to open image buffer")
+                device._encrypted_payload = byte_array
+
+            reader = QImageReader(device)
+            reader.setAutoTransform(True)
+            source_size = reader.size()
+            if not source_size.isValid() or source_size.isEmpty():
+                raise ValueError(
+                    device.errorString()
+                    or reader.errorString()
+                    or "invalid image dimensions"
+                )
+
+            requested = self._coerce_preview_size(target_size)
+            source_rect = QRect(0, 0, source_size.width(), source_size.height())
+            if clip_rect is not None:
+                clip = self._coerce_clip_rect(clip_rect).intersected(source_rect)
+                if clip.isEmpty():
+                    raise ValueError("Preview clip rectangle is outside the image")
+                reader.setClipRect(clip)
+                decode_width, decode_height = clip.width(), clip.height()
+            else:
+                decode_width, decode_height = source_size.width(), source_size.height()
+
+            scale = min(
+                1.0,
+                requested.width() / decode_width,
+                requested.height() / decode_height,
+                (max_decode_bytes / (decode_width * decode_height * 4)) ** 0.5,
+            )
+            scaled_size = QSize(
+                max(1, int(decode_width * scale)),
+                max(1, int(decode_height * scale)),
+            )
+            if scaled_size.width() * scaled_size.height() * 4 > max_decode_bytes:
+                raise ValueError("Image preview exceeds the 256 MiB decode limit")
+            if scaled_size != QSize(decode_width, decode_height):
+                reader.setScaledSize(scaled_size)
+
+            image = reader.read()
+            if image.isNull():
+                raise ValueError(
+                    device.errorString()
+                    or reader.errorString()
+                    or "unable to decode image preview"
+                )
+            return image
+        finally:
+            if device is not None:
+                device.close()
+
+    @staticmethod
+    def _coerce_preview_size(target_size):
+        if isinstance(target_size, QSize):
+            size = QSize(target_size)
+        elif isinstance(target_size, int):
+            size = QSize(target_size, target_size)
+        else:
+            try:
+                width, height = target_size
+            except (TypeError, ValueError) as exc:
+                raise ValueError("target_size must be an int, QSize or (width, height)") from exc
+            size = QSize(int(width), int(height))
+        if not size.isValid() or size.isEmpty():
+            raise ValueError("target_size must be positive")
+        return size.boundedTo(QSize(4096, 4096))
+
+    @staticmethod
+    def _coerce_clip_rect(clip_rect):
+        if isinstance(clip_rect, QRect):
+            return QRect(clip_rect)
+        try:
+            x, y, width, height = clip_rect
+        except (TypeError, ValueError) as exc:
+            raise ValueError("clip_rect must be QRect or (x, y, width, height)") from exc
+        return QRect(int(x), int(y), int(width), int(height))
+
+    def read_thumbnail(self, item_id):
+        """Decrypt one thumbnail through an isolated read-only connection."""
+        db_path = self.get_db_path()
+        if db_path == ":memory:":
+            self.repo.cursor.execute(
+                "SELECT thumbnail FROM items WHERE id=?", (item_id,)
+            )
+            row = self.repo.cursor.fetchone()
+            return self.repo.crypto.decrypt(row[0]) if row and row[0] else None
+        if not db_path:
+            return None
+        uri = f"{Path(db_path).resolve().as_uri()}?mode=ro"
+        with closing(sqlite3.connect(uri, uri=True, timeout=5.0)) as connection:
+            row = connection.execute(
+                "SELECT thumbnail FROM items WHERE id=?", (item_id,)
+            ).fetchone()
+        if not row or not row[0]:
+            return None
+        return self.create_crypto_clone().decrypt(row[0])
 
     def commit_changes(self):
         self.repo.commit_changes()
@@ -116,11 +309,15 @@ class NodeService:
             on_start_vacuum=None,
             on_finish_vacuum=None,
             on_waiting_lock=None,
+            on_success=None,
+            on_error=None,
     ):
-        self.repo.vacuum_database(
+        return self.repo.vacuum_database(
             on_start_vacuum,
             on_finish_vacuum,
             on_waiting_lock,
+            on_success,
+            on_error,
         )
 
     def get_db_path(self):

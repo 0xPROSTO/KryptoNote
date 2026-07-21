@@ -1,5 +1,7 @@
 from PySide6.QtCore import QObject, Signal, Slot
-from PySide6.QtWidgets import QMessageBox, QApplication
+from PySide6.QtWidgets import QMessageBox
+
+from ..services.operation_coordinator import OperationCoordinator
 
 
 class DeleteController(QObject):
@@ -10,26 +12,39 @@ class DeleteController(QObject):
 
     progress_updated = Signal(float, str)
     progress_finished = Signal(str)
-    _video_transition_show_requested = Signal(str)
-    _video_transition_update_requested = Signal(str)
-    _video_transition_hide_requested = Signal()
+    status_message = Signal(str, str)
+    _node_delete_finished = Signal(object, object)
 
-    def __init__(self, node_model, connection_model, graph_commands, parent=None):
+    def __init__(self, node_model, connection_model, graph_commands, parent=None,
+                 operation_coordinator=None):
         super().__init__(parent)
         self._node_model = node_model
         self._conn_model = connection_model
         self._graph_commands = graph_commands
+        self._operations = operation_coordinator or OperationCoordinator(self)
+        self._delete_token = None
         self._pending_delete_batch = None
+        self._node_delete_finished.connect(self._handle_node_delete_finished)
 
     @Slot(int)
     def request_animated_delete(self, node_id):
         node = self._node_model.get_node_data(node_id)
         if not node or node.get("is_deleting"):
             return
-        if node and node["type"] == "video":
-            self._video_transition_show_requested.emit("Deleting video...")
-        self._conn_model.mark_connections_for_node_deleting(node_id)
-        self._node_model.set_deleting(node_id, True)
+        token = self._operations.begin("delete", "Deleting item...", blocking=True)
+        if token is None:
+            self.status_message.emit("Another database operation is active.", "warning")
+            return
+        self._delete_token = token
+        try:
+            self._conn_model.mark_connections_for_node_deleting(node_id)
+            self._node_model.set_deleting(node_id, True)
+        except Exception as exc:
+            self._conn_model.mark_connections_for_node_deleting(
+                node_id, deleting=False, finalize=False
+            )
+            self._finish_delete()
+            self.status_message.emit(f"Delete failed: {exc}", "error")
 
     @Slot(int)
     def perform_delete(self, node_id):
@@ -44,62 +59,101 @@ class DeleteController(QObject):
 
         node = self._node_model.get_node_data(node_id)
         if not node:
+            self._finish_delete()
             return
-        is_video = bool(node and node["type"] == "video")
+        if self._delete_token is None:
+            token = self._operations.begin("delete", "Deleting item...", blocking=True)
+            if token is None:
+                self.status_message.emit("Another database operation is active.", "warning")
+                return
+            self._delete_token = token
 
         def on_start():
-            if is_video:
-                self._video_transition_update_requested.emit("Vacuuming database...")
-            else:
-                self.progress_updated.emit(0.5, "Vacuuming database...")
-                QApplication.processEvents()
-
-        def on_finish():
-            if is_video:
-                self._video_transition_hide_requested.emit()
-            self.progress_finished.emit("Ready")
+            self._operations.update(self._delete_token, "Deleting item...")
+            self.progress_updated.emit(0.5, "Deleting item...")
 
         def on_waiting_lock(attempt):
-            if is_video:
-                self._video_transition_update_requested.emit(
-                    f"Waiting for database lock... retry {attempt}/8"
-                )
-            else:
-                self.progress_updated.emit(0.0, f"Waiting for database lock... retry {attempt}/8")
+            message = f"Waiting for database lock... retry {attempt}/8"
+            self._operations.update(self._delete_token, message)
+            self.progress_updated.emit(0.0, message)
 
-        self._graph_commands.delete_node_after_animation(
-            node_id,
-            on_start_vacuum=on_start,
-            on_finish_vacuum=on_finish,
-            on_waiting_lock=on_waiting_lock,
-        )
+        completion_sent = False
 
-    def _perform_delete_batch(self, node_ids, has_video):
+        def complete(error=None):
+            nonlocal completion_sent
+            if completion_sent:
+                return
+            completion_sent = True
+            self._node_delete_finished.emit(
+                [node_id], None if error is None else str(error)
+            )
+
+        try:
+            self._graph_commands.delete_node_after_animation(
+                node_id,
+                on_start_vacuum=on_start,
+                on_waiting_lock=on_waiting_lock,
+                on_success=complete,
+                on_error=complete,
+            )
+        except Exception as exc:
+            complete(exc)
+
+    def _perform_delete_batch(self, node_ids, _has_video):
         def on_start():
-            if has_video:
-                self._video_transition_show_requested.emit("Vacuuming database...")
-            else:
-                self.progress_updated.emit(0.5, "Deleting items...")
-
-        def on_finish():
-            if has_video:
-                self._video_transition_hide_requested.emit()
-            self.progress_finished.emit("Ready")
+            self._operations.update(self._delete_token, "Deleting items...")
+            self.progress_updated.emit(0.5, "Deleting items...")
 
         def on_waiting_lock(attempt):
-            if has_video:
-                self._video_transition_update_requested.emit(
-                    f"Waiting for database lock... retry {attempt}/8"
-                )
-            else:
-                self.progress_updated.emit(0.0, f"Waiting for database lock... retry {attempt}/8")
+            message = f"Waiting for database lock... retry {attempt}/8"
+            self._operations.update(self._delete_token, message)
+            self.progress_updated.emit(0.0, message)
 
-        self._graph_commands.delete_nodes_after_animation(
-            node_ids,
-            on_start_vacuum=on_start,
-            on_finish_vacuum=on_finish,
-            on_waiting_lock=on_waiting_lock,
-        )
+        ids = list(node_ids)
+        completion_sent = False
+
+        def complete(error=None):
+            nonlocal completion_sent
+            if completion_sent:
+                return
+            completion_sent = True
+            self._node_delete_finished.emit(
+                ids, None if error is None else str(error)
+            )
+
+        try:
+            self._graph_commands.delete_nodes_after_animation(
+                ids,
+                on_start_vacuum=on_start,
+                on_waiting_lock=on_waiting_lock,
+                on_success=complete,
+                on_error=complete,
+            )
+        except Exception as exc:
+            complete(exc)
+
+    def _handle_node_delete_finished(self, node_ids, error):
+        ids = [int(node_id) for node_id in node_ids]
+        if error:
+            for node_id in ids:
+                self._node_model.set_deleting(node_id, False)
+                self._conn_model.mark_connections_for_node_deleting(
+                    node_id, deleting=False, finalize=False
+                )
+            self.status_message.emit(f"Delete failed: {error}", "error")
+            self._finish_delete()
+            return
+
+        for node_id in ids:
+            self._conn_model.remove_connections_for_node(node_id)
+        for node_id in ids:
+            self._node_model.remove_node(node_id)
+
+        if len(ids) == 1:
+            self.status_message.emit("Item deleted.", "normal")
+        else:
+            self.status_message.emit(f"Deleted {len(ids)} items.", "normal")
+        self._finish_delete()
 
     @Slot()
     def delete_selected_nodes(self):
@@ -142,13 +196,34 @@ class DeleteController(QObject):
 
         if not valid_ids:
             return
-
+        token = self._operations.begin("delete", "Deleting items...", blocking=True)
+        if token is None:
+            self.status_message.emit("Another database operation is active.", "warning")
+            return
+        self._delete_token = token
         self._pending_delete_batch = {
             "ids": valid_ids,
             "pending": set(valid_ids),
             "completed": set(),
             "has_video": has_video,
         }
-        for node_id in valid_ids:
-            self._conn_model.mark_connections_for_node_deleting(node_id)
-            self._node_model.set_deleting(node_id, True)
+        try:
+            for node_id in valid_ids:
+                self._conn_model.mark_connections_for_node_deleting(node_id)
+                self._node_model.set_deleting(node_id, True)
+        except Exception as exc:
+            for node_id in valid_ids:
+                self._node_model.set_deleting(node_id, False)
+                self._conn_model.mark_connections_for_node_deleting(
+                    node_id, deleting=False, finalize=False
+                )
+            self._pending_delete_batch = None
+            self._finish_delete()
+            self.status_message.emit(f"Delete failed: {exc}", "error")
+
+    def _finish_delete(self):
+        token = self._delete_token
+        self._delete_token = None
+        if token is not None:
+            self._operations.finish(token)
+        self.progress_finished.emit("")
