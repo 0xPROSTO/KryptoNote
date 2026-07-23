@@ -2,9 +2,10 @@ import concurrent.futures
 import os
 import threading
 
-from PySide6.QtCore import QSize, Qt, Signal, Slot
-
+from PySide6.QtCore import QEvent, QSize, Qt, Signal, Slot
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QComboBox,
     QDialog,
     QVBoxLayout,
     QListWidget,
@@ -13,28 +14,73 @@ from PySide6.QtWidgets import (
     QLabel,
     QHBoxLayout,
     QMessageBox,
+    QStyle,
+    QStyledItemDelegate,
 )
 
 from KryptoNote.config import Config
+from KryptoNote.gui.services.case_directory_service import CaseDirectoryService
 from KryptoNote.gui.theme import Theme
 from KryptoNote.gui.services.operation_coordinator import OperationCoordinator
 from KryptoNote.gui.theme.icons import SvgIcons
+from KryptoNote.gui.widgets.dialogs.case_directories_dialog import CaseDirectoriesDialog
 from KryptoNote.gui.widgets.overlays.launcher_overlay import LauncherOverlay
+
+
+class CaseDirectoryItemDelegate(QStyledItemDelegate):
+    def paint(self, painter, option, index):
+        selected = option.state & QStyle.StateFlag.State_Selected
+        hovered = option.state & QStyle.StateFlag.State_MouseOver
+        if not selected and not hovered:
+            super().paint(painter, option, index)
+            return
+
+        painter.save()
+        if selected:
+            painter.setPen(QColor(Theme.Palette.ACCENT_MAIN))
+            painter.setBrush(QColor(Theme.Palette.ACCENT_LOW))
+        else:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(Theme.Palette.BG_CONTROL_HOVER))
+        painter.drawRoundedRect(option.rect.adjusted(2, 1, -2, -1), 3, 3)
+        painter.setPen(QColor(Theme.Palette.TEXT_MAIN))
+        painter.drawText(
+            option.rect.adjusted(10, 0, -8, 0),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            str(index.data(Qt.ItemDataRole.DisplayRole)),
+        )
+        painter.restore()
 
 
 class ProjectLauncher(QDialog):
     _auth_finished = Signal(object)
     _auth_migration_started = Signal()
     _auth_progress = Signal(int, int, str)
-    def __init__(self, base_dir=None):
+    def __init__(self, base_dir=None, settings=None):
         super().__init__()
         self.setWindowTitle(Config.APP_NAME)
-        self.resize(480, 560)
-        self.setMinimumSize(460, 520)
-        self.base_dir = base_dir if base_dir else Config.DB_PATH
+        self.resize(500, 610)
+        self.setMinimumSize(460, 560)
+
+        default_directory = base_dir if base_dir else Config.DB_PATH
+        self._directory_service = None
+        if base_dir is not None and settings is None:
+            self.case_directories = [
+                CaseDirectoryService.normalize_path(default_directory)
+            ]
+            self.base_dir = self.case_directories[0]
+        else:
+            self._directory_service = CaseDirectoryService(
+                default_directory,
+                settings=settings,
+            )
+            self.case_directories, self.base_dir = self._directory_service.load()
+
         self.selected_file = None
-        if not os.path.exists(self.base_dir):
-            os.makedirs(self.base_dir)
+        if os.path.normcase(self.base_dir) == os.path.normcase(
+            CaseDirectoryService.normalize_path(Config.DB_PATH)
+        ):
+            os.makedirs(self.base_dir, exist_ok=True)
 
         Theme.apply_to(self, Theme.Styles.get_launcher_qss)
 
@@ -56,12 +102,48 @@ class ProjectLauncher(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
-        lbl = QLabel("Select project")
-        layout.addWidget(lbl)
+
+        directory_label = QLabel("Case folder")
+        layout.addWidget(directory_label)
+
+        directory_layout = QHBoxLayout()
+        directory_layout.setSpacing(6)
+        self.directory_combo = QComboBox()
+        self.directory_combo.setAccessibleName("Active case folder")
+        self.directory_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.directory_combo.setMinimumContentsLength(24)
+        self.directory_combo.setItemDelegate(CaseDirectoryItemDelegate(self))
+        self.directory_combo.currentIndexChanged.connect(self._on_directory_changed)
+        self.directory_combo.installEventFilter(self)
+        directory_layout.addWidget(self.directory_combo, 1)
+
+        self.folders_button = QPushButton("Manage")
+        self.folders_button.setAccessibleName("Manage case folders")
+        self.folders_button.setIcon(SvgIcons.get_icon("database"))
+        self.folders_button.setIconSize(QSize(15, 15))
+        self.folders_button.setObjectName("btn_folders")
+        self.folders_button.setAutoDefault(False)
+        self.folders_button.clicked.connect(self.manage_directories)
+        directory_layout.addWidget(self.folders_button)
+        layout.addLayout(directory_layout)
+
+        self.directory_status = QLabel()
+        self.directory_status.setObjectName("directory_status")
+        self.directory_status.setWordWrap(True)
+        self.directory_status.hide()
+        layout.addWidget(self.directory_status)
+
+        self._populate_directory_combo()
+
+        project_label = QLabel("Select project")
+        layout.addWidget(project_label)
 
         self.list_widget = QListWidget()
         self.refresh_list()
         self.list_widget.itemDoubleClicked.connect(self.accept_selection)
+        self.list_widget.installEventFilter(self)
         layout.addWidget(self.list_widget)
         tools_layout = QHBoxLayout()
         tools_layout.setSpacing(6)
@@ -112,6 +194,37 @@ class ProjectLauncher(QDialog):
         actions_layout.addWidget(btn_del, 1)
         actions_layout.addWidget(btn_open, 2)
         layout.addLayout(actions_layout)
+        self.list_widget.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.Type.KeyPress and watched in (
+            self.directory_combo,
+            self.list_widget,
+        ):
+            key = event.key()
+            if key in (Qt.Key.Key_Left, Qt.Key.Key_Right):
+                direction = -1 if key == Qt.Key.Key_Left else 1
+                next_index = self.directory_combo.currentIndex() + direction
+                next_index = max(
+                    0,
+                    min(next_index, self.directory_combo.count() - 1),
+                )
+                self.directory_combo.setCurrentIndex(next_index)
+                self.list_widget.setFocus(Qt.FocusReason.OtherFocusReason)
+                return True
+
+            if watched is self.directory_combo and key in (
+                Qt.Key.Key_Up,
+                Qt.Key.Key_Down,
+            ):
+                direction = -1 if key == Qt.Key.Key_Up else 1
+                next_row = self.list_widget.currentRow() + direction
+                next_row = max(0, min(next_row, self.list_widget.count() - 1))
+                self.list_widget.setCurrentRow(next_row)
+                self.list_widget.setFocus(Qt.FocusReason.OtherFocusReason)
+                return True
+
+        return super().eventFilter(watched, event)
 
     def _handle_overlay_input(self, text, ok):
         if self._overlay_callback:
@@ -120,6 +233,8 @@ class ProjectLauncher(QDialog):
     def _set_background_enabled(self, enabled):
         self.list_widget.setEnabled(enabled)
         self.new_name_input.setEnabled(enabled)
+        self.directory_combo.setEnabled(enabled)
+        self.folders_button.setEnabled(enabled)
         for btn in self.findChildren(QPushButton):
             if btn.objectName() in ["btn_create", "btn_danger", "btn_success"]:
                 btn.setEnabled(enabled)
@@ -135,13 +250,80 @@ class ProjectLauncher(QDialog):
 
     def refresh_list(self):
         self.list_widget.clear()
-        if os.path.exists(self.base_dir):
-            files = [f for f in os.listdir(self.base_dir) if f.endswith(".zrx")]
-            for f in files:
-                self.list_widget.addItem(f)
+        if not os.path.isdir(self.base_dir):
+            self.directory_status.setText(
+                "Folder is unavailable. Choose another folder or update this path."
+            )
+            self.directory_status.show()
+            return
 
-            if self.list_widget.count() > 0:
-                self.list_widget.setCurrentRow(0)
+        try:
+            files = sorted(
+                f for f in os.listdir(self.base_dir) if f.endswith(".zrx")
+            )
+        except OSError as exc:
+            self.directory_status.setText(f"Unable to read this folder: {exc}")
+            self.directory_status.show()
+            return
+
+        self.directory_status.hide()
+        for filename in files:
+            self.list_widget.addItem(filename)
+
+        if self.list_widget.count() > 0:
+            self.list_widget.setCurrentRow(0)
+
+    def _directory_label(self, directory):
+        default_path = CaseDirectoryService.normalize_path(Config.DB_PATH)
+        if os.path.normcase(directory) == os.path.normcase(default_path):
+            return os.path.join(".", "cases")
+        return os.path.normpath(directory)
+
+    def _populate_directory_combo(self):
+        self.directory_combo.blockSignals(True)
+        self.directory_combo.clear()
+        active_key = os.path.normcase(self.base_dir)
+        active_index = 0
+        for index, directory in enumerate(self.case_directories):
+            self.directory_combo.addItem(self._directory_label(directory), directory)
+            self.directory_combo.setItemData(
+                index, directory, Qt.ItemDataRole.ToolTipRole
+            )
+            if os.path.normcase(directory) == active_key:
+                active_index = index
+        self.directory_combo.setCurrentIndex(active_index)
+        self.directory_combo.blockSignals(False)
+
+    def _on_directory_changed(self, index):
+        if index < 0:
+            return
+        directory = self.directory_combo.itemData(index)
+        if not directory:
+            return
+        self.base_dir = directory
+        self._save_directory_settings()
+        self.refresh_list()
+
+    def _save_directory_settings(self):
+        if self._directory_service is not None:
+            self.case_directories, self.base_dir = self._directory_service.save(
+                self.case_directories,
+                self.base_dir,
+            )
+
+    def manage_directories(self):
+        dialog = CaseDirectoriesDialog(
+            self.case_directories,
+            self.base_dir,
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        self.case_directories = dialog.directories
+        self.base_dir = dialog.active_directory
+        self._save_directory_settings()
+        self._populate_directory_combo()
+        self.refresh_list()
 
     def _remove_project_files(self, db_path):
         first_error = None
@@ -210,6 +392,15 @@ class ProjectLauncher(QDialog):
     def create_project(self):
         name = self.new_name_input.text().strip()
         if not name:
+            return
+        try:
+            os.makedirs(self.base_dir, exist_ok=True)
+        except OSError as exc:
+            QMessageBox.critical(
+                self,
+                "Folder Error",
+                f"Unable to use the selected case folder.\nError: {exc}",
+            )
             return
         if not name.endswith(".zrx"):
             name += ".zrx"

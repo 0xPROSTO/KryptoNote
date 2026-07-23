@@ -1,4 +1,5 @@
 from .palette import Palette
+from .icons import SvgIcons
 
 
 class StyleFactory:
@@ -119,6 +120,7 @@ class StyleFactory:
 
     @staticmethod
     def get_launcher_qss():
+        dropdown_arrow = SvgIcons.path("move-down").as_posix()
         return f"""
             QDialog {{
                 background-color: {Palette.BG_PANEL};
@@ -128,6 +130,17 @@ class StyleFactory:
                 color: {Palette.TEXT_DIM};
                 font-size: 11px;
                 font-weight: bold;
+            }}
+            QLabel#directory_description {{
+                color: {Palette.TEXT_DIM};
+                font-size: 12px;
+                font-weight: normal;
+            }}
+            QLabel#directory_status {{
+                color: {Palette.BTN_CANCEL_TEXT};
+                font-size: 12px;
+                font-weight: normal;
+                padding: 2px 0;
             }}
             QListWidget {{
                 background-color: {Palette.BG_INPUT};
@@ -162,6 +175,69 @@ class StyleFactory:
             }}
             QLineEdit:focus {{
                 border-color: {Palette.ACCENT_MAIN};
+            }}
+            QComboBox {{
+                min-height: 28px;
+                background-color: {Palette.BG_INPUT};
+                color: {Palette.TEXT_MAIN};
+                border: 1px solid {Palette.BORDER_DEFAULT};
+                border-radius: 4px;
+                padding: 0 36px 0 8px;
+                font-size: 13px;
+            }}
+            QComboBox:hover,
+            QComboBox:focus {{
+                border-color: {Palette.ACCENT_MAIN};
+            }}
+            QComboBox:disabled {{
+                color: {Palette.TEXT_DISABLED};
+                border-color: {Palette.BORDER_SUBTLE};
+            }}
+            QComboBox::drop-down {{
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+                width: 28px;
+                background-color: {Palette.BG_CONTROL};
+                border: none;
+                border-left: 1px solid {Palette.BORDER_DEFAULT};
+                border-top-right-radius: 3px;
+                border-bottom-right-radius: 3px;
+            }}
+            QComboBox::drop-down:hover {{
+                background-color: {Palette.BG_CONTROL_HOVER};
+            }}
+            QComboBox::drop-down:pressed {{
+                background-color: {Palette.BG_CONTROL_PRESSED};
+            }}
+            QComboBox::down-arrow {{
+                image: url("{dropdown_arrow}");
+                width: 12px;
+                height: 12px;
+            }}
+            QComboBox::down-arrow:on {{
+                top: 1px;
+            }}
+            QComboBox QAbstractItemView {{
+                background-color: {Palette.BG_POPOVER};
+                color: {Palette.TEXT_MAIN};
+                border: 1px solid {Palette.BORDER_DEFAULT};
+                border-radius: 4px;
+                outline: none;
+                padding: 2px;
+                selection-background-color: {Palette.ACCENT_LOW};
+                selection-color: {Palette.TEXT_MAIN};
+            }}
+            QComboBox QAbstractItemView::item {{
+                min-height: 24px;
+                padding: 0 8px;
+            }}
+            QComboBox QAbstractItemView::item:selected {{
+                background-color: {Palette.ACCENT_LOW};
+                color: {Palette.TEXT_MAIN};
+            }}
+            QComboBox QAbstractItemView::item:hover {{
+                background-color: {Palette.BG_CONTROL_HOVER};
+                color: {Palette.TEXT_MAIN};
             }}
             QPushButton {{
                 background-color: {Palette.BG_CONTROL};

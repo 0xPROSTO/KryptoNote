@@ -10,7 +10,7 @@ from ..services.operation_coordinator import OperationCoordinator
 
 
 class ImportExportController(QObject):
-    """Handles media import (image/video) and export (media + markdown).
+    """Handles media import (image/video) and export (media + Markdown).
 
     Extracted from QmlCanvasController to reduce god-object complexity.
     """
