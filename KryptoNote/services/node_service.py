@@ -63,21 +63,21 @@ class NodeService:
     def add_item(
             self, item_type, x, y, w, h, title="", text=None, thumb=None,
             data=None, title_size=14, text_size=10, media_width=0,
-            media_height=0, media_duration=0.0
+            media_height=0, media_duration=0.0, original_filename=""
     ):
         return self.repo.add_item(
             item_type, x, y, w, h, title, text, thumb, data, title_size,
-            text_size, media_width, media_height, media_duration
+            text_size, media_width, media_height, media_duration, original_filename
         )
 
     def add_streamed_media(
             self, item_type, x, y, w, h, title, thumb, file_path,
             progress_callback=None, media_width=0, media_height=0,
-            media_duration=0.0
+            media_duration=0.0, original_filename=""
     ):
         return self.repo.add_streamed_media(
             item_type, x, y, w, h, title, thumb, file_path, progress_callback,
-            media_width, media_height, media_duration
+            media_width, media_height, media_duration, original_filename
         )
 
     def add_connection(self, start_id, end_id, commit=True):

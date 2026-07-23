@@ -441,18 +441,10 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         )
         file_menu.addAction(self._cancel_operation_action)
 
-        export_menu = file_menu.addMenu("Export")
-        export_menu.setIcon(SvgIcons.get_icon("export"))
-
-        act_export_all_md = QAction("Export all text nodes to md", self)
-        act_export_all_md.setIcon(SvgIcons.get_icon("export"))
-        act_export_all_md.triggered.connect(self._on_export_all_markdown)
-        export_menu.addAction(act_export_all_md)
-
-        act_export_selected_md = QAction("Export selected text nodes to md", self)
-        act_export_selected_md.setIcon(SvgIcons.get_icon("export"))
-        act_export_selected_md.triggered.connect(self._on_export_selected_markdown)
-        export_menu.addAction(act_export_selected_md)
+        act_export = QAction("Export…", self)
+        act_export.setIcon(SvgIcons.get_icon("export"))
+        act_export.triggered.connect(self._on_export)
+        file_menu.addAction(act_export)
 
         file_menu.addSeparator()
 
@@ -521,8 +513,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             (act_save, "save"), (act_select_all, "select-all"),
             (act_vacuum, "database"), (act_backup, "backup"),
             (self._cancel_operation_action, "close"),
-            (export_menu.menuAction(), "export"),
-            (act_export_all_md, "export"), (act_export_selected_md, "export"),
+            (act_export, "export"),
             (act_change_pwd, "lock"), (self._theme_action, "palette"),
             (act_close, "exit"), (act_note, "note"), (act_img, "image"),
             (act_vid, "video"), (act_search, "search"),
@@ -535,8 +526,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             act_select_all,
             act_vacuum,
             act_backup,
-            act_export_all_md,
-            act_export_selected_md,
+            act_export,
             act_change_pwd,
             self._theme_action,
             act_note,
@@ -546,7 +536,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             self.act_snap,
         ]
 
-        self._register_menu_canvas_guard(file_menu, export_menu, add_menu, tools_menu, help_menu)
+        self._register_menu_canvas_guard(file_menu, add_menu, tools_menu, help_menu)
 
         self.status_label = QLabel(self.default_status)
         self.status_label.setStyleSheet(Theme.Styles.get_status_bar_qss())
@@ -661,7 +651,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         enabled = not active
         if hasattr(self, "_cancel_operation_action"):
             self._cancel_operation_action.setEnabled(
-                active and kind in {"backup", "initial_load"}
+                active and kind in {"backup", "initial_load", "graph_export"}
             )
         for action in self._operation_blocked_actions:
             action.setEnabled(enabled)
@@ -748,9 +738,18 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         suffix = "Selected" if selected else "Exported"
         return f"{name}-KryptoNote{suffix}-{timestamp}.md"
 
+    def _full_export_filename(self, label, extension):
+        db_path = getattr(self.db_conn, "db_path", "Untitled")
+        name, _ = os.path.splitext(os.path.basename(db_path))
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d")
+        return f"{name}-KryptoNote-{label}-{timestamp}.{extension}"
+
     def _on_select_all(self):
         self.canvas_controller.select_all_nodes()
         self._defer_modifier_sync()
+
+    def _on_export(self):
+        self.canvas_controller.open_export_dialog()
 
     def _on_export_all_markdown(self):
         self.canvas_controller.export_to_markdown(
@@ -762,6 +761,26 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self.canvas_controller.export_to_markdown(
             self._markdown_export_filename(selected=True),
             selected_only=True,
+        )
+
+    def _on_export_complete_archive(self):
+        self.canvas_controller.export_complete_archive(
+            self._full_export_filename("Complete", "zip"), protected=False
+        )
+
+    def _on_export_protected_archive(self):
+        self.canvas_controller.export_complete_archive(
+            self._full_export_filename("Protected", "zip"), protected=True
+        )
+
+    def _on_export_standalone_html(self):
+        self.canvas_controller.export_standalone_html(
+            self._full_export_filename("Preview", "html")
+        )
+
+    def _on_export_pdf_report(self):
+        self.canvas_controller.export_pdf_report(
+            self._full_export_filename("Report", "pdf")
         )
 
     def _on_manual_save(self):
@@ -901,6 +920,8 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             self._cancel_backup()
         elif kind == "initial_load":
             self.canvas_controller.cancel_initial_load()
+        elif kind == "graph_export":
+            self.canvas_controller.cancel_graph_export()
 
     def _on_add_text_node(self):
         self.canvas_controller.add_text_node()

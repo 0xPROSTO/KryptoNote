@@ -1,16 +1,29 @@
 import os
+from datetime import datetime
+from pathlib import Path
 
 from PySide6.QtCore import QEventLoop, QObject, QSettings, QThread, Signal, Slot
-from PySide6.QtWidgets import QFileDialog, QMessageBox, QApplication
+from PySide6.QtWidgets import (
+    QApplication,
+    QDialog,
+    QFileDialog,
+    QInputDialog,
+    QLineEdit,
+    QMessageBox,
+)
 
 from ...config import Config
 from ..services.media_import_service import MediaImportService, MediaImportWorker
 from ..services.media_export_service import MediaExportService
+from ..services.graph_export_worker import GraphExportWorker
 from ..services.operation_coordinator import OperationCoordinator
+from ..theme.palette import Palette
+from ..theme.theme_manager import CONNECTION_WIDTHS, get_theme_manager
+from ..widgets.dialogs.export_dialog import ExportDialog
 
 
 class ImportExportController(QObject):
-    """Handles media import (image/video) and export (media + Markdown).
+    """Handles media import (image/video) and export (media + markdown).
 
     Extracted from QmlCanvasController to reduce god-object complexity.
     """
@@ -30,6 +43,9 @@ class ImportExportController(QObject):
         self._active_media_import_thread = None
         self._active_media_import_worker = None
         self._media_import_token = None
+        self._active_graph_export_thread = None
+        self._active_graph_export_worker = None
+        self._graph_export_token = None
         self._operations = operation_coordinator or OperationCoordinator(self)
         self._synchronous_import_active = False
         self._settings = QSettings(Config.APP_NAME, Config.APP_NAME)
@@ -40,7 +56,7 @@ class ImportExportController(QObject):
 
     def _save_last_dir(self, category, path):
         """Save last used directory for a category."""
-        directory = os.path.dirname(path) if os.path.isfile(path) else path
+        directory = path if os.path.isdir(path) else os.path.dirname(path)
         self._settings.setValue(f"last_dir/{category}", directory)
 
     def get_viewport_center_func(self):
@@ -230,38 +246,53 @@ class ImportExportController(QObject):
         return self._synchronous_import_active
 
     def has_active_background_jobs(self):
-        thread = self._active_media_import_thread
-        if thread is None:
-            return False
-        try:
-            return thread.isRunning()
-        except RuntimeError:
-            self._active_media_import_thread = None
-            self._active_media_import_worker = None
-            self._finish_media_import()
-            return False
+        active = False
+        for kind, thread in (
+            ("media", self._active_media_import_thread),
+            ("export", self._active_graph_export_thread),
+        ):
+            if thread is None:
+                continue
+            try:
+                active = thread.isRunning() or active
+            except RuntimeError:
+                if kind == "media":
+                    self._active_media_import_thread = None
+                    self._active_media_import_worker = None
+                    self._finish_media_import()
+                else:
+                    self._active_graph_export_thread = None
+                    self._active_graph_export_worker = None
+                    self._finish_graph_export()
+        return active
 
     def has_active_media_import(self):
         return self.has_active_synchronous_import() or self.has_active_background_jobs()
 
     def shutdown_background_jobs(self, timeout_ms=15000):
-        """Cooperatively stop active imports before their QThread is destroyed."""
-        thread = self._active_media_import_thread
-        if thread is None:
+        """Cooperatively stop active imports/exports before QThreads are destroyed."""
+        threads = [
+            thread for thread in (
+                self._active_media_import_thread,
+                self._active_graph_export_thread,
+            ) if thread is not None
+        ]
+        if not threads:
             return True
-
-        try:
-            if not thread.isRunning():
-                self._clear_active_media_import(thread)
-                return True
-            thread.requestInterruption()
-            thread.quit()
-            stopped = thread.wait(timeout_ms)
-        except RuntimeError:
-            stopped = True
+        stopped = True
+        for thread in threads:
+            try:
+                if thread.isRunning():
+                    thread.requestInterruption()
+                    thread.quit()
+                    stopped = thread.wait(timeout_ms) and stopped
+            except RuntimeError:
+                pass
         if stopped:
             QApplication.processEvents()
-            self._clear_active_media_import(thread)
+            for thread in threads:
+                self._clear_active_media_import(thread)
+                self._clear_active_graph_export(thread)
         return stopped
 
     @Slot(int)
@@ -305,6 +336,14 @@ class ImportExportController(QObject):
             return
         self._save_last_dir("export", path)
 
+        self._export_markdown_path(
+            path,
+            selected_only=selected_only,
+            selected_ids=selected_ids,
+        )
+
+    def _export_markdown_path(self, path, selected_only=False, selected_ids=None):
+
         self.progress_updated.emit(0.0, "Exporting to Markdown...")
         QApplication.processEvents()
 
@@ -346,6 +385,363 @@ class ImportExportController(QObject):
         except Exception as e:
             self.progress_finished.emit("Ready")
             QMessageBox.critical(None, "Export Error", f"Failed to export:\n{e}")
+
+    def open_export_dialog(self):
+        if self._operations.is_busy or self.has_active_background_jobs():
+            QMessageBox.information(None, "Export", "Another database operation is active.")
+            return
+        db_path = self._service.get_db_path()
+        if not db_path:
+            QMessageBox.critical(None, "Export Error", "Database is not ready.")
+            return
+
+        selected_ids = self._node_model.get_selected_ids()
+        selected_text_count = sum(
+            1
+            for node_id in selected_ids
+            if (self._node_model.get_node_data(node_id) or {}).get("type") == "text"
+        )
+        from ...services.graph_export_service import GraphExportService
+
+        try:
+            html_estimates = {
+                "all": GraphExportService.estimate_standalone_size(db_path),
+                "selected": GraphExportService.estimate_standalone_size(
+                    db_path, selected_ids=selected_ids
+                ),
+            }
+        except Exception:
+            html_estimates = {}
+
+        owner = QApplication.activeWindow()
+        default_directory = self._last_dir("export") or str(Path(db_path).parent)
+        dialog = ExportDialog(
+            case_name=Path(db_path).stem,
+            default_directory=default_directory,
+            date_label=datetime.now().strftime("%Y-%m-%d"),
+            selected_count=len(selected_ids),
+            selected_text_count=selected_text_count,
+            html_estimates=html_estimates,
+            parent=owner,
+        )
+        if owner is not None and hasattr(owner, "_exec_dimmed_dialog"):
+            result = owner._exec_dimmed_dialog("export", dialog)
+        else:
+            result = dialog.exec()
+        if result != QDialog.DialogCode.Accepted:
+            return
+        self._start_export_request(dialog.request, selected_ids, html_estimates)
+
+    def _start_export_request(self, request, selected_ids, html_estimates):
+        export_format = request["format"]
+        selected_only = bool(request["selected_only"])
+        path = request["path"]
+        export_ids = list(selected_ids) if selected_only else None
+
+        if os.path.exists(path):
+            answer = QMessageBox.question(
+                None,
+                "Replace Export",
+                f"'{os.path.basename(path)}' already exists. Replace it?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+
+        if export_format == "zip" and not request["encrypt"]:
+            answer = QMessageBox.question(
+                None,
+                "Unencrypted Export",
+                "The ZIP contains decrypted text, photos and videos. Anyone with "
+                "the archive can read them. Continue?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+
+        if export_format == "html":
+            from ...services.graph_export_service import STANDALONE_WARNING_BYTES
+
+            estimate = html_estimates.get("selected" if selected_only else "all", 0)
+            if estimate > STANDALONE_WARNING_BYTES:
+                answer = QMessageBox.question(
+                    None,
+                    "Large Standalone HTML",
+                    f"Estimated HTML size is {self._format_file_size(estimate)}. "
+                    "Some browsers may load it slowly or run out of memory. Continue?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                    QMessageBox.StandardButton.Cancel,
+                )
+                if answer != QMessageBox.StandardButton.Yes:
+                    return
+
+        self._save_last_dir("export", path)
+        if export_format == "md":
+            self._export_markdown_path(
+                path,
+                selected_only=selected_only,
+                selected_ids=export_ids,
+            )
+            return
+        self._start_graph_export(
+            export_format,
+            path,
+            password=request["password"],
+            selected_ids=export_ids,
+        )
+
+    def export_complete_archive(self, default_filename, protected=False):
+        password = None
+        if protected:
+            QMessageBox.information(
+                None,
+                "Protected Archive",
+                "The archive will use AES-256 encryption. Windows Explorer may not "
+                "open it; use 7-Zip or WinZip when necessary.",
+            )
+            password = self._request_archive_password()
+            if password is None:
+                return
+        else:
+            answer = QMessageBox.question(
+                None,
+                "Unencrypted Export",
+                "The ZIP contains decrypted text, photos and videos. Anyone with "
+                "the archive can read them. Continue?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        self._choose_and_start_graph_export(
+            "zip",
+            default_filename,
+            "Export Protected Complete Archive" if protected else "Export Complete Archive",
+            "ZIP Archives (*.zip)",
+            password=password,
+        )
+
+    def export_standalone_html(self, default_filename):
+        db_path = self._service.get_db_path()
+        if not db_path:
+            QMessageBox.critical(None, "Export Error", "Database is not ready.")
+            return
+        from ...services.graph_export_service import (
+            GraphExportService,
+            STANDALONE_WARNING_BYTES,
+        )
+        try:
+            estimate = GraphExportService.estimate_standalone_size(db_path)
+        except Exception as exc:
+            QMessageBox.critical(None, "Export Error", str(exc))
+            return
+        if estimate > STANDALONE_WARNING_BYTES:
+            answer = QMessageBox.question(
+                None,
+                "Large Standalone HTML",
+                f"Estimated HTML size is {self._format_file_size(estimate)}. "
+                "Some browsers may load it slowly or run out of memory. Continue?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        self._choose_and_start_graph_export(
+            "html",
+            default_filename,
+            "Export Standalone Browser Preview",
+            "HTML Files (*.html)",
+        )
+
+    def export_pdf_report(self, default_filename):
+        self._choose_and_start_graph_export(
+            "pdf",
+            default_filename,
+            "Export PDF Report",
+            "PDF Files (*.pdf)",
+        )
+
+    @staticmethod
+    def _request_archive_password():
+        password, ok = QInputDialog.getText(
+            None,
+            "Protected Archive",
+            "Archive password:",
+            QLineEdit.EchoMode.Password,
+        )
+        if not ok:
+            return None
+        if not password:
+            QMessageBox.warning(None, "Protected Archive", "Password cannot be empty.")
+            return None
+        confirmation, ok = QInputDialog.getText(
+            None,
+            "Protected Archive",
+            "Confirm password:",
+            QLineEdit.EchoMode.Password,
+        )
+        if not ok:
+            return None
+        if confirmation != password:
+            QMessageBox.warning(None, "Protected Archive", "Passwords do not match.")
+            return None
+        return password
+
+    def _choose_and_start_graph_export(
+        self, export_format, default_filename, title, file_filter, password=None
+    ):
+        if self._operations.is_busy or self.has_active_background_jobs():
+            QMessageBox.information(None, "Export", "Another database operation is active.")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            None,
+            title,
+            os.path.join(self._last_dir("export"), default_filename),
+            file_filter,
+        )
+        if not path:
+            return
+        extension = {"zip": ".zip", "html": ".html", "pdf": ".pdf"}[export_format]
+        if not path.lower().endswith(extension):
+            path += extension
+        self._save_last_dir("export", path)
+        self._start_graph_export(export_format, path, password=password)
+
+    def _appearance_snapshot(self):
+        settings = get_theme_manager().settings
+        palette = {
+            "bg_canvas": Palette.BG_CANVAS,
+            "bg_panel": Palette.BG_PANEL,
+            "bg_node": Palette.BG_NODE,
+            "bg_input": Palette.BG_INPUT,
+            "bg_control": Palette.BG_CONTROL,
+            "bg_control_hover": Palette.BG_CONTROL_HOVER,
+            "border_default": Palette.BORDER_DEFAULT,
+            "border_subtle": Palette.BORDER_SUBTLE,
+            "text_main": Palette.TEXT_MAIN,
+            "text_dim": Palette.TEXT_DIM,
+            "text_muted": Palette.TEXT_MUTED,
+            "accent_main": Palette.ACCENT_MAIN,
+            "grid_main": Palette.GRID_MAIN,
+            "grid_sub": Palette.GRID_SUB,
+        }
+        return {
+            "tone": settings.tone,
+            "accent_seed": settings.accent_seed,
+            "connection_style": settings.connection_style,
+            "connection_thickness": settings.connection_thickness,
+            "connection_width": CONNECTION_WIDTHS[settings.connection_thickness],
+            "grid_intensity": settings.grid_intensity,
+            "palette": palette,
+        }
+
+    def _start_graph_export(
+        self, export_format, path, password=None, selected_ids=None
+    ):
+        db_path = self._service.get_db_path()
+        crypto = self._service.create_crypto_clone()
+        if not db_path or not crypto:
+            QMessageBox.critical(None, "Export Error", "Database is not ready.")
+            return
+        token = self._operations.begin(
+            "graph_export", "Preparing export...", blocking=True
+        )
+        if token is None:
+            QMessageBox.information(None, "Export", "Another database operation is active.")
+            return
+        self._graph_export_token = token
+        thread = None
+        try:
+            self._service.commit_changes()
+            thread = QThread(self)
+            worker = GraphExportWorker(
+                db_path,
+                crypto,
+                path,
+                export_format,
+                self._appearance_snapshot(),
+                Path(db_path).stem,
+                password=password,
+                selected_ids=selected_ids,
+            )
+            worker.moveToThread(thread)
+            thread.started.connect(worker.run)
+            worker.progress.connect(self._on_graph_export_progress)
+            worker.finished.connect(self._on_graph_export_finished)
+            worker.cancelled.connect(self._on_graph_export_cancelled)
+            worker.failed.connect(self._on_graph_export_failed)
+            worker.finished.connect(thread.quit)
+            worker.cancelled.connect(thread.quit)
+            worker.failed.connect(thread.quit)
+            worker.finished.connect(worker.deleteLater)
+            worker.cancelled.connect(worker.deleteLater)
+            worker.failed.connect(worker.deleteLater)
+            thread.finished.connect(thread.deleteLater)
+            thread.finished.connect(lambda: self._clear_active_graph_export(thread))
+            self._active_graph_export_thread = thread
+            self._active_graph_export_worker = worker
+            thread.start()
+        except Exception as exc:
+            self._active_graph_export_thread = None
+            self._active_graph_export_worker = None
+            self._finish_graph_export()
+            if thread is not None:
+                thread.deleteLater()
+            QMessageBox.critical(None, "Export Error", str(exc))
+
+    @Slot(float, str)
+    def _on_graph_export_progress(self, value, message):
+        self._operations.update(self._graph_export_token, message)
+        self.progress_updated.emit(value, message)
+
+    @Slot(str)
+    def _on_graph_export_finished(self, path):
+        self._finish_graph_export()
+        self.progress_finished.emit("Ready")
+        self.status_message.emit(f"Exported to {os.path.basename(path)}", "normal")
+        QMessageBox.information(None, "Export Complete", f"Exported successfully to:\n{path}")
+
+    @Slot()
+    def _on_graph_export_cancelled(self):
+        self._finish_graph_export()
+        self.progress_finished.emit("Export cancelled")
+        self.status_message.emit("Export cancelled.", "warning")
+
+    @Slot(str)
+    def _on_graph_export_failed(self, message):
+        self._finish_graph_export()
+        self.progress_finished.emit("Export failed")
+        self.status_message.emit(f"Export failed: {message}", "error")
+        QMessageBox.critical(None, "Export Error", message)
+
+    def cancel_graph_export(self):
+        thread = self._active_graph_export_thread
+        if thread is None:
+            return False
+        try:
+            if not thread.isRunning():
+                return False
+            thread.requestInterruption()
+            self._operations.update(
+                self._graph_export_token, "Cancelling export safely..."
+            )
+            return True
+        except RuntimeError:
+            return False
+
+    def _clear_active_graph_export(self, thread):
+        if self._active_graph_export_thread is thread:
+            self._active_graph_export_thread = None
+            self._active_graph_export_worker = None
+            self._finish_graph_export()
+
+    def _finish_graph_export(self):
+        token = self._graph_export_token
+        self._graph_export_token = None
+        if token is not None:
+            self._operations.finish(token)
 
     # ── Drag & Drop ─────────────────────────────────────────────────
 

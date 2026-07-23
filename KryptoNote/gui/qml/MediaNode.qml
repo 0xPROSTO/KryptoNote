@@ -18,6 +18,7 @@ Rectangle {
     property real nodeWidth: 220
     property real nodeHeight: 220
     property var tags: []
+    property bool thumbnailRequested: false
 
     anchors.fill: parent
     radius: 4
@@ -59,7 +60,11 @@ Rectangle {
             id: thumbImage
             anchors.fill: parent
             anchors.margins: 2
-            source: "image://thumbnails/" + mediaNode.nodeId
+            source: mediaNode.thumbnailRequested
+                    ? "image://thumbnails/" + mediaNode.nodeId
+                    : ""
+            sourceSize.width: Math.min(800, Math.max(256, Math.ceil(mediaNode.nodeWidth * 1.5)))
+            sourceSize.height: Math.min(800, Math.max(256, Math.ceil(mediaNode.nodeHeight * 1.5)))
             fillMode: Image.PreserveAspectFit
             asynchronous: true
             smooth: true
@@ -77,8 +82,16 @@ Rectangle {
             text: "No Thumbnail"
             color: mediaNode.appTheme.textMuted
             font.pointSize: 10
-            visible: thumbImage.status === Image.Error || thumbImage.status === Image.Null
+            visible: mediaNode.thumbnailRequested
+                     && (thumbImage.status === Image.Error || thumbImage.status === Image.Null)
         }
+    }
+
+    Timer {
+        interval: 40 + (mediaNode.nodeId % 8) * 25
+        running: !mediaNode.thumbnailRequested
+        repeat: false
+        onTriggered: mediaNode.thumbnailRequested = true
     }
 
     Text {

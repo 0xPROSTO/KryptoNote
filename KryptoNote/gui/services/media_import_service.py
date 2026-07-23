@@ -97,7 +97,8 @@ class MediaImportService:
 
             node_id = self._node_service.add_streamed_media(
                 media_type, x, y, width, height, title, thumbnail, path,
-                chunk_progress, metadata.width, metadata.height, metadata.duration
+                chunk_progress, metadata.width, metadata.height, metadata.duration,
+                os.path.basename(path),
             )
             item = ImportedMediaNode(
                 node_id=node_id,
@@ -201,6 +202,7 @@ class MediaImportWorker(QObject):
                     path, MEDIA_CHUNK_SIZE, _progress_adapter,
                     metadata.width, metadata.height, metadata.duration,
                     cancel_check=self._is_cancelled,
+                    original_filename=os.path.basename(path),
                 )
                 item = ImportedMediaNode(
                     node_id=node_id,

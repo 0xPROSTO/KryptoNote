@@ -523,6 +523,23 @@ class QmlCanvasController(QObject):
             selected_ids=selected_ids,
         )
 
+    def export_complete_archive(self, default_filename, protected=False):
+        self._import_export_ctrl.export_complete_archive(
+            default_filename, protected=protected
+        )
+
+    def export_standalone_html(self, default_filename):
+        self._import_export_ctrl.export_standalone_html(default_filename)
+
+    def export_pdf_report(self, default_filename):
+        self._import_export_ctrl.export_pdf_report(default_filename)
+
+    def open_export_dialog(self):
+        self._import_export_ctrl.open_export_dialog()
+
+    def cancel_graph_export(self):
+        return self._import_export_ctrl.cancel_graph_export()
+
     # ── Viewport & Snap ─────────────────────────────────────────────
 
     @Slot(float, float)

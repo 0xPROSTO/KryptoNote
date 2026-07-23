@@ -22,6 +22,7 @@ class NodeItemDTO:
     media_width: int = 0
     media_height: int = 0
     media_duration: float = 0.0
+    original_filename: str = ""
 
 
 

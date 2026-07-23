@@ -518,6 +518,213 @@ class StyleFactory:
         """
 
     @staticmethod
+    def get_export_dialog_qss():
+        return f"""
+            QDialog#export_dialog {{
+                background: transparent;
+                color: {Palette.TEXT_MAIN};
+                font-family: 'Segoe UI', sans-serif;
+            }}
+            QWidget#export_container {{
+                background: {Palette.BG_PANEL};
+                border: 1px solid {Palette.BORDER_DEFAULT};
+                border-radius: 10px;
+            }}
+            QWidget#export_header,
+            QWidget#export_footer,
+            QWidget#export_option_block,
+            QWidget#export_password_field {{
+                background: transparent;
+                border: none;
+            }}
+            QLabel {{
+                color: {Palette.TEXT_DIM};
+                background: transparent;
+                border: none;
+                font-size: 9pt;
+            }}
+            QLabel#export_title {{
+                color: {Palette.TEXT_MAIN};
+                font-size: 14pt;
+                font-weight: 600;
+            }}
+            QLabel#export_subtitle,
+            QLabel#export_hint,
+            QLabel#export_section_hint,
+            QLabel#export_summary {{
+                color: {Palette.TEXT_MUTED};
+            }}
+            QLabel#export_section_hint {{
+                font-size: 8.5pt;
+            }}
+            QLabel#export_summary {{
+                font-size: 8.5pt;
+            }}
+            QLabel#export_format_description {{
+                color: {Palette.TEXT_MUTED};
+                font-size: 8.5pt;
+            }}
+            QLabel[sectionTitle="true"] {{
+                color: {Palette.TEXT_MAIN};
+                font-size: 10pt;
+                font-weight: 600;
+            }}
+            QLabel#export_format_extension {{
+                min-width: 38px;
+                max-width: 38px;
+                min-height: 26px;
+                max-height: 26px;
+                color: {Palette.TEXT_DIM};
+                background: transparent;
+                border: none;
+                font-family: 'Consolas', monospace;
+                font-size: 8pt;
+                font-weight: 600;
+            }}
+            QLabel#export_field_label {{
+                color: {Palette.TEXT_DIM};
+                font-size: 8pt;
+            }}
+            QLabel#export_validation {{
+                color: {Palette.BTN_CANCEL_TEXT};
+                background: {Palette.BTN_CANCEL};
+                border: 1px solid {Palette.BTN_CANCEL_BORDER};
+                border-radius: 5px;
+                padding: 8px 10px;
+            }}
+            QFrame#export_separator {{
+                background: {Palette.BORDER_SUBTLE};
+                border: none;
+                min-height: 1px;
+                max-height: 1px;
+            }}
+            QFrame#export_vertical_separator {{
+                background: {Palette.BORDER_SUBTLE};
+                border: none;
+                min-width: 1px;
+                max-width: 1px;
+            }}
+            QFrame#export_format_grid {{
+                background: transparent;
+                border: none;
+            }}
+            QFrame#export_format_choice,
+            QFrame#export_options_panel {{
+                background: {Palette.BG_INPUT};
+                border: 1px solid {Palette.BORDER_DEFAULT};
+                border-radius: 6px;
+            }}
+            QFrame#export_format_choice:hover {{
+                background: {Palette.BG_POPOVER};
+                border-color: {Palette.BORDER_HOVER};
+            }}
+            QFrame#export_format_choice[selected="true"] {{
+                background: {Palette.ACCENT_LOW};
+                border: 2px solid {Palette.ACCENT_MAIN};
+            }}
+            QRadioButton,
+            QCheckBox {{
+                color: {Palette.TEXT_MAIN};
+                spacing: 8px;
+                font-size: 9pt;
+            }}
+            QRadioButton[formatChoice="true"] {{
+                spacing: 0;
+                font-weight: 600;
+            }}
+            QRadioButton:focus,
+            QCheckBox:focus {{
+                color: {Palette.ACCENT_ULTRA};
+            }}
+            QRadioButton::indicator,
+            QCheckBox::indicator {{
+                width: 16px;
+                height: 16px;
+                border: 1px solid {Palette.BORDER_HOVER};
+                background: {Palette.BG_CONTROL};
+            }}
+            QRadioButton::indicator {{ border-radius: 9px; }}
+            QCheckBox::indicator {{ border-radius: 3px; }}
+            QRadioButton::indicator:checked {{
+                background: {Palette.ACCENT_MAIN};
+                border: 1px solid {Palette.ACCENT_MAIN};
+                border-radius: 9px;
+            }}
+            QCheckBox::indicator:checked {{
+                background: {Palette.ACCENT_MAIN};
+                border-color: {Palette.ACCENT_MAIN};
+            }}
+            QRadioButton[formatChoice="true"]::indicator,
+            QRadioButton[formatChoice="true"]::indicator:checked {{
+                width: 0;
+                height: 0;
+                background: transparent;
+                border: none;
+            }}
+            QLineEdit {{
+                min-height: 30px;
+                padding: 0 9px;
+                color: {Palette.TEXT_MAIN};
+                background: {Palette.BG_INPUT};
+                border: 1px solid {Palette.BORDER_DEFAULT};
+                border-radius: 4px;
+                selection-background-color: {Palette.ACCENT_MAIN};
+            }}
+            QLineEdit:focus {{ border-color: {Palette.ACCENT_MAIN}; }}
+            QPushButton {{
+                min-height: 30px;
+                padding: 0 12px;
+                color: {Palette.TEXT_MAIN};
+                background: {Palette.BG_CONTROL};
+                border: 1px solid {Palette.BORDER_DEFAULT};
+                border-radius: 5px;
+                font-size: 9pt;
+            }}
+            QPushButton:hover {{
+                background: {Palette.BG_CONTROL_HOVER};
+                border-color: {Palette.BORDER_HOVER};
+            }}
+            QPushButton:pressed {{ background: {Palette.BG_CONTROL_PRESSED}; }}
+            QPushButton:focus {{ border: 2px solid {Palette.ACCENT_MAIN}; }}
+            QPushButton:checked {{
+                background: {Palette.ACCENT_LOW};
+                border: 2px solid {Palette.ACCENT_MAIN};
+            }}
+            QPushButton:disabled {{
+                color: {Palette.TEXT_DISABLED};
+                background: {Palette.BG_INPUT};
+                border-color: {Palette.BORDER_SUBTLE};
+            }}
+            QPushButton#export_close {{
+                min-width: 34px;
+                max-width: 34px;
+                min-height: 34px;
+                max-height: 34px;
+                padding: 0;
+                background: transparent;
+                border: none;
+            }}
+            QPushButton#export_close:hover {{ background: {Palette.BG_CONTROL_HOVER}; }}
+            QPushButton#export_browse {{
+                min-width: 104px;
+            }}
+            QPushButton#export_cancel {{
+                min-width: 74px;
+            }}
+            QPushButton#export_apply {{
+                min-width: 104px;
+                color: {Palette.ON_ACCENT};
+                background: {Palette.ACCENT_MAIN};
+                border-color: {Palette.ACCENT_MAIN};
+                font-weight: 600;
+            }}
+            QPushButton#export_apply:hover {{
+                background: {Palette.ACCENT_HOVER};
+                border-color: {Palette.ACCENT_HOVER};
+            }}
+        """
+
+    @staticmethod
     def get_title_bar_qss():
         return f"""
             #CustomTitleBar {{

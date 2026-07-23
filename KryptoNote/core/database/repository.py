@@ -15,10 +15,14 @@ def write_chunked_media(
     cursor, conn, crypto, item_type, x, y, w, h, title, thumb,
     file_path, chunk_size, progress_callback=None,
     media_width=0, media_height=0, media_duration=0.0,
-    cancel_check=None,
+    cancel_check=None, original_filename="",
 ):
     enc_title = crypto.encrypt(title.encode())
     enc_thumb = crypto.encrypt(thumb) if thumb else None
+    enc_original_filename = (
+        crypto.encrypt((original_filename or "").encode())
+        if original_filename else None
+    )
 
     with open(file_path, "rb") as f:
         f.seek(0, 2)
@@ -32,11 +36,12 @@ def write_chunked_media(
     try:
         cursor.execute("""
             INSERT INTO items (type, title, x, y, width, height, thumbnail, is_chunked, total_size,
-                               created_at, updated_at, media_width, media_height, media_duration)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
+                               created_at, updated_at, media_width, media_height, media_duration,
+                               original_filename)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
         """, (
             item_type, enc_title, x, y, w, h, enc_thumb, file_size,
-            now, now, media_width, media_height, media_duration,
+            now, now, media_width, media_height, media_duration, enc_original_filename,
         ))
         item_id = cursor.lastrowid
 
@@ -190,12 +195,16 @@ class NodeRepository:
     def add_item(
             self, item_type, x, y, w, h, title="", text=None, thumb=None,
             data=None, title_size=14, text_size=10, media_width=0,
-            media_height=0, media_duration=0.0
+            media_height=0, media_duration=0.0, original_filename=""
     ):
         enc_title = self.crypto.encrypt((title or "").encode())
         enc_text = self.crypto.encrypt(text.encode()) if text else None
         enc_thumb = self.crypto.encrypt(thumb) if thumb else None
         enc_data = self.crypto.encrypt(data) if data else None
+        enc_original_filename = (
+            self.crypto.encrypt((original_filename or "").encode())
+            if original_filename else None
+        )
         is_chunked = 0
         total_size = len(data) if data else 0
         now = datetime.now().isoformat(timespec="seconds")
@@ -203,13 +212,14 @@ class NodeRepository:
         self.cursor.execute("""
                             INSERT INTO items (type, title, x, y, width, height, text_content, thumbnail, full_data,
                                                is_chunked, total_size, title_size, text_size, created_at, updated_at,
-                                               media_width, media_height, media_duration)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                               media_width, media_height, media_duration, original_filename)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             """,
                             (
                                 item_type, enc_title, x, y, w, h, enc_text, enc_thumb,
                                 enc_data, is_chunked, total_size, title_size, text_size,
                                 now, now, media_width, media_height, media_duration,
+                                enc_original_filename,
                             ))
         item_id = self.cursor.lastrowid
         self.conn.commit()
@@ -218,7 +228,7 @@ class NodeRepository:
     def add_streamed_media(
             self, item_type, x, y, w, h, title, thumb, file_path,
             progress_callback=None, media_width=0, media_height=0,
-            media_duration=0.0
+            media_duration=0.0, original_filename=""
     ):
         """Thin wrapper around module-level write_chunked_media."""
         return write_chunked_media(
@@ -226,6 +236,7 @@ class NodeRepository:
             item_type, x, y, w, h, title, thumb,
             file_path, MEDIA_CHUNK_SIZE, progress_callback,
             media_width, media_height, media_duration,
+            original_filename=original_filename,
         )
 
     def get_chunk(self, item_id, chunk_index):
@@ -241,7 +252,8 @@ class NodeRepository:
     _ITEM_SELECT = (
         "SELECT id, type, title, x, y, width, height, text_content, thumbnail, "
         "is_chunked, total_size, title_size, text_size, created_at, updated_at, "
-        "media_width, media_height, media_duration FROM items ORDER BY id"
+        "media_width, media_height, media_duration, original_filename "
+        "FROM items ORDER BY id"
     )
 
     def get_all_items(self, include_thumbnails=True):
@@ -276,7 +288,7 @@ class NodeRepository:
             item_id, item_type, encrypted_title, x, y, width, height,
             encrypted_text, encrypted_thumbnail, is_chunked, total_size,
             title_size, text_size, created_at, updated_at, media_width,
-            media_height, media_duration,
+            media_height, media_duration, encrypted_original_filename,
         ) = row
         if self.crypto:
             title = (
@@ -291,10 +303,15 @@ class NodeRepository:
                 self.crypto.decrypt(encrypted_thumbnail)
                 if include_thumbnail and encrypted_thumbnail else None
             )
+            original_filename = (
+                self.crypto.decrypt(encrypted_original_filename).decode()
+                if encrypted_original_filename else ""
+            )
         else:
             title = ""
             text = ""
             thumbnail = None
+            original_filename = ""
         return NodeItemDTO(
             id=item_id, type=item_type, title=title, x=x, y=y,
             width=width, height=height, text_content=text, thumbnail=thumbnail,
@@ -303,6 +320,7 @@ class NodeRepository:
             created_at=created_at or "", updated_at=updated_at or "",
             media_width=media_width or 0, media_height=media_height or 0,
             media_duration=media_duration or 0.0,
+            original_filename=original_filename,
         )
 
 

@@ -76,7 +76,8 @@ class DatabaseConnection:
                                 updated_at   TEXT DEFAULT '',
                                 media_width  INTEGER DEFAULT 0,
                                 media_height INTEGER DEFAULT 0,
-                                media_duration REAL DEFAULT 0
+                                media_duration REAL DEFAULT 0,
+                                original_filename BLOB
                             )
                             """)
 
@@ -184,6 +185,8 @@ class DatabaseConnection:
             self.cursor.execute("ALTER TABLE items ADD COLUMN media_height INTEGER DEFAULT 0")
         if "media_duration" not in columns:
             self.cursor.execute("ALTER TABLE items ADD COLUMN media_duration REAL DEFAULT 0")
+        if "original_filename" not in columns:
+            self.cursor.execute("ALTER TABLE items ADD COLUMN original_filename BLOB")
 
         now = datetime.now().isoformat(timespec="seconds")
         self.cursor.execute("UPDATE items SET created_at=? WHERE created_at IS NULL OR created_at=''", (now,))

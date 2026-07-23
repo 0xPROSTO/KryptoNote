@@ -5,6 +5,7 @@ from collections import OrderedDict
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage
+from PySide6.QtQml import QQmlImageProviderBase
 from PySide6.QtQuick import QQuickImageProvider
 
 
@@ -12,8 +13,10 @@ class ThumbnailProvider(QQuickImageProvider):
     DEFAULT_CACHE_BYTES = 64 * 1024 * 1024
 
     def __init__(self, node_model, service=None, max_cache_bytes=DEFAULT_CACHE_BYTES):
-        super().__init__(QQuickImageProvider.ImageType.Image)
-        self._node_model = node_model
+        super().__init__(
+            QQuickImageProvider.ImageType.Image,
+            QQmlImageProviderBase.Flag.ForceAsynchronousImageLoading,
+        )
         self._service = service
         self._max_cache_bytes = max(0, int(max_cache_bytes))
         self._cache = OrderedDict()
@@ -55,17 +58,14 @@ class ThumbnailProvider(QQuickImageProvider):
                 self._cache[node_id] = cached
                 return cached
 
-            node = self._node_model.get_node_data(node_id)
-            image = node.get("thumbnail") if node else None
-            if not isinstance(image, QImage) or image.isNull():
-                try:
-                    payload = (
-                        self._service.read_thumbnail(node_id)
-                        if self._service is not None else None
-                    )
-                except Exception:
-                    payload = None
-                image = QImage.fromData(payload) if payload else QImage()
+            try:
+                payload = (
+                    self._service.read_thumbnail(node_id)
+                    if self._service is not None else None
+                )
+            except Exception:
+                payload = None
+            image = QImage.fromData(payload) if payload else QImage()
             if image.isNull():
                 return QImage()
             self._insert_cache(node_id, image)
