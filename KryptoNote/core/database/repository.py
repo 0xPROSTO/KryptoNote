@@ -344,8 +344,8 @@ class NodeRepository:
             raise ValueError("Tag name cannot be empty")
         if len(normalized) > 32:
             raise ValueError("Tag name is too long")
-        if not all(char.isalnum() or char in "_-" for char in normalized):
-            raise ValueError("Use letters, numbers, underscore or hyphen")
+        if not all(char.isalnum() or char in " _-" for char in normalized):
+            raise ValueError("Use letters, numbers, spaces, underscore or hyphen")
         for tag in self.get_all_tags():
             if tag.name.casefold() == normalized:
                 return tag.id
@@ -364,8 +364,8 @@ class NodeRepository:
             raise ValueError("Tag name cannot be empty")
         if len(normalized) > 32:
             raise ValueError("Tag name is too long")
-        if not all(char.isalnum() or char in "_-" for char in normalized):
-            raise ValueError("Use letters, numbers, underscore or hyphen")
+        if not all(char.isalnum() or char in " _-" for char in normalized):
+            raise ValueError("Use letters, numbers, spaces, underscore or hyphen")
         for tag in self.get_all_tags():
             if tag.id != tag_id and tag.name.casefold() == normalized:
                 raise ValueError("A tag with this name already exists")

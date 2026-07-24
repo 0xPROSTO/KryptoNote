@@ -26,7 +26,7 @@ Item {
 
     function desiredChipWidth(tag) {
         var name = tag && tag.name !== undefined ? String(tag.name) : ""
-        return Math.min(112, Math.max(30, Math.ceil(chipMetrics.advanceWidth(name)) + 24))
+        return Math.min(112, Math.max(30, Math.ceil(chipMetrics.advanceWidth(name)) + 12))
     }
 
     function moreChipWidth(count) {
@@ -93,19 +93,9 @@ Item {
                 border.width: 1
                 border.color: chipColor
 
-                Rectangle {
-                    width: 7
-                    height: 7
-                    radius: 4
-                    anchors.left: parent.left
-                    anchors.leftMargin: 7
-                    anchors.verticalCenter: parent.verticalCenter
-                    color: chip.chipColor
-                }
-
                 Text {
                     anchors.left: parent.left
-                    anchors.leftMargin: 18
+                    anchors.leftMargin: 6
                     anchors.right: parent.right
                     anchors.rightMargin: 6
                     anchors.verticalCenter: parent.verticalCenter
