@@ -195,7 +195,8 @@ class NodeRepository:
     def add_item(
             self, item_type, x, y, w, h, title="", text=None, thumb=None,
             data=None, title_size=14, text_size=10, media_width=0,
-            media_height=0, media_duration=0.0, original_filename=""
+            media_height=0, media_duration=0.0, original_filename="",
+            frame_locked=False, frame_color="", frame_opacity=0.21,
     ):
         enc_title = self.crypto.encrypt((title or "").encode())
         enc_text = self.crypto.encrypt(text.encode()) if text else None
@@ -212,14 +213,16 @@ class NodeRepository:
         self.cursor.execute("""
                             INSERT INTO items (type, title, x, y, width, height, text_content, thumbnail, full_data,
                                                is_chunked, total_size, title_size, text_size, created_at, updated_at,
-                                               media_width, media_height, media_duration, original_filename)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                               media_width, media_height, media_duration, original_filename,
+                                               frame_locked, frame_color, frame_opacity)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             """,
                             (
                                 item_type, enc_title, x, y, w, h, enc_text, enc_thumb,
                                 enc_data, is_chunked, total_size, title_size, text_size,
                                 now, now, media_width, media_height, media_duration,
-                                enc_original_filename,
+                                enc_original_filename, int(bool(frame_locked)),
+                                frame_color or "", float(frame_opacity),
                             ))
         item_id = self.cursor.lastrowid
         self.conn.commit()
@@ -252,7 +255,8 @@ class NodeRepository:
     _ITEM_SELECT = (
         "SELECT id, type, title, x, y, width, height, text_content, thumbnail, "
         "is_chunked, total_size, title_size, text_size, created_at, updated_at, "
-        "media_width, media_height, media_duration, original_filename "
+        "media_width, media_height, media_duration, original_filename, "
+        "frame_locked, frame_color, frame_opacity "
         "FROM items ORDER BY id"
     )
 
@@ -289,6 +293,7 @@ class NodeRepository:
             encrypted_text, encrypted_thumbnail, is_chunked, total_size,
             title_size, text_size, created_at, updated_at, media_width,
             media_height, media_duration, encrypted_original_filename,
+            frame_locked, frame_color, frame_opacity,
         ) = row
         if self.crypto:
             title = (
@@ -321,6 +326,11 @@ class NodeRepository:
             media_width=media_width or 0, media_height=media_height or 0,
             media_duration=media_duration or 0.0,
             original_filename=original_filename,
+            frame_locked=bool(frame_locked),
+            frame_color=frame_color or "",
+            frame_opacity=float(
+                0.21 if frame_opacity is None else frame_opacity
+            ),
         )
 
 
@@ -449,6 +459,37 @@ class NodeRepository:
             "UPDATE items SET title=?, updated_at=? WHERE id=?",
             (enc_title, now, item_id),
         )
+        self.conn.commit()
+
+    def update_frame_locked(self, item_id, locked):
+        now = datetime.now().isoformat(timespec="seconds")
+        self.cursor.execute(
+            "UPDATE items SET frame_locked=?, updated_at=? "
+            "WHERE id=? AND type='frame'",
+            (int(bool(locked)), now, item_id),
+        )
+        if self.cursor.rowcount == 0:
+            raise ValueError("Frame not found")
+        self.conn.commit()
+
+    def update_frame_properties(
+            self, item_id, title, frame_color, frame_opacity
+    ):
+        enc_title = self.crypto.encrypt((title or "").encode())
+        now = datetime.now().isoformat(timespec="seconds")
+        self.cursor.execute(
+            "UPDATE items SET title=?, frame_color=?, frame_opacity=?, "
+            "updated_at=? WHERE id=? AND type='frame'",
+            (
+                enc_title,
+                frame_color or "",
+                float(frame_opacity),
+                now,
+                item_id,
+            ),
+        )
+        if self.cursor.rowcount == 0:
+            raise ValueError("Frame not found")
         self.conn.commit()
 
     def delete_item(self, item_id):

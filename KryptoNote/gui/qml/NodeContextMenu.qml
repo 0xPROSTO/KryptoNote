@@ -21,6 +21,7 @@ Popup {
     property string targetKind: "node"
     property int connId: 0
     property string nodeType: "text"
+    property bool frameLocked: false
     signal requestedTags(int nodeId, var anchorItem)
 
     function openAt(sourceItem, localX, localY) {
@@ -34,6 +35,9 @@ Popup {
         contextPopup.targetKind = "node"
         contextPopup.nodeId = targetNodeId
         contextPopup.nodeType = targetNodeType
+        contextPopup.frameLocked = targetNodeType === "frame"
+                ? contextPopup.canvasController.is_frame_locked(targetNodeId)
+                : false
         contextPopup.connId = 0
         contextPopup.openAt(sourceItem, localX, localY)
     }
@@ -42,6 +46,7 @@ Popup {
         contextPopup.targetKind = "connection"
         contextPopup.nodeId = 0
         contextPopup.nodeType = ""
+        contextPopup.frameLocked = false
         contextPopup.connId = targetConnId
         contextPopup.openAt(sourceItem, localX, localY)
     }
@@ -182,6 +187,54 @@ Popup {
             }
         }
 
+        Loader {
+            width: parent.width
+            active: contextPopup.targetKind === "node"
+                    && contextPopup.nodeType === "frame"
+            visible: active
+            height: active && item ? (item as Column).implicitHeight : 0
+            sourceComponent: Component {
+                Column {
+                    spacing: 2
+                    MenuButton {
+                        text: contextPopup.frameLocked
+                              ? "Unlock Frame"
+                              : "Lock Frame"
+                        iconSource: contextPopup.frameLocked
+                                    ? "../assets/icons/unlock.svg"
+                                    : "../assets/icons/lock.svg"
+                        onClicked: {
+                            contextPopup.frameLocked =
+                                contextPopup.canvasController.toggle_frame_locked(
+                                    contextPopup.nodeId
+                                )
+                            contextPopup.close()
+                        }
+                    }
+                    MenuButton {
+                        text: "Properties…"
+                        iconSource: "../assets/icons/edit.svg"
+                        onClicked: {
+                            contextPopup.canvasController.request_open_editor(
+                                contextPopup.nodeId
+                            )
+                            contextPopup.close()
+                        }
+                    }
+                    MenuButton {
+                        text: "Select Contents"
+                        iconSource: "../assets/icons/select-all.svg"
+                        onClicked: {
+                            contextPopup.canvasController.select_frame_contents(
+                                contextPopup.nodeId
+                            )
+                            contextPopup.close()
+                        }
+                    }
+                }
+            }
+        }
+
         Rectangle {
             width: parent.width - 8
             height: 1
@@ -195,6 +248,7 @@ Popup {
             text: "Tags…"
             iconSource: "../assets/icons/tag.svg"
             visible: contextPopup.targetKind === "node"
+                     && contextPopup.nodeType !== "frame"
             onClicked: {
                 contextPopup.requestedTags(contextPopup.nodeId, tagsMenuButton)
                 contextPopup.close()
@@ -205,6 +259,7 @@ Popup {
             width: parent.width - 8
             height: 1
             visible: contextPopup.targetKind === "node"
+                     && contextPopup.nodeType !== "frame"
             color: contextPopup.appTheme.borderDefault
             anchors.horizontalCenter: parent.horizontalCenter
         }

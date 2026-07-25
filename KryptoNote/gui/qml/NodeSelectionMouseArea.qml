@@ -7,12 +7,26 @@ MouseArea {
     required property var canvasController
     property int nodeId: 0
     property string nodeType: ""
+    property real bottomRightExclusion: 0
     signal contextMenuRequested(int nodeId, string nodeType, var sourceItem, real localX, real localY)
     property point _pressPos: Qt.point(0, 0)
 
     acceptedButtons: Qt.LeftButton | Qt.RightButton
     hoverEnabled: true
     preventStealing: false
+    containmentMask: QtObject {
+        function contains(point) {
+            if (point.x < 0 || point.y < 0
+                    || point.x > selector.width
+                    || point.y > selector.height) {
+                return false
+            }
+            var exclusion = selector.bottomRightExclusion
+            return exclusion <= 0
+                    || point.x < selector.width - exclusion
+                    || point.y < selector.height - exclusion
+        }
+    }
 
     onEntered: selector.nodeModel.set_hovered(nodeId, true)
     onExited: selector.nodeModel.set_hovered(nodeId, false)
@@ -52,6 +66,7 @@ MouseArea {
     onDoubleClicked: function(mouse) {
         if (mouse.button === Qt.LeftButton) {
             selector.canvasController.request_open_editor(nodeId)
+            mouse.accepted = true
         }
     }
 }

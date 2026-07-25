@@ -63,11 +63,13 @@ class NodeService:
     def add_item(
             self, item_type, x, y, w, h, title="", text=None, thumb=None,
             data=None, title_size=14, text_size=10, media_width=0,
-            media_height=0, media_duration=0.0, original_filename=""
+            media_height=0, media_duration=0.0, original_filename="",
+            frame_locked=False, frame_color="", frame_opacity=0.21,
     ):
         return self.repo.add_item(
             item_type, x, y, w, h, title, text, thumb, data, title_size,
-            text_size, media_width, media_height, media_duration, original_filename
+            text_size, media_width, media_height, media_duration,
+            original_filename, frame_locked, frame_color, frame_opacity,
         )
 
     def add_streamed_media(
@@ -130,6 +132,16 @@ class NodeService:
 
     def update_item_title(self, item_id, title):
         self.repo.update_item_title(item_id, title)
+
+    def update_frame_locked(self, item_id, locked):
+        self.repo.update_frame_locked(item_id, locked)
+
+    def update_frame_properties(
+            self, item_id, title, frame_color, frame_opacity
+    ):
+        self.repo.update_frame_properties(
+            item_id, title, frame_color, frame_opacity
+        )
 
     def update_text_content(self, item_id, title, new_text, title_size=14, text_size=10):
         self.repo.update_text_content(item_id, title, new_text, title_size, text_size)

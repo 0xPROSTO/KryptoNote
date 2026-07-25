@@ -17,6 +17,7 @@ class QmlCanvasController(QObject):
     progress_finished = Signal(str)
     snap_to_grid_changed = Signal(bool)
     openTextEditorRequested = Signal(int)
+    openFrameEditorRequested = Signal(int)
     open_media_viewer_requested = Signal(int)  # node_id
     initial_load_failed = Signal(str)
     initial_load_finished = Signal()
@@ -312,6 +313,31 @@ class QmlCanvasController(QObject):
             self._auto_fit_text_node(rid)
         return rid
 
+    @Slot()
+    def add_frame(self):
+        center = self.get_viewport_center()
+        width = Config.FRAME_DEFAULT_WIDTH
+        height = Config.FRAME_DEFAULT_HEIGHT
+        x = center[0] - width / 2
+        y = center[1] - height / 2
+        frame_id = self._service.add_item(
+            "frame", x, y, width, height, title="New Frame",
+            frame_locked=False,
+            frame_color="",
+            frame_opacity=Config.FRAME_DEFAULT_OPACITY,
+        )
+        self._node_model.add_node(
+            frame_id, "frame", x, y, width, height, title="New Frame",
+            frame_locked=False,
+            frame_color="",
+            frame_opacity=Config.FRAME_DEFAULT_OPACITY,
+        )
+        self._node_model.clear_selection()
+        self._node_model.set_selected(frame_id, True)
+        self.status_message.emit(
+            "Frame added unlocked. Lock it to move contained nodes.", "accent"
+        )
+
     # ── Media (delegated) ───────────────────────────────────────────
 
     @Slot(str)
@@ -421,8 +447,11 @@ class QmlCanvasController(QObject):
             from PySide6.QtWidgets import QInputDialog
             node = self._node_model.get_node_data(node_id)
             old_title = node["title"] if node else ""
+            is_frame = bool(node and node.get("type") == "frame")
             new_title, ok = QInputDialog.getText(
-                None, "Rename Node", "Enter new title:",
+                None,
+                "Rename Frame" if is_frame else "Rename Node",
+                "Enter frame title:" if is_frame else "Enter new title:",
                 QLineEdit.EchoMode.Normal, old_title
             )
             if not ok:
@@ -431,6 +460,113 @@ class QmlCanvasController(QObject):
 
         self._service.update_item_title(node_id, title)
         self._node_model.update_title(node_id, title)
+
+    @Slot(int)
+    def select_frame_contents(self, frame_id):
+        count = self._node_model.select_frame_contents(frame_id)
+        suffix = "node" if count == 1 else "nodes"
+        self.status_message.emit(
+            f"Selected frame and {count} contained {suffix}.", "accent"
+        )
+
+    @Slot(int, result=bool)
+    def is_frame_locked(self, frame_id):
+        frame = self._node_model.get_node_data(frame_id)
+        return bool(
+            frame
+            and frame.get("type") == "frame"
+            and frame.get("frame_locked", False)
+        )
+
+    @Slot(int, result=bool)
+    def toggle_frame_locked(self, frame_id):
+        frame = self._node_model.get_node_data(frame_id)
+        if not frame or frame.get("type") != "frame":
+            return False
+        locked = not bool(frame.get("frame_locked", False))
+        try:
+            self._service.update_frame_locked(frame_id, locked)
+        except (ValueError, RuntimeError) as exc:
+            self.status_message.emit(f"Frame lock failed: {exc}", "error")
+            return bool(frame.get("frame_locked", False))
+        self._node_model.set_frame_locked(frame_id, locked)
+        self.status_message.emit(
+            "Frame locked. Contained nodes will move with it."
+            if locked else
+            "Frame unlocked. It now moves independently.",
+            "accent",
+        )
+        return locked
+
+    @Slot(int, result=list)
+    def get_frame_editor_data(self, frame_id):
+        frame = self._node_model.get_node_data(frame_id)
+        if not frame or frame.get("type") != "frame":
+            return []
+        return [
+            frame.get("title", ""),
+            frame.get("frame_color", ""),
+            float(
+                frame.get(
+                    "frame_opacity", Config.FRAME_DEFAULT_OPACITY
+                )
+            ),
+            float(Config.FRAME_DEFAULT_OPACITY),
+        ]
+
+    @staticmethod
+    def _normalized_frame_appearance(frame_color, frame_opacity):
+        normalized_color = ""
+        if frame_color:
+            parsed_color = QColor(frame_color)
+            if not parsed_color.isValid():
+                raise ValueError("Invalid frame color.")
+            normalized_color = parsed_color.name()
+        opacity = max(0.0, min(1.0, float(frame_opacity)))
+        return normalized_color, opacity
+
+    @Slot(int, str, str, float)
+    def preview_frame_properties(
+            self, frame_id, title, frame_color, frame_opacity
+    ):
+        frame = self._node_model.get_node_data(frame_id)
+        if not frame or frame.get("type") != "frame":
+            return
+        try:
+            color, opacity = self._normalized_frame_appearance(
+                frame_color, frame_opacity
+            )
+        except (TypeError, ValueError):
+            return
+        self._node_model.update_frame_properties(
+            frame_id,
+            title,
+            color,
+            opacity,
+            update_timestamp=False,
+        )
+
+    @Slot(int, str, str, float, result=bool)
+    def save_frame_properties(
+            self, frame_id, title, frame_color, frame_opacity
+    ):
+        try:
+            color, opacity = self._normalized_frame_appearance(
+                frame_color, frame_opacity
+            )
+            self._service.update_frame_properties(
+                frame_id, title, color, opacity
+            )
+        except (TypeError, ValueError, RuntimeError) as exc:
+            self.status_message.emit(
+                f"Frame update failed: {exc}", "error"
+            )
+            return False
+        self._node_model.update_frame_properties(
+            frame_id, title, color, opacity
+        )
+        self.status_message.emit("Frame updated.", "accent")
+        return True
 
     # ── Links ───────────────────────────────────────────────────────
 
@@ -508,6 +644,8 @@ class QmlCanvasController(QObject):
             self.openTextEditorRequested.emit(node_id)
         elif data and data["type"] in ("image", "video"):
             self.open_media_viewer_requested.emit(node_id)
+        elif data and data["type"] == "frame":
+            self.openFrameEditorRequested.emit(node_id)
 
     # ── Export (delegated) ──────────────────────────────────────────
 

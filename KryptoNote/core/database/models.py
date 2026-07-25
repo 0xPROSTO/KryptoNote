@@ -23,6 +23,9 @@ class NodeItemDTO:
     media_height: int = 0
     media_duration: float = 0.0
     original_filename: str = ""
+    frame_locked: bool = False
+    frame_color: str = ""
+    frame_opacity: float = 0.21
 
 
 

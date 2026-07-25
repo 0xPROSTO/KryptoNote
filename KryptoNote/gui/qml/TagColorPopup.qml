@@ -10,6 +10,7 @@ Popup {
     parent: Overlay.overlay
 
     readonly property int dialogLayer: 42
+    property string dialogTitle: "Tag color"
     property real colorHue: 0
     property real colorSaturation: 0
     property real colorValue: 1
@@ -124,7 +125,7 @@ Popup {
                 anchors.left: parent.left
                 anchors.leftMargin: 14
                 anchors.verticalCenter: parent.verticalCenter
-                text: "Tag color"
+                text: colorPopup.dialogTitle
                 color: colorPopup.appTheme.textMain
                 font.family: "Segoe UI Semibold"
                 font.pointSize: 10

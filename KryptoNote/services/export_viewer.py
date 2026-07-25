@@ -98,14 +98,43 @@ button:focus-visible,input:focus-visible,.graph-node:focus-visible {
     linear-gradient(90deg,var(--grid-sub) 1px,transparent 1px);
   background-size:500px 500px,500px 500px,100px 100px,100px 100px;
 }
-.connections { position:absolute; inset:0; overflow:visible; pointer-events:none; }
+.connections { position:absolute; inset:0; z-index:1; overflow:visible; pointer-events:none; }
 .connection { fill:none; stroke:var(--border); stroke-width:var(--connection-width); stroke-linecap:round; }
 .graph-node {
+  z-index:2;
   position:absolute; overflow:hidden; border:1.1px solid var(--border); border-radius:4px;
   background:var(--bg-node); color:var(--text); cursor:pointer; text-align:left;
   transition:border-color 120ms ease-out,background-color 120ms ease-out;
 }
 .graph-node:hover { border-color:var(--accent); }
+.frame-node {
+  z-index:0; overflow:visible; border-radius:8px;
+  background:color-mix(in srgb,var(--bg-panel) 21%,transparent);
+}
+.frame-node .node-inner {
+  position:absolute; top:-15px; left:50%; width:max-content;
+  min-width:96px; max-width:calc(100% - 24px); height:30px;
+  transform:translateX(-50%); padding:0 12px;
+  flex-direction:row; align-items:center; justify-content:center; gap:7px;
+  border:1px solid var(--border); border-radius:15px; background:var(--bg-node);
+}
+.frame-node .node-title {
+  min-width:0; color:var(--text); white-space:nowrap;
+  text-overflow:ellipsis; display:block; text-align:center;
+}
+.frame-lock-indicator {
+  position:relative; flex:0 0 11px; width:11px; height:9px;
+  margin-top:3px; border:1.5px solid currentColor; border-radius:2px;
+  color:var(--text-muted);
+}
+.frame-lock-indicator::before {
+  content:""; position:absolute; left:1.5px; top:-7px; width:6px; height:7px;
+  border:1.5px solid currentColor; border-bottom:0; border-radius:5px 5px 0 0;
+}
+.frame-lock-indicator.locked { color:var(--text); }
+.frame-lock-indicator.unlocked::before {
+  left:5px; transform:rotate(28deg); transform-origin:1px 7px;
+}
 .node-inner { position:relative; height:100%; display:flex; flex-direction:column; padding:8px 12px; }
 .media-node .node-inner { padding:5px 10px; }
 .node-title {
@@ -136,6 +165,7 @@ button:focus-visible,input:focus-visible,.graph-node:focus-visible {
 .tag-strip { height:20px; min-width:0; display:flex; align-items:center; gap:4px; overflow:hidden; background:transparent; pointer-events:none; }
 .tag-strip.text-tags { position:absolute; z-index:2; left:10px; right:10px; bottom:10px; }
 .tag-strip.media-tags { position:absolute; z-index:2; left:6px; right:6px; bottom:6px; margin:0; }
+.tag-strip.frame-tags { position:absolute; z-index:2; left:28px; right:28px; bottom:-9px; }
 .tag-chip { flex:0 1 auto; max-width:112px; height:20px; display:inline-flex; align-items:center; gap:5px; padding:0 6px; border:1px solid currentColor; border-radius:7px; color:var(--text); font-family:"Segoe UI Semibold","Segoe UI",sans-serif; font-size:9.33px; white-space:nowrap; overflow:hidden; }
 .tag-chip-label { overflow:hidden; text-overflow:ellipsis; }
 .tag-dot { flex:0 0 7px; width:7px; height:7px; border-radius:50%; background:currentColor; }
@@ -365,24 +395,25 @@ dialog::backdrop { background:rgba(0,0,0,.72); }
     return `rgb(${base.map((channel,index)=>Math.round(channel*.8+tint[index]*.2)).join(",")})`;
   };
   const tagMetrics=document.createElement("canvas").getContext("2d"); tagMetrics.font='600 9.33px "Segoe UI"';
-  const tagWidth = tag => Math.min(112,Math.max(36,Math.ceil(tagMetrics.measureText(safeText(tag.name)).width)+30));
+  const tagWidth = (tag,compact=false) => Math.min(112,Math.max(compact ? 30 : 36,Math.ceil(tagMetrics.measureText(safeText(tag.name)).width)+(compact ? 12 : 30)));
   const moreWidth = count => Math.max(26,Math.ceil(tagMetrics.measureText(`+${count}`).width)+12);
-  const renderTagStrip = (tags,media=false,nodeWidth=200) => {
+  const renderTagStrip = (tags,placement="text",nodeWidth=200) => {
     if (!tags || !tags.length) return null;
-    const strip=document.createElement("div"); strip.className=`tag-strip ${media ? "media-tags" : "text-tags"}`;
-    const available=Math.max(0,Number(nodeWidth)-(media ? 32 : 20)); let used=0,displayCount=0;
+    const strip=document.createElement("div"); strip.className=`tag-strip ${placement}-tags`;
+    const compact=placement==="frame";
+    const available=Math.max(0,Number(nodeWidth)-(placement==="media" ? 32 : compact ? 56 : 20)); let used=0,displayCount=0;
     for (let index=0;index<tags.length;index+=1) {
-      const next=tagWidth(tags[index])+(displayCount ? 4 : 0),remaining=tags.length-index-1;
+      const next=tagWidth(tags[index],compact)+(displayCount ? 4 : 0),remaining=tags.length-index-1;
       const total=used+next+(remaining ? 4+moreWidth(remaining) : 0); if (total>available) break;
       used+=next; displayCount+=1;
     }
     if (!displayCount && tags.length===1) displayCount=1;
     else if (!displayCount && tags.length>1 && available>=4+moreWidth(tags.length-1)+18) displayCount=1;
     tags.slice(0,displayCount).forEach(tag => {
-      const chip=document.createElement("span"); chip.className="tag-chip"; chip.style.width=`${Math.min(tagWidth(tag),available)}px`; chip.style.borderColor=tag.color; chip.style.background=tagBackground(tag.color);
-      const dot=document.createElement("span"); dot.className="tag-dot"; dot.style.color=tag.color;
+      const chip=document.createElement("span"); chip.className="tag-chip"; chip.style.width=`${Math.min(tagWidth(tag,compact),available)}px`; chip.style.borderColor=tag.color; chip.style.background=tagBackground(tag.color);
       const label=document.createElement("span"); label.className="tag-chip-label"; label.textContent=tag.name; chip.title=tag.name;
-      chip.append(dot,label); strip.appendChild(chip);
+      if (!compact) { const dot=document.createElement("span"); dot.className="tag-dot"; dot.style.color=tag.color; chip.appendChild(dot); }
+      chip.appendChild(label); strip.appendChild(chip);
     });
     const remaining=tags.length-displayCount; if (remaining>0) { const more=document.createElement("span"); more.className="tag-more"; more.textContent=`+${remaining}`; strip.appendChild(more); }
     return strip;
@@ -407,7 +438,7 @@ dialog::backdrop { background:rgba(0,0,0,.72); }
     const ty=Number(b.position.y)+Number(b.size.height)/2+graphBounds.offsetY;
     const dx=tx-cx,dy=ty-cy,hw=Number(a.size.width)/2,hh=Number(a.size.height)/2;
     if (Math.abs(dx)<.01 && Math.abs(dy)<.01) return [cx,cy];
-    const inset=8; const sx=Math.abs(dx)>0.01 ? Math.max(1,hw-inset)/Math.abs(dx) : Infinity;
+    const inset=a.type==="frame" ? 0 : 8; const sx=Math.abs(dx)>0.01 ? Math.max(1,hw-inset)/Math.abs(dx) : Infinity;
     const sy=Math.abs(dy)>0.01 ? Math.max(1,hh-inset)/Math.abs(dy) : Infinity;
     const factor=Math.min(sx,sy); return [cx+dx*factor,cy+dy*factor];
   };
@@ -423,24 +454,42 @@ dialog::backdrop { background:rgba(0,0,0,.72); }
   }
   function renderNodes() {
     nodes.forEach(node => {
-      const element=document.createElement("article"); element.className=`graph-node ${node.type==="text" ? "text-node" : "media-node"}`;
+      const element=document.createElement("article");
+      const typeClass=node.type==="frame" ? "frame-node" : (node.type==="text" ? "text-node" : "media-node");
+      element.className=`graph-node ${typeClass}`;
       element.tabIndex=0; element.dataset.id=String(node.id); element.setAttribute("role","button"); element.setAttribute("aria-label",`${node.type} node: ${node.title || `Node ${node.id}`}`);
       element.style.left=`${Number(node.position.x)+graphBounds.offsetX}px`; element.style.top=`${Number(node.position.y)+graphBounds.offsetY}px`;
       element.style.width=`${Math.max(80,Number(node.size.width))}px`; element.style.height=`${Math.max(60,Number(node.size.height))}px`;
+      if (node.type==="frame") {
+        const frameAppearance=node.frame_appearance||{};
+        const frameColor=frameAppearance.color||"var(--bg-panel)";
+        const frameOpacity=Math.max(0,Math.min(1,Number(frameAppearance.opacity ?? .21)));
+        element.style.background=`color-mix(in srgb,${frameColor} ${Math.round(frameOpacity*100)}%,transparent)`;
+      }
       const inner=document.createElement("div"); inner.className="node-inner";
-      if (safeText(node.title).trim()) {
-        const title=document.createElement("div"); title.className="node-title"; title.textContent=node.title;
+      const displayTitle=node.type==="frame" ? (safeText(node.title).trim() || "Untitled Frame") : safeText(node.title).trim();
+      if (node.type==="frame") {
+        const lock=document.createElement("span");
+        lock.className=`frame-lock-indicator ${node.locked ? "locked" : "unlocked"}`;
+        lock.setAttribute("aria-label",node.locked ? "Locked" : "Unlocked");
+        inner.appendChild(lock);
+        const title=document.createElement("div"); title.className="node-title"; title.textContent=displayTitle;
+        title.style.fontSize=`${Math.max(9,Number(node.font && node.font.title_size || 14))}pt`; inner.appendChild(title);
+      } else if (displayTitle) {
+        const title=document.createElement("div"); title.className="node-title"; title.textContent=displayTitle;
         title.style.fontSize=`${Math.max(9,Number(node.font && node.font.title_size || 14))}pt`; inner.appendChild(title);
       }
-      if (node.type==="text") {
+      if (node.type==="frame") {
+        // A frame is a spatial backdrop. Its title is the complete content.
+      } else if (node.type==="text") {
         const body=document.createElement("div"); body.className="node-body"; body.innerHTML=renderMarkdown(node.content || "");
         body.style.fontSize=`${Math.max(8,Number(node.font && node.font.text_size || 10))}pt`; inner.appendChild(body);
-        const tags=renderTagStrip(node.tags,false,node.size.width); if (tags) inner.appendChild(tags);
+        const tags=renderTagStrip(node.tags,"text",node.size.width); if (tags) inner.appendChild(tags);
       } else {
         const frame=document.createElement("div"); frame.className="media-frame"; const source=fileSource(node,true);
         if (source) { const image=document.createElement("img"); image.loading="lazy"; image.alt=""; image.src=source; frame.appendChild(image); }
         else { const label=document.createElement("span"); label.textContent="No thumbnail"; frame.appendChild(label); }
-        const tags=renderTagStrip(node.tags,true,node.size.width); if (tags) frame.appendChild(tags);
+        const tags=renderTagStrip(node.tags,"media",node.size.width); if (tags) frame.appendChild(tags);
         inner.appendChild(frame); const footer=document.createElement("div"); footer.className="node-footer";
         const parts=[formatTimestamp(node.created_at)];
         if (node.type==="video" && node.media.duration) parts.push(duration(node.media.duration));
@@ -448,15 +497,19 @@ dialog::backdrop { background:rgba(0,0,0,.72); }
         if (node.media.width && node.media.height) parts.push(`${node.media.width}x${node.media.height}`);
         footer.textContent=parts.filter(Boolean).join(" | ") || `[${safeText(node.type).toUpperCase()}]`; inner.appendChild(footer);
       }
-      element.appendChild(inner); element.addEventListener("click",() => openNode(node)); element.addEventListener("keydown",event => { if (event.key==="Enter" || event.key===" ") { event.preventDefault(); openNode(node); } }); canvas.appendChild(element);
+      element.appendChild(inner);
+      if (node.type==="frame") { const tags=renderTagStrip(node.tags,"frame",node.size.width); if (tags) element.appendChild(tags); }
+      element.addEventListener("click",() => openNode(node)); element.addEventListener("keydown",event => { if (event.key==="Enter" || event.key===" ") { event.preventDefault(); openNode(node); } }); canvas.appendChild(element);
     });
   }
   function openNode(node) {
     detailTitle.textContent=node.title || `Node ${node.id}`; detailContent.replaceChildren();
     if (node.type==="text") { const copy=document.createElement("div"); copy.className="detail-copy"; copy.innerHTML=renderMarkdown(node.content||""); detailContent.appendChild(copy); }
+    else if (node.type==="frame") { const copy=document.createElement("p"); copy.textContent=node.locked ? "Locked frame · contained nodes move with it." : "Unlocked frame · moves independently."; detailContent.appendChild(copy); }
     else if (node.type==="image") { const image=document.createElement("img"); image.alt=node.title||"Exported image"; image.src=fileSource(node,false)||fileSource(node,true); detailContent.appendChild(image); }
     else { const video=document.createElement("video"); video.controls=true; video.preload="metadata"; video.poster=fileSource(node,true); video.src=fileSource(node,false); detailContent.appendChild(video); const fallback=document.createElement("p"); fallback.className="media-fallback"; fallback.textContent="If this format is not supported by your browser, "; const link=document.createElement("a"); link.href=fileSource(node,false); link.textContent="open the original video"; link.target="_blank"; fallback.appendChild(link); fallback.append(" in a desktop player."); detailContent.appendChild(fallback); }
     const meta=document.createElement("div"); meta.className="meta"; const values=[`Type: ${node.type}`,`Node ID: ${node.id}`];
+    if (node.type==="frame") values.push(`Lock: ${node.locked ? "locked" : "unlocked"}`);
     if (node.media) { values.push(`Size: ${formatBytes(node.media.size)}`); if (node.media.width || node.media.height) values.push(`Dimensions: ${node.media.width||0}×${node.media.height||0}`); if (node.media.duration) values.push(`Duration: ${duration(node.media.duration)}`); if (node.media.original_filename) values.push(`Original: ${node.media.original_filename}`); }
     values.forEach(value => { const span=document.createElement("span"); span.textContent=value; meta.appendChild(span); }); detailContent.appendChild(meta);
     if (node.tags && node.tags.length) { const tags=document.createElement("div"); tags.className="tags"; node.tags.forEach(tag => { const chip=document.createElement("span"); chip.className="tag"; chip.style.borderColor=tag.color; chip.textContent=tag.name; tags.appendChild(chip); }); detailContent.appendChild(tags); }

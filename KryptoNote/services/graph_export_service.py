@@ -141,7 +141,9 @@ class GraphExportService:
                 "SELECT id, type, title, x, y, width, height, text_content, "
                 "thumbnail, is_chunked, total_size, title_size, text_size, "
                 "created_at, updated_at, media_width, media_height, "
-                "media_duration, original_filename FROM items ORDER BY id"
+                "media_duration, original_filename, frame_locked, "
+                "frame_color, frame_opacity "
+                "FROM items ORDER BY id"
             ).fetchall()
             if self.selected_ids is not None:
                 rows = [row for row in rows if int(row[0]) in self.selected_ids]
@@ -164,6 +166,7 @@ class GraphExportService:
                     encrypted_text, encrypted_thumbnail, is_chunked, total_size,
                     title_size, text_size, created_at, updated_at, media_width,
                     media_height, media_duration, encrypted_original_filename,
+                    frame_locked, frame_color, frame_opacity,
                 ) = row
                 title = self._decrypt_text(encrypted_title)
                 text = self._decrypt_text(encrypted_text)
@@ -189,6 +192,16 @@ class GraphExportService:
                     },
                     "created_at": created_at or "",
                     "updated_at": updated_at or "",
+                    "locked": bool(frame_locked)
+                              if node_type == "frame" else False,
+                    "frame_appearance": {
+                        "color": frame_color or "",
+                        "opacity": float(
+                            0.21
+                            if frame_opacity is None
+                            else frame_opacity
+                        ),
+                    } if node_type == "frame" else None,
                     "tags": node_tags,
                     "linked_node_ids": sorted(adjacency.get(node_id, [])),
                 }
@@ -542,6 +555,18 @@ class GraphExportService:
                 lines.append("- Tags: " + ", ".join(
                     f"`@{tag['name']}`" for tag in node["tags"]
                 ))
+            if node.get("type") == "frame":
+                lines.append(
+                    "- Lock: `" + (
+                        "locked" if node.get("locked") else "unlocked"
+                    ) + "`"
+                )
+                frame_appearance = node.get("frame_appearance") or {}
+                lines.append(
+                    "- Background: `"
+                    + (frame_appearance.get("color") or "theme default")
+                    + f" @ {round(float(frame_appearance.get('opacity', 0.21)) * 100)}%`"
+                )
             linked = [node_map.get(link_id) for link_id in node.get("linked_node_ids", [])]
             linked = [target for target in linked if target]
             if linked:

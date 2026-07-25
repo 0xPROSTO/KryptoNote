@@ -347,17 +347,24 @@ class ConnectionListModel(QAbstractListModel):
         x2, y2, w2, h2 = r2
         c1x, c1y = x1 + w1 / 2, y1 + h1 / 2
         c2x, c2y = x2 + w2 / 2, y2 + h2 / 2
-        p1 = self._clip_to_rect(c1x, c1y, c2x, c2y, w1 / 2, h1 / 2)
-        p2 = self._clip_to_rect(c2x, c2y, c1x, c1y, w2 / 2, h2 / 2)
+        n1 = self._node_model.get_node_data(start_id)
+        n2 = self._node_model.get_node_data(end_id)
+        inset1 = 0.0 if n1 and n1.get("type") == "frame" else 8.0
+        inset2 = 0.0 if n2 and n2.get("type") == "frame" else 8.0
+        p1 = self._clip_to_rect(
+            c1x, c1y, c2x, c2y, w1 / 2, h1 / 2, inset1
+        )
+        p2 = self._clip_to_rect(
+            c2x, c2y, c1x, c1y, w2 / 2, h2 / 2, inset2
+        )
         return (p1[0], p1[1], p2[0], p2[1])
 
     @staticmethod
-    def _clip_to_rect(cx, cy, tx, ty, hw, hh):
+    def _clip_to_rect(cx, cy, tx, ty, hw, hh, endpoint_inset=8.0):
         dx, dy = tx - cx, ty - cy
         if abs(dx) < 0.01 and abs(dy) < 0.01:
             return (cx, cy)
 
-        endpoint_inset = 8.0
         hw = max(1.0, hw - endpoint_inset)
         hh = max(1.0, hh - endpoint_inset)
 

@@ -9,7 +9,9 @@ Item {
     required property var canvasController
     required property Item contentLayer
     required property var appTheme
+    required property bool framesOnly
     signal contextMenuRequested(int nodeId, string nodeType, var sourceItem, real localX, real localY)
+
     Repeater {
         model: nodeLayer.viewportModel
         delegate: NodeDelegate {
@@ -18,6 +20,7 @@ Item {
             canvasController: nodeLayer.canvasController
             contentLayer: nodeLayer.contentLayer
             appTheme: nodeLayer.appTheme
+            renderFrames: nodeLayer.framesOnly
             onContextMenuRequested: function(nodeId, nodeType, sourceItem, localX, localY) {
                 nodeLayer.contextMenuRequested(nodeId, nodeType, sourceItem, localX, localY)
             }

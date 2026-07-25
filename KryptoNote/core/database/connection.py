@@ -77,7 +77,10 @@ class DatabaseConnection:
                                 media_width  INTEGER DEFAULT 0,
                                 media_height INTEGER DEFAULT 0,
                                 media_duration REAL DEFAULT 0,
-                                original_filename BLOB
+                                original_filename BLOB,
+                                frame_locked INTEGER NOT NULL DEFAULT 0,
+                                frame_color TEXT NOT NULL DEFAULT '',
+                                frame_opacity REAL NOT NULL DEFAULT 0.21
                             )
                             """)
 
@@ -187,6 +190,21 @@ class DatabaseConnection:
             self.cursor.execute("ALTER TABLE items ADD COLUMN media_duration REAL DEFAULT 0")
         if "original_filename" not in columns:
             self.cursor.execute("ALTER TABLE items ADD COLUMN original_filename BLOB")
+        if "frame_locked" not in columns:
+            self.cursor.execute(
+                "ALTER TABLE items ADD COLUMN frame_locked "
+                "INTEGER NOT NULL DEFAULT 0"
+            )
+        if "frame_color" not in columns:
+            self.cursor.execute(
+                "ALTER TABLE items ADD COLUMN frame_color "
+                "TEXT NOT NULL DEFAULT ''"
+            )
+        if "frame_opacity" not in columns:
+            self.cursor.execute(
+                "ALTER TABLE items ADD COLUMN frame_opacity "
+                "REAL NOT NULL DEFAULT 0.21"
+            )
 
         now = datetime.now().isoformat(timespec="seconds")
         self.cursor.execute("UPDATE items SET created_at=? WHERE created_at IS NULL OR created_at=''", (now,))

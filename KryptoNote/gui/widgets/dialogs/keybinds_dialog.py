@@ -190,10 +190,10 @@ class KeybindsDialog(QDialog):
             (
                 "Mouse",
                 [
-                    (["LMB", "drag"], "Pan the canvas when dragging empty space, or move selected nodes when dragging a node."),
+                    (["LMB", "drag"], "Move nodes normally. Move a frame only by its border; locked frames carry contained nodes."),
                     (["MMB", "drag"], "Pan the canvas."),
                     (["Right click"], "Open node or link context menu."),
-                    (["Resize handle", "drag"], "Resize a node from its bottom-right corner."),
+                    (["Resize handle", "drag"], "Resize a node or frame from its bottom-right corner."),
                     (["Ctrl", "mouse wheel"], "Zoom around the cursor."),
                 ],
             ),

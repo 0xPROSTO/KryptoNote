@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 
 
 Item {
@@ -13,41 +14,51 @@ Item {
     required property int nodeId
     required property Item delegateItem
     property bool _isHovered: false
+    property bool revealOnHover: true
+    property real revealMargin: 8
+    readonly property bool _isActive: resizeDrag.active
 
-    Canvas {
-        id: gripCanvas
-        width: 14
-        height: 14
+    ToolButton {
+        id: gripIcon
+        width: 20
+        height: 20
         anchors.right: parent.right
         anchors.bottom: parent.bottom
-        onPaint: {
-            var ctx = getContext("2d");
-            ctx.reset();
-            ctx.beginPath();
-            var w = width;
-            var h = height;
-            var pad = 2;
-            ctx.moveTo(w - pad, pad);
-            ctx.lineTo(w - pad, h - pad);
-            ctx.lineTo(pad, h - pad);
-            ctx.closePath();
-            ctx.fillStyle = handle._isHovered ? handle.appTheme.accentMain : handle.appTheme.resizeHandle;
-            ctx.fill();
+        anchors.rightMargin: -1
+        anchors.bottomMargin: -1
+        padding: 0
+        hoverEnabled: false
+        focusPolicy: Qt.NoFocus
+        display: AbstractButton.IconOnly
+        opacity: handle.revealOnHover
+                 ? (handle._isHovered || handle._isActive ? 0.95 : 0)
+                 : (handle._isHovered ? 0.95 : 0.68)
+        icon.source: "../assets/icons/resize.svg"
+        icon.width: 18
+        icon.height: 18
+        icon.color: handle._isHovered || handle._isActive
+                    ? handle.appTheme.accentMain
+                    : handle.appTheme.resizeHandle
+        background: Item {}
+        Accessible.ignored: true
+
+        Behavior on opacity {
+            NumberAnimation { duration: 120; easing.type: Easing.OutCubic }
         }
     }
 
     HoverHandler {
-        onHoveredChanged: {
-            handle._isHovered = hovered;
-            gripCanvas.requestPaint();
-        }
+        onHoveredChanged: handle._isHovered = hovered
         cursorShape: Qt.SizeFDiagCursor
+        margin: handle.revealOnHover ? handle.revealMargin : 0
     }
 
     DragHandler {
         id: resizeDrag
         target: null
         dragThreshold: 0
+        margin: handle.revealOnHover ? handle.revealMargin : 0
+        grabPermissions: PointerHandler.CanTakeOverFromAnything
         property real _startWidth: 0
         property real _startHeight: 0
         property point _startContentPos: Qt.point(0, 0)

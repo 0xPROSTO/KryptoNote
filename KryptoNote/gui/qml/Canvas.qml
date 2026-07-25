@@ -26,6 +26,7 @@ Rectangle {
     property alias isEditorResizing: textEditorPanel.resizing
     property alias isSearchResizing: searchPanel.resizing
     property bool isTextEditorOpen: textEditorPanel.open
+    property bool isFrameEditorOpen: frameEditor.visible
     property bool isTagPickerOpen: globalTagPicker.visible
     property bool isSearchPanelOpen: searchPanel.open
     property int hoveredConnectionId: 0
@@ -85,11 +86,27 @@ Rectangle {
         transformOrigin: Item.TopLeft
         scale: root.contentScale
 
+        NodeLayer {
+            z: 0
+            viewportModel: root.nodeViewportModel
+            canvasRoot: root
+            nodeModel: root.nodeModel
+            canvasController: root.canvasController
+            contentLayer: contentLayer
+            appTheme: root.appTheme
+            framesOnly: true
+            anchors.fill: parent
+            onContextMenuRequested: function(nodeId, nodeType, sourceItem, localX, localY) {
+                canvasContextMenu.openForNode(nodeId, nodeType, sourceItem, localX, localY)
+            }
+        }
+
         ConnectionLayer {
+            z: 1
             viewportModel: root.connectionViewportModel
             canvasRoot: root
             canvasController: root.canvasController
-        appTheme: root.appTheme
+            appTheme: root.appTheme
             anchors.fill: parent
             onContextMenuRequested: function(connId, sourceItem, localX, localY) {
                 canvasContextMenu.openForConnection(connId, sourceItem, localX, localY)
@@ -97,12 +114,14 @@ Rectangle {
         }
 
         NodeLayer {
+            z: 2
             viewportModel: root.nodeViewportModel
             canvasRoot: root
             nodeModel: root.nodeModel
             canvasController: root.canvasController
             contentLayer: contentLayer
-        appTheme: root.appTheme
+            appTheme: root.appTheme
+            framesOnly: false
             anchors.fill: parent
             onContextMenuRequested: function(nodeId, nodeType, sourceItem, localX, localY) {
                 canvasContextMenu.openForNode(nodeId, nodeType, sourceItem, localX, localY)
@@ -202,6 +221,17 @@ Rectangle {
         }
     }
 
+    FrameEditorDialog {
+        id: frameEditor
+        canvasController: root.canvasController
+        appTheme: root.appTheme
+
+        onRequestedTagPicker: function(nodeId, anchorItem) {
+            root.openTagPickerForNode(nodeId, anchorItem)
+        }
+        onRequestedClose: root.closeTagPicker()
+    }
+
     TagPicker {
         canvasController: root.canvasController
         appTheme: root.appTheme
@@ -209,6 +239,10 @@ Rectangle {
         onTagsChanged: {
             if (textEditorPanel.open && textEditorPanel.nodeId === globalTagPicker.nodeId) {
                 textEditorPanel.refreshTags()
+            }
+            if (frameEditor.visible
+                    && frameEditor.nodeId === globalTagPicker.nodeId) {
+                frameEditor.refreshTags()
             }
             searchPanel.syncTagsAndRefresh()
         }
@@ -218,6 +252,9 @@ Rectangle {
         target: root.canvasController
         function onOpenTextEditorRequested(nodeId) {
             root.openEditorForNode(nodeId)
+        }
+        function onOpenFrameEditorRequested(nodeId) {
+            root.openFrameEditorForNode(nodeId)
         }
     }
 
@@ -340,6 +377,14 @@ Rectangle {
         textEditorPanel.cancelOrDelete()
     }
 
+    function saveFrameEditor() {
+        frameEditor.saveAndClose()
+    }
+
+    function cancelFrameEditor() {
+        frameEditor.close()
+    }
+
     function openSearchPanel() {
         root.forceActiveFocus()
         searchPanel.openPanel()
@@ -372,6 +417,10 @@ Rectangle {
             _hasEditorReturn = true
         }
         textEditorPanel.openForNode(nodeId)
+    }
+
+    function openFrameEditorForNode(nodeId) {
+        frameEditor.openForFrame(nodeId)
     }
 
     function centerOnNodeForEditor(nodeId) {

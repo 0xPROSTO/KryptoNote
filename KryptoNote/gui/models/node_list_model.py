@@ -35,6 +35,9 @@ class NodeRoles(IntEnum):
     UpdatedAtRole = Qt.ItemDataRole.UserRole + 17
     MetaSummaryRole = Qt.ItemDataRole.UserRole + 18
     TagsRole = Qt.ItemDataRole.UserRole + 19
+    FrameLockedRole = Qt.ItemDataRole.UserRole + 20
+    FrameColorRole = Qt.ItemDataRole.UserRole + 21
+    FrameOpacityRole = Qt.ItemDataRole.UserRole + 22
 
 
 class NodeListModel(QAbstractListModel):
@@ -78,6 +81,9 @@ class NodeListModel(QAbstractListModel):
             NodeRoles.UpdatedAtRole: "updated_at_display",
             NodeRoles.MetaSummaryRole: "meta_summary",
             NodeRoles.TagsRole: "tags",
+            NodeRoles.FrameLockedRole: "frame_locked",
+            NodeRoles.FrameColorRole: "frame_color",
+            NodeRoles.FrameOpacityRole: "frame_opacity",
         }
 
         key = role_map.get(role)
@@ -138,6 +144,9 @@ class NodeListModel(QAbstractListModel):
             NodeRoles.UpdatedAtRole: QByteArray(b"nodeUpdatedAt"),
             NodeRoles.MetaSummaryRole: QByteArray(b"nodeMetaSummary"),
             NodeRoles.TagsRole: QByteArray(b"nodeTags"),
+            NodeRoles.FrameLockedRole: QByteArray(b"nodeFrameLocked"),
+            NodeRoles.FrameColorRole: QByteArray(b"nodeFrameColor"),
+            NodeRoles.FrameOpacityRole: QByteArray(b"nodeFrameOpacity"),
         }
 
     def flags(self, index):
@@ -210,6 +219,13 @@ class NodeListModel(QAbstractListModel):
             "media_width": int(item.media_width or 0),
             "media_height": int(item.media_height or 0),
             "media_duration": float(item.media_duration or 0.0),
+            "frame_locked": bool(getattr(item, "frame_locked", False)),
+            "frame_color": getattr(item, "frame_color", "") or "",
+            "frame_opacity": float(
+                0.21
+                if getattr(item, "frame_opacity", None) is None
+                else item.frame_opacity
+            ),
             "tags": [
                 {"id": tag.id, "name": tag.name, "color": tag.color}
                 for tag in tags_by_item.get(item.id, [])
@@ -224,7 +240,8 @@ class NodeListModel(QAbstractListModel):
                  title="", content="", thumbnail_bytes=None,
                  title_size=14, text_size=10, auto_fit_pending=False,
                  draft=False, created_at="", updated_at="", total_size=0,
-                 media_width=0, media_height=0, media_duration=0.0):
+                 media_width=0, media_height=0, media_duration=0.0,
+                 frame_locked=False, frame_color="", frame_opacity=0.21):
         thumb_image = None
         if thumbnail_bytes:
             thumb_image = QImage.fromData(thumbnail_bytes)
@@ -253,6 +270,9 @@ class NodeListModel(QAbstractListModel):
             "media_width": int(media_width or 0),
             "media_height": int(media_height or 0),
             "media_duration": float(media_duration or 0.0),
+            "frame_locked": bool(frame_locked),
+            "frame_color": frame_color or "",
+            "frame_opacity": float(frame_opacity),
             "tags": [],
         }
         self._refresh_metadata_fields(node_data)
@@ -413,6 +433,66 @@ class NodeListModel(QAbstractListModel):
             [NodeRoles.TitleRole, NodeRoles.UpdatedAtRole, NodeRoles.MetaSummaryRole],
         )
 
+    @Slot(int, bool)
+    def set_frame_locked(self, node_id, locked):
+        idx = self._id_to_index.get(node_id)
+        if idx is None:
+            return
+        node = self._nodes[idx]
+        if node.get("type") != "frame":
+            return
+        locked = bool(locked)
+        if node.get("frame_locked", False) == locked:
+            return
+        node["frame_locked"] = locked
+        node["updated_at"] = datetime.now().isoformat(timespec="seconds")
+        self._refresh_metadata_fields(node)
+        model_idx = self.index(idx, 0)
+        self.dataChanged.emit(
+            model_idx,
+            model_idx,
+            [
+                NodeRoles.FrameLockedRole,
+                NodeRoles.UpdatedAtRole,
+                NodeRoles.MetaSummaryRole,
+            ],
+        )
+
+    def update_frame_properties(
+            self,
+            node_id,
+            title,
+            frame_color,
+            frame_opacity,
+            update_timestamp=True,
+    ):
+        idx = self._id_to_index.get(node_id)
+        if idx is None:
+            return
+        node = self._nodes[idx]
+        if node.get("type") != "frame":
+            return
+
+        node["title"] = title or ""
+        node["frame_color"] = frame_color or ""
+        node["frame_opacity"] = max(
+            0.0, min(1.0, float(frame_opacity))
+        )
+        if update_timestamp:
+            node["updated_at"] = datetime.now().isoformat(timespec="seconds")
+        self._refresh_metadata_fields(node)
+
+        roles = [
+            NodeRoles.TitleRole,
+            NodeRoles.FrameColorRole,
+            NodeRoles.FrameOpacityRole,
+            NodeRoles.MetaSummaryRole,
+        ]
+        if update_timestamp:
+            roles.append(NodeRoles.UpdatedAtRole)
+        model_idx = self.index(idx, 0)
+        self.dataChanged.emit(model_idx, model_idx, roles)
+
     # ── Selection Management ────────────────────────────────────────
 
     @Slot(int, bool)
@@ -539,6 +619,74 @@ class NodeListModel(QAbstractListModel):
             for node in self._nodes
             if node["is_selected"]
         ]
+
+    @Slot(int, result=list)
+    def get_drag_node_positions(self, dragged_node_id):
+        """Return selected items plus nodes contained by selected frames.
+
+        Frame membership is intentionally spatial rather than persisted: a
+        regular node belongs to every selected frame whose bounds contain its
+        centre when the drag begins.
+        """
+        dragged = self.get_node_data(dragged_node_id)
+        if not dragged:
+            return []
+
+        selected = [
+            node for node in self._nodes if node["is_selected"]
+        ]
+        if not selected:
+            selected = [dragged]
+
+        drag_ids = {node["id"] for node in selected}
+        frames = [
+            node for node in selected
+            if node["type"] == "frame" and node.get("frame_locked", False)
+        ]
+        if frames:
+            for node in self._nodes:
+                if node["type"] == "frame" or node.get("is_deleting"):
+                    continue
+                if any(
+                    self._node_center_inside_frame(node, frame)
+                    for frame in frames
+                ):
+                    drag_ids.add(node["id"])
+
+        return [
+            {"id": node["id"], "x": node["x"], "y": node["y"]}
+            for node in self._nodes
+            if node["id"] in drag_ids
+        ]
+
+    @Slot(int, result=int)
+    def select_frame_contents(self, frame_id):
+        """Select a frame and the regular nodes spatially contained by it."""
+        frame = self.get_node_data(frame_id)
+        if not frame or frame["type"] != "frame":
+            return 0
+
+        self.clear_selection()
+        self.set_selected(frame_id, True)
+        count = 0
+        for node in self._nodes:
+            if (
+                node["type"] != "frame"
+                and not node.get("is_deleting")
+                and self._node_center_inside_frame(node, frame)
+            ):
+                self.set_selected(node["id"], True)
+                count += 1
+        return count
+
+    @staticmethod
+    def _node_center_inside_frame(node, frame):
+        center_x = node["x"] + node["width"] / 2.0
+        center_y = node["y"] + node["height"] / 2.0
+        return (
+            frame["x"] <= center_x <= frame["x"] + frame["width"]
+            and frame["y"] <= center_y <= frame["y"] + frame["height"]
+        )
 
     @Slot(float, float, float, float, result=list)
     def get_nodes_in_rect(self, x1, y1, x2, y2):
@@ -762,6 +910,18 @@ class NodeListModel(QAbstractListModel):
             lines.append("Tags: " + ", ".join("@" + tag["name"] for tag in node["tags"]))
         if node.get("type") == "text":
             lines.append(f"Characters: {len(node.get('content', ''))}")
+        elif node.get("type") == "frame":
+            lines.append(
+                "Lock: " + ("Locked" if node.get("frame_locked") else "Unlocked")
+            )
+            lines.append(
+                "Background: "
+                + (node.get("frame_color") or "Theme default")
+            )
+            lines.append(
+                "Opacity: "
+                + f"{round(float(node.get('frame_opacity', 0.21)) * 100)}%"
+            )
         return lines
 
     def _refresh_metadata_fields(self, node):

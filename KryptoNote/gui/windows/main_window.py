@@ -486,6 +486,11 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         act_vid.triggered.connect(self._on_add_video_node)
         add_menu.addAction(act_vid)
 
+        act_frame = QAction("Frame", self)
+        act_frame.setIcon(SvgIcons.get_icon("frame"))
+        act_frame.triggered.connect(self._on_add_frame)
+        add_menu.addAction(act_frame)
+
         tools_menu = menubar.addMenu("Tools")
 
         act_search = QAction("Search\t[Ctrl+F]", self)
@@ -516,7 +521,8 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             (act_export, "export"),
             (act_change_pwd, "lock"), (self._theme_action, "palette"),
             (act_close, "exit"), (act_note, "note"), (act_img, "image"),
-            (act_vid, "video"), (act_search, "search"),
+            (act_vid, "video"), (act_frame, "frame"),
+            (act_search, "search"),
             (self.act_snap, "grid"), (act_keybinds, "keyboard"),
             (act_about, "info"),
         )
@@ -532,6 +538,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             act_note,
             act_img,
             act_vid,
+            act_frame,
             act_search,
             self.act_snap,
         ]
@@ -935,6 +942,10 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self.canvas_controller.add_media_node("video")
         self._defer_modifier_sync()
 
+    def _on_add_frame(self):
+        self.canvas_controller.add_frame()
+        self._defer_modifier_sync()
+
     # ── Dialogs ─────────────────────────────────────────────────────
 
     def open_search(self):
@@ -1158,7 +1169,10 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         key = event.key()
         if key == Qt.Key.Key_Escape and self._is_qml_tag_picker_open():
             return True
-        editor_open = self._is_qml_text_editor_open()
+        editor_open = (
+            self._is_qml_text_editor_open()
+            or self._is_qml_frame_editor_open()
+        )
         if not editor_open:
             return False
         modifiers = event.modifiers()
@@ -1169,7 +1183,10 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             return True
         if key == Qt.Key.Key_Escape:
             return True
-        if self._is_search_shortcut(event):
+        if (
+            self._is_qml_text_editor_open()
+            and self._is_search_shortcut(event)
+        ):
             return True
         if self._is_app_shortcut_while_editor_open(event):
             return True
@@ -1187,6 +1204,29 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         if key == Qt.Key.Key_Escape and self._is_qml_tag_picker_open():
             self._invoke_qml_root("closeTagPicker")
             return True
+
+        if self._is_qml_frame_editor_open():
+            if key == Qt.Key.Key_Escape:
+                self._invoke_qml_root("cancelFrameEditor")
+                return True
+            is_s_key = (
+                key == Qt.Key.Key_S
+                or event.nativeVirtualKey() == 0x53
+            )
+            if is_s_key and modifiers & Qt.KeyboardModifier.ControlModifier:
+                self._invoke_qml_root("saveFrameEditor")
+                self._protect_status(2000)
+                return True
+            if (
+                key in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
+                and modifiers & Qt.KeyboardModifier.ControlModifier
+            ):
+                self._invoke_qml_root("saveFrameEditor")
+                self._protect_status(2000)
+                return True
+            if self._is_app_shortcut_while_editor_open(event):
+                return True
+            return False
 
         editor_open = self._is_qml_text_editor_open()
         if editor_open:
@@ -1362,6 +1402,12 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         root = self.view.rootObject()
         return bool(root and root.property("isTagPickerOpen"))
 
+    def _is_qml_frame_editor_open(self):
+        if not hasattr(self, "view"):
+            return False
+        root = self.view.rootObject()
+        return bool(root and root.property("isFrameEditorOpen"))
+
     def _is_qml_search_panel_open(self):
         if not hasattr(self, "view"):
             return False
@@ -1399,7 +1445,10 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             return
         if self.operation_coordinator.is_busy:
             return
-        if self._is_qml_text_editor_open():
+        if (
+            self._is_qml_text_editor_open()
+            or self._is_qml_frame_editor_open()
+        ):
             return
         key = event.key()
         if key not in (Qt.Key.Key_Control, Qt.Key.Key_Shift):
@@ -1411,7 +1460,10 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self._apply_modifier_state(self._ctrl_held, self._shift_held)
 
     def _handle_global_modifier_release(self, event):
-        if self._is_qml_text_editor_open():
+        if (
+            self._is_qml_text_editor_open()
+            or self._is_qml_frame_editor_open()
+        ):
             return
         key = event.key()
         if key not in (Qt.Key.Key_Control, Qt.Key.Key_Shift):

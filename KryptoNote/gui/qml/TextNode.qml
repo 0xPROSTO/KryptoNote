@@ -115,7 +115,6 @@ Rectangle {
         id: resizer
         nodeId: textNode.nodeId
         delegateItem: textNode.delegateItem
-        visible: !textNode.lodBeacon
         anchors.right: parent.right
         anchors.bottom: parent.bottom
     }
