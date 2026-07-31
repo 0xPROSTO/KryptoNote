@@ -17,7 +17,7 @@ Item {
     y: delegateRoot.model.nodeY
     width: delegateRoot.model.nodeWidth
     height: delegateRoot.model.nodeHeight
-    z: delegateRoot.model.nodeIsSelected ? 10 : 1
+    z: delegateRoot.visuallySelected ? 10 : 1
     visible: matchesLayer
              && (isInViewport || delegateRoot.model.nodeIsDeleting)
     containmentMask: delegateRoot.model.nodeType === "frame"
@@ -26,6 +26,11 @@ Item {
 
     property bool _isResizing: false
     property bool _resizeHovered: nodeLoader.itemResizeHovered
+    readonly property bool visuallySelected:
+            delegateRoot.canvasRoot.propertiesFocusNodeId > 0
+            ? delegateRoot.model.nodeId
+                === delegateRoot.canvasRoot.propertiesFocusNodeId
+            : delegateRoot.model.nodeIsSelected
     property bool matchesLayer: delegateRoot.renderFrames
                                 ? delegateRoot.model.nodeType === "frame"
                                 : delegateRoot.model.nodeType !== "frame"
@@ -86,7 +91,7 @@ Item {
             frameColor: delegateRoot.model.nodeFrameColor
             frameOpacity: delegateRoot.model.nodeFrameOpacity
             tags: delegateRoot.model.nodeTags
-            isSelected: delegateRoot.model.nodeIsSelected
+            isSelected: delegateRoot.visuallySelected
             isHovered: delegateRoot.model.nodeIsHovered
             resizing: delegateRoot._isResizing
             onIsResizeHoveredChanged: nodeLoader.itemResizeHovered = isResizeHovered
@@ -111,7 +116,7 @@ Item {
             nodeId: delegateRoot.model.nodeId
             nodeTitle: delegateRoot.model.nodeTitle
             nodeContent: delegateRoot.model.nodeContent
-            isSelected: delegateRoot.model.nodeIsSelected
+            isSelected: delegateRoot.visuallySelected
             isHovered: delegateRoot.model.nodeIsHovered
             titleSize: delegateRoot.model.nodeTitleSize
             textSize: delegateRoot.model.nodeTextSize
@@ -135,7 +140,7 @@ Item {
             nodeTitle: delegateRoot.model.nodeTitle
             mediaType: delegateRoot.model.nodeMediaType
             metaSummary: delegateRoot.model.nodeMetaSummary
-            isSelected: delegateRoot.model.nodeIsSelected
+            isSelected: delegateRoot.visuallySelected
             isHovered: delegateRoot.model.nodeIsHovered
             nodeWidth: delegateRoot.model.nodeWidth
             nodeHeight: delegateRoot.model.nodeHeight

@@ -909,7 +909,19 @@ class NodeListModel(QAbstractListModel):
         if node.get("tags"):
             lines.append("Tags: " + ", ".join("@" + tag["name"] for tag in node["tags"]))
         if node.get("type") == "text":
-            lines.append(f"Characters: {len(node.get('content', ''))}")
+            content = node.get("content", "") or ""
+            word_count = len(content.split())
+            line_count = content.count("\n") + 1 if content else 0
+            title_size = int(node.get("title_size") or 14)
+            text_size = int(node.get("text_size") or 10)
+            lines.extend(
+                [
+                    f"Characters: {len(content)}",
+                    f"Words: {word_count}",
+                    f"Lines: {line_count}",
+                    f"Typography: Title {title_size} pt · Body {text_size} pt",
+                ]
+            )
         elif node.get("type") == "frame":
             lines.append(
                 "Lock: " + ("Locked" if node.get("frame_locked") else "Unlocked")

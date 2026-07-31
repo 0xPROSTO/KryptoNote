@@ -2,10 +2,11 @@ import base64
 import json
 import mimetypes
 import os
+import re
 import sqlite3
 import zipfile
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -29,17 +30,23 @@ class ExportMedia:
     mime_type: str
     total_size: int
     is_chunked: bool
-    thumbnail: bytes | None
+    has_thumbnail: bool
 
 
 @dataclass(slots=True)
 class ExportGraph:
     manifest: dict
     media: list[ExportMedia]
+    thumbnail_reader: object = field(default=None, repr=False)
 
     @property
     def media_bytes(self):
         return sum(max(0, media.total_size) for media in self.media)
+
+    def read_thumbnail(self, media):
+        if not media.has_thumbnail or self.thumbnail_reader is None:
+            return None
+        return self.thumbnail_reader(media)
 
 
 class GraphExportService:
@@ -74,19 +81,27 @@ class GraphExportService:
                 tuple(sorted({int(node_id) for node_id in selected_ids}))
                 if selected_ids is not None else None
             )
-            where = ""
-            parameters = ()
             if selected_ids is not None:
                 if not selected_ids:
                     return 2 * 1024 * 1024
-                placeholders = ",".join("?" for _ in selected_ids)
-                where = f" WHERE id IN ({placeholders})"
-                parameters = selected_ids
-            media_bytes, thumbnail_bytes = connection.execute(
-                "SELECT COALESCE(SUM(total_size), 0), "
-                "COALESCE(SUM(length(thumbnail)), 0) FROM items" + where,
-                parameters,
-            ).fetchone()
+                media_bytes = 0
+                thumbnail_bytes = 0
+                for start in range(0, len(selected_ids), 900):
+                    batch = selected_ids[start:start + 900]
+                    placeholders = ",".join("?" for _ in batch)
+                    row = connection.execute(
+                        "SELECT COALESCE(SUM(total_size), 0), "
+                        "COALESCE(SUM(length(thumbnail)), 0) "
+                        f"FROM items WHERE id IN ({placeholders})",
+                        batch,
+                    ).fetchone()
+                    media_bytes += int(row[0] or 0)
+                    thumbnail_bytes += int(row[1] or 0)
+            else:
+                media_bytes, thumbnail_bytes = connection.execute(
+                    "SELECT COALESCE(SUM(total_size), 0), "
+                    "COALESCE(SUM(length(thumbnail)), 0) FROM items"
+                ).fetchone()
         binary_bytes = int(media_bytes or 0) + int(thumbnail_bytes or 0)
         return int(binary_bytes * 4 / 3) + 2 * 1024 * 1024
 
@@ -99,22 +114,36 @@ class GraphExportService:
         try:
             self._check_cancelled()
             self._progress(0.0, "Reading graph snapshot...")
-            graph = self.build_graph()
-            self._check_cancelled()
-            if export_format == "zip":
-                self._write_zip(graph, part_path, password=password)
-            elif export_format == "html":
-                self._write_standalone_html(graph, part_path)
-            elif export_format == "pdf":
-                from .pdf_export_service import PdfExportService
+            with self._connect_readonly(self.db_path) as connection:
+                connection.execute("BEGIN")
+                try:
+                    graph = self.build_graph(connection)
+                    self._check_cancelled()
+                    if export_format == "zip":
+                        self._write_zip(
+                            graph,
+                            part_path,
+                            connection,
+                            password=password,
+                        )
+                    elif export_format == "html":
+                        self._write_standalone_html(
+                            graph, part_path, connection
+                        )
+                    elif export_format == "pdf":
+                        from .pdf_export_service import PdfExportService
 
-                self._progress(0.2, "Rendering PDF report...")
-                PdfExportService(
-                    cancel_check=self.cancel_check,
-                    progress_callback=self.progress_callback,
-                ).export(graph, part_path)
-            else:
-                raise ValueError(f"Unsupported export format: {export_format}")
+                        self._progress(0.2, "Rendering PDF report...")
+                        PdfExportService(
+                            cancel_check=self.cancel_check,
+                            progress_callback=self.progress_callback,
+                        ).export(graph, part_path)
+                    else:
+                        raise ValueError(
+                            f"Unsupported export format: {export_format}"
+                        )
+                finally:
+                    connection.rollback()
             self._check_cancelled()
             os.replace(part_path, output_path)
             self._progress(1.0, "Export complete")
@@ -126,9 +155,19 @@ class GraphExportService:
                 pass
             raise
 
-    def build_graph(self):
-        with self._connect_readonly(self.db_path) as connection:
-            connection.execute("BEGIN")
+    def build_graph(self, connection=None):
+        if connection is None:
+            with self._connect_readonly(self.db_path) as owned_connection:
+                owned_connection.execute("BEGIN")
+                try:
+                    graph = self._build_graph(owned_connection)
+                    graph.thumbnail_reader = self._read_thumbnail_fresh
+                    return graph
+                finally:
+                    owned_connection.rollback()
+        return self._build_graph(connection)
+
+    def _build_graph(self, connection):
             tags = self._read_tags(connection)
             tags_by_node = self._read_node_tags(connection, tags)
             all_connections = [
@@ -137,17 +176,22 @@ class GraphExportService:
                     "SELECT id, start_id, end_id FROM connections ORDER BY id"
                 )
             ]
-            rows = connection.execute(
+            exported_ids = {
+                int(row[0])
+                for row in connection.execute(
+                    "SELECT id FROM items ORDER BY id"
+                )
+                if self.selected_ids is None
+                or int(row[0]) in self.selected_ids
+            }
+            row_cursor = connection.execute(
                 "SELECT id, type, title, x, y, width, height, text_content, "
-                "thumbnail, is_chunked, total_size, title_size, text_size, "
+                "thumbnail IS NOT NULL, is_chunked, total_size, title_size, text_size, "
                 "created_at, updated_at, media_width, media_height, "
                 "media_duration, original_filename, frame_locked, "
                 "frame_color, frame_opacity "
                 "FROM items ORDER BY id"
-            ).fetchall()
-            if self.selected_ids is not None:
-                rows = [row for row in rows if int(row[0]) in self.selected_ids]
-            exported_ids = {int(row[0]) for row in rows}
+            )
             connections = [
                 link for link in all_connections
                 if link["start_id"] in exported_ids and link["end_id"] in exported_ids
@@ -159,21 +203,32 @@ class GraphExportService:
 
             nodes = []
             media_records = []
-            for index, row in enumerate(rows):
+            row_count = len(exported_ids)
+            exported_index = 0
+            for row in row_cursor:
+                if int(row[0]) not in exported_ids:
+                    continue
                 self._check_cancelled()
                 (
                     node_id, node_type, encrypted_title, x, y, width, height,
-                    encrypted_text, encrypted_thumbnail, is_chunked, total_size,
+                    encrypted_text, has_thumbnail, is_chunked, total_size,
                     title_size, text_size, created_at, updated_at, media_width,
                     media_height, media_duration, encrypted_original_filename,
                     frame_locked, frame_color, frame_opacity,
                 ) = row
-                title = self._decrypt_text(encrypted_title)
-                text = self._decrypt_text(encrypted_text)
-                original_filename = self._decrypt_text(encrypted_original_filename)
-                thumbnail = (
-                    self.crypto.decrypt(encrypted_thumbnail)
-                    if encrypted_thumbnail else None
+                title = self._decrypt_text(
+                    encrypted_title,
+                    self.crypto.item_aad(node_id, "title"),
+                )
+                text = self._decrypt_text(
+                    encrypted_text,
+                    self.crypto.item_aad(node_id, "text_content"),
+                )
+                original_filename = self._decrypt_text(
+                    encrypted_original_filename,
+                    self.crypto.item_aad(
+                        node_id, "original_filename"
+                    ),
                 )
                 node_tags = [
                     {"id": tag["id"], "name": tag["name"], "color": tag["color"]}
@@ -195,7 +250,7 @@ class GraphExportService:
                     "locked": bool(frame_locked)
                               if node_type == "frame" else False,
                     "frame_appearance": {
-                        "color": frame_color or "",
+                        "color": self._safe_frame_color(frame_color),
                         "opacity": float(
                             0.21
                             if frame_opacity is None
@@ -221,7 +276,10 @@ class GraphExportService:
                     )
                     folder = "images" if node_type == "image" else "videos"
                     media_path = f"media/{folder}/node-{node_id}{extension}"
-                    thumbnail_path = f"thumbnails/node-{node_id}.jpg" if thumbnail else ""
+                    thumbnail_path = (
+                        f"thumbnails/node-{node_id}.jpg"
+                        if has_thumbnail else ""
+                    )
                     mime_type = mimetypes.guess_type(media_path)[0] or "application/octet-stream"
                     record = ExportMedia(
                         node_id=int(node_id),
@@ -233,7 +291,7 @@ class GraphExportService:
                         mime_type=mime_type,
                         total_size=media_size,
                         is_chunked=bool(is_chunked),
-                        thumbnail=thumbnail,
+                        has_thumbnail=bool(has_thumbnail),
                     )
                     media_records.append(record)
                     node["media"] = {
@@ -247,10 +305,11 @@ class GraphExportService:
                         "duration": float(media_duration or 0),
                     }
                 nodes.append(node)
-                if rows:
+                exported_index += 1
+                if row_count:
                     self._progress(
-                        0.02 + 0.08 * ((index + 1) / len(rows)),
-                        f"Reading nodes {index + 1}/{len(rows)}...",
+                        0.02 + 0.08 * (exported_index / row_count),
+                        f"Reading nodes {exported_index}/{row_count}...",
                     )
 
             used_tag_ids = {
@@ -273,10 +332,15 @@ class GraphExportService:
                     tag for tag in tags.values() if int(tag["id"]) in used_tag_ids
                 ],
             }
-            connection.rollback()
-        return ExportGraph(manifest=manifest, media=media_records)
+            return ExportGraph(
+                manifest=manifest,
+                media=media_records,
+                thumbnail_reader=lambda media: self._read_thumbnail(
+                    connection, media
+                ),
+            )
 
-    def _write_zip(self, graph, path, password=None):
+    def _write_zip(self, graph, path, connection, password=None):
         manifest_json = json.dumps(
             graph.manifest, ensure_ascii=False, indent=2
         ).encode("utf-8")
@@ -318,10 +382,11 @@ class GraphExportService:
                 archive.writestr("index.html", viewer, compress_type=deflated)
                 for media in graph.media:
                     self._check_cancelled()
-                    if media.thumbnail:
+                    thumbnail = graph.read_thumbnail(media)
+                    if thumbnail:
                         archive.writestr(
                             media.thumbnail_path,
-                            media.thumbnail,
+                            thumbnail,
                             compress_type=stored,
                         )
                     previous_compression = archive.compression
@@ -329,7 +394,9 @@ class GraphExportService:
                     try:
                         with archive.open(media.path, "w", force_zip64=True) as target:
                             written = 0
-                            for chunk in self._iter_media_bytes(media):
+                            for chunk in self._iter_media_bytes(
+                                connection, media
+                            ):
                                 self._check_cancelled()
                                 target.write(chunk)
                                 written += len(chunk)
@@ -352,7 +419,7 @@ class GraphExportService:
                 pass
             raise
 
-    def _write_standalone_html(self, graph, path):
+    def _write_standalone_html(self, graph, path, connection):
         before, after = render_viewer_parts(graph.manifest)
         total = max(1, graph.media_bytes)
         completed = 0
@@ -360,12 +427,13 @@ class GraphExportService:
             output.write(before)
             for media in graph.media:
                 self._check_cancelled()
-                if media.thumbnail:
+                thumbnail = graph.read_thumbnail(media)
+                if thumbnail:
                     output.write(
                         f'<script id="embedded-thumb-{media.node_id}" '
                         'type="application/octet-stream" data-mime="image/jpeg">'
                     )
-                    self._write_base64(output, (media.thumbnail,))
+                    self._write_base64(output, (thumbnail,))
                     output.write("</script>\n")
                 output.write(
                     f'<script id="embedded-media-{media.node_id}" '
@@ -374,7 +442,9 @@ class GraphExportService:
 
                 def chunks():
                     nonlocal completed
-                    for chunk in self._iter_media_bytes(media):
+                    for chunk in self._iter_media_bytes(
+                        connection, media
+                    ):
                         completed += len(chunk)
                         self._progress(
                             0.1 + 0.88 * min(1.0, completed / total),
@@ -386,25 +456,35 @@ class GraphExportService:
                 output.write("</script>\n")
             output.write(after)
 
-    def _iter_media_bytes(self, media):
-        with self._connect_readonly(self.db_path) as connection:
-            if media.is_chunked:
-                cursor = connection.execute(
-                    "SELECT data FROM media_chunks WHERE item_id=? ORDER BY chunk_index",
-                    (media.node_id,),
+    def _iter_media_bytes(self, connection, media):
+        if media.is_chunked:
+            cursor = connection.execute(
+                "SELECT chunk_index, data FROM media_chunks "
+                "WHERE item_id=? ORDER BY chunk_index",
+                (media.node_id,),
+            )
+            for chunk_index, encrypted_chunk in cursor:
+                self._check_cancelled()
+                yield self.crypto.decrypt(
+                    encrypted_chunk,
+                    aad=self.crypto.chunk_aad(
+                        media.node_id, chunk_index
+                    ),
                 )
-                for (encrypted_chunk,) in cursor:
-                    self._check_cancelled()
-                    yield self.crypto.decrypt(encrypted_chunk)
+            return
+        row = connection.execute(
+            "SELECT full_data FROM items WHERE id=?", (media.node_id,)
+        ).fetchone()
+        if not row or not row[0]:
+            if media.total_size == 0:
                 return
-            row = connection.execute(
-                "SELECT full_data FROM items WHERE id=?", (media.node_id,)
-            ).fetchone()
-            if not row or not row[0]:
-                if media.total_size == 0:
-                    return
-                raise ValueError(f"No media data found for node {media.node_id}")
-            yield self.crypto.decrypt(row[0])
+            raise ValueError(
+                f"No media data found for node {media.node_id}"
+            )
+        yield self.crypto.decrypt(
+            row[0],
+            aad=self.crypto.item_aad(media.node_id, "full_data"),
+        )
 
     @staticmethod
     def _write_base64(output, chunks):
@@ -423,7 +503,9 @@ class GraphExportService:
         for tag_id, encrypted_name, color in connection.execute(
             "SELECT id, name, color FROM tags ORDER BY id"
         ):
-            name = self._decrypt_text(encrypted_name)
+            name = self._decrypt_text(
+                encrypted_name, self.crypto.tag_aad(tag_id)
+            )
             if name:
                 result[int(tag_id)] = {
                     "id": int(tag_id), "name": name, "color": color,
@@ -470,7 +552,12 @@ class GraphExportService:
             ).fetchone()
         if not row or not row[0]:
             return b""
-        return self.crypto.decrypt(row[0])[:64]
+        aad = (
+            self.crypto.chunk_aad(node_id, 0)
+            if is_chunked
+            else self.crypto.item_aad(node_id, "full_data")
+        )
+        return self.crypto.decrypt(row[0], aad=aad)[:64]
 
     def _read_non_chunked_media_size(self, connection, node_id):
         row = connection.execute(
@@ -478,7 +565,12 @@ class GraphExportService:
         ).fetchone()
         if not row or not row[0]:
             return 0
-        return len(self.crypto.decrypt(row[0]))
+        return len(
+            self.crypto.decrypt(
+                row[0],
+                aad=self.crypto.item_aad(node_id, "full_data"),
+            )
+        )
 
     @staticmethod
     def _extension_from_signature(data, node_type):
@@ -502,10 +594,32 @@ class GraphExportService:
             return ".mov" if data[8:12] == b"qt  " else ".mp4"
         return None
 
-    def _decrypt_text(self, value):
+    def _decrypt_text(self, value, aad):
         if not value:
             return ""
-        return self.crypto.decrypt(value).decode("utf-8", errors="replace")
+        return self.crypto.decrypt(
+            value, aad=aad
+        ).decode("utf-8", errors="replace")
+
+    def _read_thumbnail(self, connection, media):
+        row = connection.execute(
+            "SELECT thumbnail FROM items WHERE id=?", (media.node_id,)
+        ).fetchone()
+        if not row or not row[0]:
+            return None
+        return self.crypto.decrypt(
+            row[0],
+            aad=self.crypto.item_aad(media.node_id, "thumbnail"),
+        )
+
+    def _read_thumbnail_fresh(self, media):
+        with self._connect_readonly(self.db_path) as connection:
+            return self._read_thumbnail(connection, media)
+
+    @staticmethod
+    def _safe_frame_color(value):
+        color = str(value or "")
+        return color if re.fullmatch(r"#[0-9a-fA-F]{6}", color) else ""
 
     @staticmethod
     @contextmanager

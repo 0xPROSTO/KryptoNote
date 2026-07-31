@@ -17,13 +17,6 @@ def write_chunked_media(
     media_width=0, media_height=0, media_duration=0.0,
     cancel_check=None, original_filename="",
 ):
-    enc_title = crypto.encrypt(title.encode())
-    enc_thumb = crypto.encrypt(thumb) if thumb else None
-    enc_original_filename = (
-        crypto.encrypt((original_filename or "").encode())
-        if original_filename else None
-    )
-
     with open(file_path, "rb") as f:
         f.seek(0, 2)
         file_size = f.tell()
@@ -40,10 +33,31 @@ def write_chunked_media(
                                original_filename)
             VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            item_type, enc_title, x, y, w, h, enc_thumb, file_size,
-            now, now, media_width, media_height, media_duration, enc_original_filename,
+            item_type, b"", x, y, w, h, None, file_size,
+            now, now, media_width, media_height, media_duration, None,
         ))
         item_id = cursor.lastrowid
+        enc_title = crypto.encrypt(
+            title.encode(), aad=crypto.item_aad(item_id, "title")
+        )
+        enc_thumb = (
+            crypto.encrypt(
+                thumb, aad=crypto.item_aad(item_id, "thumbnail")
+            )
+            if thumb else None
+        )
+        enc_original_filename = (
+            crypto.encrypt(
+                (original_filename or "").encode(),
+                aad=crypto.item_aad(item_id, "original_filename"),
+            )
+            if original_filename else None
+        )
+        cursor.execute(
+            "UPDATE items SET title=?, thumbnail=?, original_filename=? "
+            "WHERE id=?",
+            (enc_title, enc_thumb, enc_original_filename, item_id),
+        )
 
         with open(file_path, "rb") as f:
             index = 0
@@ -53,7 +67,9 @@ def write_chunked_media(
                 chunk = f.read(chunk_size)
                 if not chunk:
                     break
-                enc_chunk = crypto.encrypt(chunk)
+                enc_chunk = crypto.encrypt(
+                    chunk, aad=crypto.chunk_aad(item_id, index)
+                )
                 cursor.execute(
                     "INSERT INTO media_chunks (item_id, chunk_index, data) VALUES (?, ?, ?)",
                     (item_id, index, enc_chunk),
@@ -198,19 +214,13 @@ class NodeRepository:
             media_height=0, media_duration=0.0, original_filename="",
             frame_locked=False, frame_color="", frame_opacity=0.21,
     ):
-        enc_title = self.crypto.encrypt((title or "").encode())
-        enc_text = self.crypto.encrypt(text.encode()) if text else None
-        enc_thumb = self.crypto.encrypt(thumb) if thumb else None
-        enc_data = self.crypto.encrypt(data) if data else None
-        enc_original_filename = (
-            self.crypto.encrypt((original_filename or "").encode())
-            if original_filename else None
-        )
         is_chunked = 0
         total_size = len(data) if data else 0
         now = datetime.now().isoformat(timespec="seconds")
 
-        self.cursor.execute("""
+        self.cursor.execute("SAVEPOINT add_item")
+        try:
+            self.cursor.execute("""
                             INSERT INTO items (type, title, x, y, width, height, text_content, thumbnail, full_data,
                                                is_chunked, total_size, title_size, text_size, created_at, updated_at,
                                                media_width, media_height, media_duration, original_filename,
@@ -218,15 +228,61 @@ class NodeRepository:
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             """,
                             (
-                                item_type, enc_title, x, y, w, h, enc_text, enc_thumb,
-                                enc_data, is_chunked, total_size, title_size, text_size,
+                                item_type, b"", x, y, w, h, None, None,
+                                None, is_chunked, total_size, title_size, text_size,
                                 now, now, media_width, media_height, media_duration,
-                                enc_original_filename, int(bool(frame_locked)),
+                                None, int(bool(frame_locked)),
                                 frame_color or "", float(frame_opacity),
                             ))
-        item_id = self.cursor.lastrowid
-        self.conn.commit()
-        return item_id
+            item_id = self.cursor.lastrowid
+            aad = self.crypto.item_aad
+            enc_title = self.crypto.encrypt(
+                (title or "").encode(), aad=aad(item_id, "title")
+            )
+            enc_text = (
+                self.crypto.encrypt(
+                    text.encode(), aad=aad(item_id, "text_content")
+                )
+                if text else None
+            )
+            enc_thumb = (
+                self.crypto.encrypt(
+                    thumb, aad=aad(item_id, "thumbnail")
+                )
+                if thumb else None
+            )
+            enc_data = (
+                self.crypto.encrypt(
+                    data, aad=aad(item_id, "full_data")
+                )
+                if data else None
+            )
+            enc_original_filename = (
+                self.crypto.encrypt(
+                    (original_filename or "").encode(),
+                    aad=aad(item_id, "original_filename"),
+                )
+                if original_filename else None
+            )
+            self.cursor.execute(
+                "UPDATE items SET title=?, text_content=?, thumbnail=?, "
+                "full_data=?, original_filename=? WHERE id=?",
+                (
+                    enc_title,
+                    enc_text,
+                    enc_thumb,
+                    enc_data,
+                    enc_original_filename,
+                    item_id,
+                ),
+            )
+            self.cursor.execute("RELEASE SAVEPOINT add_item")
+            self.conn.commit()
+            return item_id
+        except Exception:
+            self.cursor.execute("ROLLBACK TO SAVEPOINT add_item")
+            self.cursor.execute("RELEASE SAVEPOINT add_item")
+            raise
 
     def add_streamed_media(
             self, item_type, x, y, w, h, title, thumb, file_path,
@@ -249,7 +305,9 @@ class NodeRepository:
         )
         row = self.cursor.fetchone()
         if row:
-            return self.crypto.decrypt(row[0])
+            return self.crypto.decrypt(
+                row[0], aad=self.crypto.chunk_aad(item_id, chunk_index)
+            )
         return None
 
     _ITEM_SELECT = (
@@ -297,19 +355,31 @@ class NodeRepository:
         ) = row
         if self.crypto:
             title = (
-                self.crypto.decrypt(encrypted_title).decode()
+                self.crypto.decrypt(
+                    encrypted_title,
+                    aad=self.crypto.item_aad(item_id, "title"),
+                ).decode()
                 if encrypted_title else ""
             )
             text = (
-                self.crypto.decrypt(encrypted_text).decode()
+                self.crypto.decrypt(
+                    encrypted_text,
+                    aad=self.crypto.item_aad(item_id, "text_content"),
+                ).decode()
                 if encrypted_text else ""
             )
             thumbnail = (
-                self.crypto.decrypt(encrypted_thumbnail)
+                self.crypto.decrypt(
+                    encrypted_thumbnail,
+                    aad=self.crypto.item_aad(item_id, "thumbnail"),
+                )
                 if include_thumbnail and encrypted_thumbnail else None
             )
             original_filename = (
-                self.crypto.decrypt(encrypted_original_filename).decode()
+                self.crypto.decrypt(
+                    encrypted_original_filename,
+                    aad=self.crypto.item_aad(item_id, "original_filename"),
+                ).decode()
                 if encrypted_original_filename else ""
             )
         else:
@@ -341,7 +411,12 @@ class NodeRepository:
         tags = []
         for tag_id, encrypted_name, color in self.cursor.fetchall():
             try:
-                name = self.crypto.decrypt(encrypted_name).decode() if encrypted_name else ""
+                name = (
+                    self.crypto.decrypt(
+                        encrypted_name, aad=self.crypto.tag_aad(tag_id)
+                    ).decode()
+                    if encrypted_name else ""
+                )
             except Exception:
                 continue
             if name:
@@ -359,14 +434,28 @@ class NodeRepository:
         for tag in self.get_all_tags():
             if tag.name.casefold() == normalized:
                 return tag.id
-        encrypted_name = self.crypto.encrypt(normalized.encode())
         now = datetime.now().isoformat(timespec="seconds")
-        self.cursor.execute(
-            "INSERT INTO tags (name, color, created_at) VALUES (?, ?, ?)",
-            (encrypted_name, color, now),
-        )
-        self.conn.commit()
-        return self.cursor.lastrowid
+        self.cursor.execute("SAVEPOINT add_tag")
+        try:
+            self.cursor.execute(
+                "INSERT INTO tags (name, color, created_at) VALUES (?, ?, ?)",
+                (b"", color, now),
+            )
+            tag_id = self.cursor.lastrowid
+            encrypted_name = self.crypto.encrypt(
+                normalized.encode(), aad=self.crypto.tag_aad(tag_id)
+            )
+            self.cursor.execute(
+                "UPDATE tags SET name=? WHERE id=?",
+                (encrypted_name, tag_id),
+            )
+            self.cursor.execute("RELEASE SAVEPOINT add_tag")
+            self.conn.commit()
+            return tag_id
+        except Exception:
+            self.cursor.execute("ROLLBACK TO SAVEPOINT add_tag")
+            self.cursor.execute("RELEASE SAVEPOINT add_tag")
+            raise
 
     def update_tag(self, tag_id, name, color):
         normalized = (name or "").strip().lstrip("@").casefold()
@@ -381,7 +470,13 @@ class NodeRepository:
                 raise ValueError("A tag with this name already exists")
         self.cursor.execute(
             "UPDATE tags SET name=?, color=? WHERE id=?",
-            (self.crypto.encrypt(normalized.encode()), color, tag_id),
+            (
+                self.crypto.encrypt(
+                    normalized.encode(), aad=self.crypto.tag_aad(tag_id)
+                ),
+                color,
+                tag_id,
+            ),
         )
         if self.cursor.rowcount == 0:
             raise ValueError("Tag not found")
@@ -398,6 +493,34 @@ class NodeRepository:
             if tag:
                 result.setdefault(item_id, []).append(tag)
         return result
+
+    def get_item_tags(self, item_id):
+        self.cursor.execute(
+            """
+            SELECT tags.id, tags.name, tags.color
+            FROM item_tags
+            JOIN tags ON tags.id = item_tags.tag_id
+            WHERE item_tags.item_id=?
+            ORDER BY item_tags.priority, tags.id
+            """,
+            (item_id,),
+        )
+        tags = []
+        for tag_id, encrypted_name, color in self.cursor.fetchall():
+            try:
+                name = (
+                    self.crypto.decrypt(
+                        encrypted_name,
+                        aad=self.crypto.tag_aad(tag_id),
+                    ).decode()
+                    if encrypted_name
+                    else ""
+                )
+            except Exception:
+                continue
+            if name:
+                tags.append(TagDTO(tag_id, name, color))
+        return tags
 
     def set_item_tag(self, item_id, tag_id, enabled):
         if enabled:
@@ -429,7 +552,9 @@ class NodeRepository:
         self.cursor.execute("SELECT full_data FROM items WHERE id=?", (item_id,))
         row = self.cursor.fetchone()
         if row and row[0]:
-            return self.crypto.decrypt(row[0])
+            return self.crypto.decrypt(
+                row[0], aad=self.crypto.item_aad(item_id, "full_data")
+            )
         return None
 
     def get_item_info(self, item_id):
@@ -453,7 +578,10 @@ class NodeRepository:
         self.conn.commit()
 
     def update_item_title(self, item_id, title):
-        enc_title = self.crypto.encrypt((title or "").encode())
+        enc_title = self.crypto.encrypt(
+            (title or "").encode(),
+            aad=self.crypto.item_aad(item_id, "title"),
+        )
         now = datetime.now().isoformat(timespec="seconds")
         self.cursor.execute(
             "UPDATE items SET title=?, updated_at=? WHERE id=?",
@@ -475,7 +603,10 @@ class NodeRepository:
     def update_frame_properties(
             self, item_id, title, frame_color, frame_opacity
     ):
-        enc_title = self.crypto.encrypt((title or "").encode())
+        enc_title = self.crypto.encrypt(
+            (title or "").encode(),
+            aad=self.crypto.item_aad(item_id, "title"),
+        )
         now = datetime.now().isoformat(timespec="seconds")
         self.cursor.execute(
             "UPDATE items SET title=?, frame_color=?, frame_opacity=?, "
@@ -496,8 +627,14 @@ class NodeRepository:
         self.delete_node_cascade(item_id)
 
     def update_text_content(self, item_id, title, new_text, title_size=14, text_size=10):
-        enc_title = self.crypto.encrypt((title or "").encode())
-        enc_text = self.crypto.encrypt(new_text.encode())
+        enc_title = self.crypto.encrypt(
+            (title or "").encode(),
+            aad=self.crypto.item_aad(item_id, "title"),
+        )
+        enc_text = self.crypto.encrypt(
+            new_text.encode(),
+            aad=self.crypto.item_aad(item_id, "text_content"),
+        )
         now = datetime.now().isoformat(timespec="seconds")
         self.cursor.execute(
             "UPDATE items SET title=?, text_content=?, title_size=?, text_size=?, updated_at=? WHERE id=?",
@@ -662,18 +799,23 @@ class NodeRepository:
         on_success=None,
         on_error=None,
     ):
-        item_ids = [int(item_id) for item_id in item_ids]
+        item_ids = list(
+            dict.fromkeys(int(item_id) for item_id in item_ids)
+        )
         if not item_ids:
             if on_finish_vacuum:
                 on_finish_vacuum()
             return
 
-        in_sql, in_params = self._in_clause(item_ids)
-        self.cursor.execute(
-            f"SELECT id, type, total_size FROM items WHERE id IN {in_sql}",
-            in_params,
-        )
-        rows = self.cursor.fetchall()
+        rows = []
+        for start in range(0, len(item_ids), 900):
+            batch = item_ids[start:start + 900]
+            in_sql, in_params = self._in_clause(batch)
+            self.cursor.execute(
+                f"SELECT id, type, total_size FROM items WHERE id IN {in_sql}",
+                in_params,
+            )
+            rows.extend(self.cursor.fetchall())
 
         should_vacuum = False
         try:
@@ -688,10 +830,13 @@ class NodeRepository:
                 close_streams_for_item(item_id)
 
         def do_delete(cursor, conn):
-            cursor.execute(
-                f"DELETE FROM items WHERE id IN {in_sql}",
-                in_params,
-            )
+            for start in range(0, len(item_ids), 900):
+                batch = item_ids[start:start + 900]
+                in_sql, in_params = self._in_clause(batch)
+                cursor.execute(
+                    f"DELETE FROM items WHERE id IN {in_sql}",
+                    in_params,
+                )
             conn.commit()
             if should_vacuum:
                 try:

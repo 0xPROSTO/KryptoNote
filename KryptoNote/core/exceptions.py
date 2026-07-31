@@ -13,6 +13,11 @@ class AuthError(KryptoNoteError):
     pass
 
 
+class UnverifiableLegacyPassword(AuthError):
+    """Raised when an empty legacy database has no ciphertext to verify."""
+    pass
+
+
 class DatabaseError(KryptoNoteError):
     """Raised on database-level failures (corruption, lock timeout)."""
     pass

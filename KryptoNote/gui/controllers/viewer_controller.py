@@ -1,8 +1,6 @@
 from PySide6.QtCore import QObject, Slot
 from PySide6.QtWidgets import QMessageBox
 
-from ...config import Config
-
 
 class ViewerController(QObject):
     """Handles opening media viewers.
@@ -37,14 +35,18 @@ class ViewerController(QObject):
             QMessageBox.warning(self.parent(), "Video", "Unable to open this video.")
             return
 
-        player = SecureVideoPlayer(
-            self._service.repo,
-            node_id,
-            info.total_size,
-            Config.CHUNK_SIZE,
-            node.get("title") or "Secure Video",
-            self.parent(),
-        )
+        try:
+            player = SecureVideoPlayer(
+                self._service,
+                node_id,
+                node.get("title") or "Secure Video",
+                self.parent(),
+            )
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(
+                self.parent(), "Video", f"Unable to open this video.\n{exc}"
+            )
+            return
         player.exec()
 
     def _open_image_viewer(self, node_id):

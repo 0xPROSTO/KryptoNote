@@ -46,8 +46,9 @@ class MediaImportService:
             return "Videos (*.mp4 *.avi *.mkv *.mov *.webm)"
         return "All Files (*)"
 
-    def validate_path(self, media_type, path):
-        valid = self.VALID_EXTENSIONS.get(media_type)
+    @classmethod
+    def validate_path(cls, media_type, path):
+        valid = cls.VALID_EXTENSIONS.get(media_type)
         if not valid:
             return True
         return os.path.splitext(path)[1].lower() in valid
@@ -127,12 +128,16 @@ class MediaImportWorker(QObject):
     cancelled = Signal()
     failed = Signal(str)
 
-    def __init__(self, db_path, crypto_manager, media_type, paths, center_x, center_y):
+    def __init__(
+        self, db_path, crypto_manager, jobs, center_x, center_y
+    ):
         super().__init__()
         self._db_path = db_path
         self._crypto = crypto_manager
-        self._media_type = media_type
-        self._paths = paths
+        self._jobs = [
+            (str(media_type), os.fspath(path))
+            for media_type, path in jobs
+        ]
         self._center_x = center_x
         self._center_y = center_y
 
@@ -154,11 +159,18 @@ class MediaImportWorker(QObject):
             cursor = conn.cursor()
 
             imported_count = 0
-            file_count = max(len(self._paths), 1)
+            file_count = max(len(self._jobs), 1)
 
-            for file_index, path in enumerate(self._paths):
+            for file_index, (media_type, path) in enumerate(self._jobs):
                 if self._is_cancelled():
                     raise OperationCancelledError("Media import cancelled")
+                if not MediaImportService.validate_path(
+                    media_type, path
+                ):
+                    raise ValueError(
+                        f"'{os.path.basename(path)}' is not a valid "
+                        f"{media_type}."
+                    )
                 self.progress.emit(
                     file_index / file_count,
                     self._format_progress_message(
@@ -167,6 +179,7 @@ class MediaImportWorker(QObject):
                         file_count,
                         0,
                         0,
+                        media_type,
                     ),
                 )
 
@@ -193,12 +206,13 @@ class MediaImportWorker(QObject):
                             _fc,
                             chunk_idx,
                             total_chunks,
+                            media_type,
                         ),
                     )
 
                 node_id = write_chunked_media(
                     cursor, conn, self._crypto,
-                    self._media_type, x, y, width, height, title, thumbnail,
+                    media_type, x, y, width, height, title, thumbnail,
                     path, MEDIA_CHUNK_SIZE, _progress_adapter,
                     metadata.width, metadata.height, metadata.duration,
                     cancel_check=self._is_cancelled,
@@ -206,7 +220,7 @@ class MediaImportWorker(QObject):
                 )
                 item = ImportedMediaNode(
                     node_id=node_id,
-                    node_type=self._media_type,
+                    node_type=media_type,
                     x=x,
                     y=y,
                     width=width,
@@ -237,6 +251,7 @@ class MediaImportWorker(QObject):
         file_count,
         chunk_index,
         chunk_count,
+        media_type,
     ):
         safe_file_count = max(int(file_count), 1)
         safe_file_index = min(max(int(file_index), 0), safe_file_count - 1)
@@ -250,7 +265,7 @@ class MediaImportWorker(QObject):
             ) / safe_file_count
             details = f" · Chunk {safe_chunk_index}/{safe_chunk_count}"
         percent = round(file_progress * 100)
-        media_label = self._media_type.capitalize()
+        media_label = str(media_type).capitalize()
         return (
             f"{status} {media_label} {safe_file_index + 1}/{safe_file_count}"
             f"{details} · {percent}%"

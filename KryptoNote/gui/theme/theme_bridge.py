@@ -99,6 +99,26 @@ class ThemeBridge(QObject):
         lambda self: self._manager.settings.connection_style == "curved",
         notify=canvasAppearanceChanged,
     )
+    connectionPattern = Property(
+        str,
+        lambda self: self._manager.settings.connection_pattern,
+        notify=canvasAppearanceChanged,
+    )
+    connectionCurveFormula = Property(
+        str,
+        lambda self: self._manager.settings.connection_curve_formula,
+        notify=canvasAppearanceChanged,
+    )
+    connectionCornerStyle = Property(
+        str,
+        lambda self: self._manager.settings.connection_corner_style,
+        notify=canvasAppearanceChanged,
+    )
+    connectionAnchorMode = Property(
+        str,
+        lambda self: self._manager.settings.connection_anchor_mode,
+        notify=canvasAppearanceChanged,
+    )
     connectionStrokeWidth = Property(
         float,
         lambda self: CONNECTION_WIDTHS[self._manager.settings.connection_thickness],

@@ -347,7 +347,14 @@ class StyleFactory:
             }}
             QWidget#theme_header,
             QWidget#theme_footer,
+            QWidget#theme_scope,
             QWidget#theme_settings {{
+                background: transparent;
+                border: none;
+            }}
+            QScrollArea#theme_settings_scroll,
+            QScrollArea#theme_settings_scroll > QWidget > QWidget,
+            QStackedWidget#theme_route_options {{
                 background: transparent;
                 border: none;
             }}
@@ -369,6 +376,10 @@ class StyleFactory:
             }}
             QLabel[controlLabel="true"] {{
                 color: {Palette.TEXT_DIM};
+                font-size: 9pt;
+            }}
+            QLabel[controlHint="true"] {{
+                color: {Palette.TEXT_MUTED};
                 font-size: 9pt;
             }}
             QFrame#theme_separator {{
@@ -400,6 +411,14 @@ class StyleFactory:
                 color: {Palette.TEXT_MAIN};
                 background: {Palette.ACCENT_LOW};
                 border: 2px solid {Palette.ACCENT_MAIN};
+            }}
+            QPushButton[connectionStyleButton="true"] {{
+                min-height: 54px;
+                padding: 0;
+            }}
+            QPushButton[scopeSwitch="true"] {{
+                min-width: 92px;
+                max-width: 92px;
             }}
             QPushButton[sectionReset="true"] {{
                 min-height: 22px;

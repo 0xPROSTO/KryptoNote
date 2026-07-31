@@ -7,12 +7,23 @@ from PySide6.QtCore import QObject, QSettings, Signal
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QApplication
 
+from ...core.connection_geometry import (
+    CONNECTION_ANCHOR_MODES,
+    CONNECTION_CORNER_STYLES,
+    CONNECTION_CURVE_FORMULAS,
+    CONNECTION_STYLES,
+    DEFAULT_CONNECTION_ANCHOR_MODE,
+    DEFAULT_CONNECTION_CORNER_STYLE,
+    DEFAULT_CONNECTION_CURVE_FORMULA,
+    DEFAULT_CONNECTION_PATTERN,
+    DEFAULT_CONNECTION_STYLE,
+    corner_style_from_legacy_radius,
+)
 from .palette import DEFAULT_DARK_2, Palette
 
 
 DEFAULT_TONE = "dark_2"
 DEFAULT_ACCENT = "#e6158b"
-DEFAULT_CONNECTION_STYLE = "curved"
 DEFAULT_CONNECTION_THICKNESS = "normal"
 DEFAULT_GRID_INTENSITY = "normal"
 
@@ -20,7 +31,6 @@ TONE_IDS = (
     "dark_1", "dark_4", "dark_2", "dark_3",
     "light_0", "light_1", "light_2", "light_3",
 )
-CONNECTION_STYLES = ("curved", "straight")
 CONNECTION_THICKNESSES = ("thin", "normal", "thick")
 GRID_INTENSITIES = ("off", "subtle", "normal", "strong", "maximum")
 
@@ -158,6 +168,10 @@ class AppearanceSettings:
     accent_seed: str = DEFAULT_ACCENT
     connection_style: str = DEFAULT_CONNECTION_STYLE
     connection_thickness: str = DEFAULT_CONNECTION_THICKNESS
+    connection_pattern: str = DEFAULT_CONNECTION_PATTERN
+    connection_curve_formula: str = DEFAULT_CONNECTION_CURVE_FORMULA
+    connection_corner_style: str = DEFAULT_CONNECTION_CORNER_STYLE
+    connection_anchor_mode: str = DEFAULT_CONNECTION_ANCHOR_MODE
     grid_intensity: str = DEFAULT_GRID_INTENSITY
 
     def updated(self, **changes):
@@ -406,24 +420,59 @@ class ThemeManager(QObject):
     @staticmethod
     def validate(settings):
         if isinstance(settings, Mapping):
+            legacy_corner_style = corner_style_from_legacy_radius(
+                settings.get("connection_corner_radius")
+            )
             settings = AppearanceSettings(**{
-                key: settings.get(key, getattr(AppearanceSettings(), key))
+                key: settings.get(
+                    key,
+                    legacy_corner_style
+                    if key == "connection_corner_style"
+                    else getattr(AppearanceSettings(), key),
+                )
+                if key != "connection_corner_style"
+                or settings.get(key) not in (None, "")
+                else legacy_corner_style
                 for key in AppearanceSettings.__dataclass_fields__
             })
         if not isinstance(settings, AppearanceSettings):
             settings = AppearanceSettings()
+        connection_style = settings.connection_style
+        if connection_style == "angled":
+            connection_style = "orthogonal"
+        curve_formula = settings.connection_curve_formula
+        if curve_formula in ("s_curve", "arc"):
+            curve_formula = DEFAULT_CONNECTION_CURVE_FORMULA
         return AppearanceSettings(
             tone=settings.tone if settings.tone in TONE_IDS else DEFAULT_TONE,
             accent_seed=_normalise_color(settings.accent_seed),
             connection_style=(
-                settings.connection_style
-                if settings.connection_style in CONNECTION_STYLES
+                connection_style
+                if connection_style in CONNECTION_STYLES
                 else DEFAULT_CONNECTION_STYLE
             ),
             connection_thickness=(
                 settings.connection_thickness
                 if settings.connection_thickness in CONNECTION_THICKNESSES
                 else DEFAULT_CONNECTION_THICKNESS
+            ),
+            connection_pattern=DEFAULT_CONNECTION_PATTERN,
+            connection_curve_formula=(
+                curve_formula
+                if curve_formula
+                in CONNECTION_CURVE_FORMULAS
+                else DEFAULT_CONNECTION_CURVE_FORMULA
+            ),
+            connection_corner_style=(
+                settings.connection_corner_style
+                if settings.connection_corner_style
+                in CONNECTION_CORNER_STYLES
+                else DEFAULT_CONNECTION_CORNER_STYLE
+            ),
+            connection_anchor_mode=(
+                settings.connection_anchor_mode
+                if settings.connection_anchor_mode in CONNECTION_ANCHOR_MODES
+                else DEFAULT_CONNECTION_ANCHOR_MODE
             ),
             grid_intensity=(
                 settings.grid_intensity
@@ -440,6 +489,21 @@ class ThemeManager(QObject):
             "connection_style": self._store.value("connection_style", DEFAULT_CONNECTION_STYLE),
             "connection_thickness": self._store.value(
                 "connection_thickness", DEFAULT_CONNECTION_THICKNESS
+            ),
+            "connection_pattern": self._store.value(
+                "connection_pattern", DEFAULT_CONNECTION_PATTERN
+            ),
+            "connection_curve_formula": self._store.value(
+                "connection_curve_formula", DEFAULT_CONNECTION_CURVE_FORMULA
+            ),
+            "connection_corner_style": self._store.value(
+                "connection_corner_style", None
+            ),
+            "connection_anchor_mode": self._store.value(
+                "connection_anchor_mode", DEFAULT_CONNECTION_ANCHOR_MODE
+            ),
+            "connection_corner_radius": self._store.value(
+                "connection_corner_radius", None
             ),
             "grid_intensity": self._store.value("grid_intensity", DEFAULT_GRID_INTENSITY),
         }
@@ -462,6 +526,7 @@ class ThemeManager(QObject):
         self._store.beginGroup("appearance")
         for key in AppearanceSettings.__dataclass_fields__:
             self._store.setValue(key, getattr(settings, key))
+        self._store.remove("connection_corner_radius")
         self._store.endGroup()
         self._store.sync()
         self._committed = settings
@@ -511,6 +576,13 @@ class ThemeManager(QObject):
         canvas_changed = (
             previous.connection_style != settings.connection_style
             or previous.connection_thickness != settings.connection_thickness
+            or previous.connection_pattern != settings.connection_pattern
+            or previous.connection_curve_formula
+            != settings.connection_curve_formula
+            or previous.connection_corner_style
+            != settings.connection_corner_style
+            or previous.connection_anchor_mode
+            != settings.connection_anchor_mode
             or previous.grid_intensity != settings.grid_intensity
         )
         self._settings = settings
@@ -568,4 +640,3 @@ def get_theme_manager():
     if _theme_manager is None:
         _theme_manager = ThemeManager()
     return _theme_manager
-

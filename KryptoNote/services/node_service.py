@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from contextlib import closing
 from pathlib import Path
@@ -11,6 +12,8 @@ from ..core.io.stream import BlockEncryptedStream
 
 
 class NodeService:
+    _PROJECT_APPEARANCE_KEY = "appearance_profile_v1"
+
     def __init__(self, repo):
         self.repo = repo
 
@@ -29,7 +32,7 @@ class NodeService:
         """In-memory search across decrypted node titles and text content."""
         q = query.lower()
         return [
-            item for item in self.repo.get_all_items()
+            item for item in self.repo.get_all_items(include_thumbnails=False)
             if q in (item.title or "").lower() or q in (item.text_content or "").lower()
         ]
 
@@ -53,6 +56,9 @@ class NodeService:
 
     def get_item_tags_map(self):
         return self.repo.get_item_tags_map()
+
+    def get_item_tags(self, item_id):
+        return self.repo.get_item_tags(item_id)
 
     def set_item_tag(self, item_id, tag_id, enabled):
         self.repo.set_item_tag(item_id, tag_id, enabled)
@@ -301,7 +307,13 @@ class NodeService:
                 "SELECT thumbnail FROM items WHERE id=?", (item_id,)
             )
             row = self.repo.cursor.fetchone()
-            return self.repo.crypto.decrypt(row[0]) if row and row[0] else None
+            return (
+                self.repo.crypto.decrypt(
+                    row[0],
+                    aad=self.repo.crypto.item_aad(item_id, "thumbnail"),
+                )
+                if row and row[0] else None
+            )
         if not db_path:
             return None
         uri = f"{Path(db_path).resolve().as_uri()}?mode=ro"
@@ -311,7 +323,10 @@ class NodeService:
             ).fetchone()
         if not row or not row[0]:
             return None
-        return self.create_crypto_clone().decrypt(row[0])
+        crypto = self.create_crypto_clone()
+        return crypto.decrypt(
+            row[0], aad=crypto.item_aad(item_id, "thumbnail")
+        )
 
     def commit_changes(self):
         self.repo.commit_changes()
@@ -334,6 +349,53 @@ class NodeService:
 
     def get_db_path(self):
         return getattr(self.repo.conn_manager, "db_path", None)
+
+    def load_project_appearance(self):
+        raw = self.repo.conn_manager.get_metadata(
+            self._PROJECT_APPEARANCE_KEY
+        )
+        if raw is None:
+            return None
+        try:
+            if isinstance(raw, bytes):
+                raw = raw.decode("utf-8")
+            if len(raw) > 16_384:
+                return None
+            profile = json.loads(raw)
+        except (TypeError, ValueError, UnicodeDecodeError):
+            return None
+        if not isinstance(profile, dict):
+            return None
+        scope = profile.get("scope")
+        settings = profile.get("settings")
+        if scope not in ("global", "project") or not isinstance(
+            settings, dict
+        ):
+            return None
+        return {"scope": scope, "settings": settings}
+
+    def save_project_appearance(self, scope, settings):
+        if scope not in ("global", "project"):
+            raise ValueError("Unsupported appearance scope")
+        if not isinstance(settings, dict):
+            raise TypeError("Project appearance settings must be a mapping")
+        payload = json.dumps(
+            {
+                "version": 1,
+                "scope": scope,
+                "settings": settings,
+            },
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        if len(payload) > 16_384:
+            raise ValueError("Project appearance settings are too large")
+        self.repo.conn_manager.set_metadata(
+            self._PROJECT_APPEARANCE_KEY,
+            payload,
+            commit=True,
+        )
 
     def create_crypto_clone(self):
         """Create a new CryptoManager with the same key for thread-safe use.

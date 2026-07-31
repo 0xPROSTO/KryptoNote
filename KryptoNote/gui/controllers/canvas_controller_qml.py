@@ -1,6 +1,6 @@
 from PySide6.QtCore import QObject, Signal, Slot, Property, QTimer
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QLineEdit, QMessageBox
+from PySide6.QtWidgets import QLineEdit
 
 from ...config import Config
 from ..theme.palette import Palette
@@ -18,6 +18,7 @@ class QmlCanvasController(QObject):
     snap_to_grid_changed = Signal(bool)
     openTextEditorRequested = Signal(int)
     openFrameEditorRequested = Signal(int)
+    openNodePropertiesRequested = Signal(int)
     open_media_viewer_requested = Signal(int)  # node_id
     initial_load_failed = Signal(str)
     initial_load_finished = Signal()
@@ -84,14 +85,9 @@ class QmlCanvasController(QObject):
 
     @Slot(int)
     def show_node_properties(self, node_id):
-        lines = self._node_model.get_node_metadata_lines(node_id)
-        if not lines:
+        if not self._node_model.get_node_data(node_id):
             return
-        parent = self.parent()
-        if parent and hasattr(parent, "show_node_properties_overlay"):
-            parent.show_node_properties_overlay(lines)
-        else:
-            QMessageBox.information(None, "Node Properties", "\n".join(lines))
+        self.openNodePropertiesRequested.emit(node_id)
 
     # ── Loading ─────────────────────────────────────────────────────
 
@@ -253,25 +249,29 @@ class QmlCanvasController(QObject):
     def set_node_tag(self, node_id, tag_id, enabled):
         try:
             self._service.set_item_tag(node_id, tag_id, enabled)
+            tags = [
+                {"id": tag.id, "name": tag.name, "color": tag.color}
+                for tag in self._service.get_item_tags(node_id)
+            ]
+            self._node_model.set_node_tags(node_id, tags)
         except Exception as exc:
             self.status_message.emit(f"Tag update failed: {exc}", "error")
-            return
-        tags_map = self._service.get_item_tags_map()
-        tags = [
-            {"id": tag.id, "name": tag.name, "color": tag.color}
-            for tag in tags_map.get(node_id, [])
-        ]
-        self._node_model.set_node_tags(node_id, tags)
 
     @Slot(int, list)
     def set_node_tag_order(self, node_id, tag_ids):
-        self._service.set_item_tag_order(node_id, [int(tag_id) for tag_id in tag_ids])
-        tags_map = self._service.get_item_tags_map()
-        tags = [
-            {"id": tag.id, "name": tag.name, "color": tag.color}
-            for tag in tags_map.get(node_id, [])
-        ]
-        self._node_model.set_node_tags(node_id, tags)
+        try:
+            self._service.set_item_tag_order(
+                node_id, [int(tag_id) for tag_id in tag_ids]
+            )
+            tags = [
+                {"id": tag.id, "name": tag.name, "color": tag.color}
+                for tag in self._service.get_item_tags(node_id)
+            ]
+            self._node_model.set_node_tags(node_id, tags)
+        except Exception as exc:
+            self.status_message.emit(
+                f"Tag reorder failed: {exc}", "error"
+            )
 
     # ── Node Creation ───────────────────────────────────────────────
 
@@ -365,6 +365,9 @@ class QmlCanvasController(QObject):
 
     def has_active_background_jobs(self):
         return self._import_export_ctrl.has_active_background_jobs()
+
+    def cancel_media_import(self):
+        return self._import_export_ctrl.cancel_media_import()
 
     def shutdown_background_jobs(self, timeout_ms=15000):
         return self._import_export_ctrl.shutdown_background_jobs(timeout_ms)

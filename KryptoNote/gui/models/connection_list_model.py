@@ -4,6 +4,18 @@ from PySide6.QtCore import (
     QAbstractListModel, QModelIndex, Qt, Slot, QByteArray,
 )
 
+from ...core.connection_geometry import (
+    CONNECTION_ANCHOR_MODES,
+    CONNECTION_CORNER_STYLES,
+    CONNECTION_CURVE_FORMULAS,
+    CONNECTION_STYLES,
+    CORNERED_CONNECTION_STYLES,
+    DEFAULT_CONNECTION_ANCHOR_MODE,
+    DEFAULT_CONNECTION_CORNER_STYLE,
+    DEFAULT_CONNECTION_CURVE_FORMULA,
+    connection_segments,
+)
+
 
 class ConnectionRoles(IntEnum):
     ConnIdRole = Qt.ItemDataRole.UserRole + 100
@@ -34,6 +46,9 @@ class ConnectionListModel(QAbstractListModel):
         self._conn_segments = {}
         self._conn_hit_memberships = {}
         self._connection_style = "curved"
+        self._connection_curve_formula = DEFAULT_CONNECTION_CURVE_FORMULA
+        self._connection_corner_style = DEFAULT_CONNECTION_CORNER_STYLE
+        self._connection_anchor_mode = DEFAULT_CONNECTION_ANCHOR_MODE
         self._node_model.dataChanged.connect(self._on_node_data_changed)
 
     def rowCount(self, parent=QModelIndex()):
@@ -248,13 +263,88 @@ class ConnectionListModel(QAbstractListModel):
 
     @Slot(str)
     def set_connection_style(self, style):
+        self.set_connection_appearance(
+            style,
+            self._connection_curve_formula,
+            self._connection_corner_style,
+            self._connection_anchor_mode,
+        )
+
+    def set_connection_appearance(
+        self,
+        style,
+        curve_formula,
+        corner_style,
+        anchor_mode,
+    ):
         style = str(style).lower()
-        if style not in ("curved", "straight") or style == self._connection_style:
+        curve_formula = str(curve_formula).lower()
+        corner_style = str(corner_style).lower()
+        anchor_mode = str(anchor_mode).lower()
+        if (
+            style not in CONNECTION_STYLES
+            or curve_formula not in CONNECTION_CURVE_FORMULAS
+            or corner_style not in CONNECTION_CORNER_STYLES
+            or anchor_mode not in CONNECTION_ANCHOR_MODES
+        ):
+            return
+        style_changed = style != self._connection_style
+        formula_changed = (
+            curve_formula != self._connection_curve_formula
+        )
+        corner_changed = corner_style != self._connection_corner_style
+        anchor_changed = anchor_mode != self._connection_anchor_mode
+        if not any(
+            (style_changed, formula_changed, corner_changed, anchor_changed)
+        ):
             return
         self._connection_style = style
+        self._connection_curve_formula = curve_formula
+        self._connection_corner_style = corner_style
+        self._connection_anchor_mode = anchor_mode
+
+        if anchor_changed:
+            self._recompute_all_edge_points()
+            return
+
+        geometry_changed = (
+            style_changed
+            or (formula_changed and style == "curved")
+            or (
+                corner_changed
+                and style in CORNERED_CONNECTION_STYLES
+            )
+        )
+        if not geometry_changed:
+            return
         self._clear_hit_index()
         for connection in self._connections:
             self._index_connection(connection)
+
+    def _recompute_all_edge_points(self):
+        self._clear_hit_index()
+        for connection in self._connections:
+            edge = self._compute_edge_points(
+                connection["start_id"], connection["end_id"]
+            )
+            (
+                connection["start_edge_x"],
+                connection["start_edge_y"],
+                connection["end_edge_x"],
+                connection["end_edge_y"],
+            ) = edge
+            self._index_connection(connection)
+        if self._connections:
+            self.dataChanged.emit(
+                self.index(0, 0),
+                self.index(len(self._connections) - 1, 0),
+                [
+                    ConnectionRoles.StartEdgeXRole,
+                    ConnectionRoles.StartEdgeYRole,
+                    ConnectionRoles.EndEdgeXRole,
+                    ConnectionRoles.EndEdgeYRole,
+                ],
+            )
 
     def _clear_hit_index(self):
         self._hit_grid.clear()
@@ -278,10 +368,12 @@ class ConnectionListModel(QAbstractListModel):
             conn["start_edge_x"], conn["start_edge_y"],
             conn["end_edge_x"], conn["end_edge_y"],
         )
-        if self._connection_style == "straight":
-            segments = self._straight_segments(*points)
-        else:
-            segments = self._curve_segments(*points)
+        segments = connection_segments(
+            self._connection_style,
+            *points,
+            self._connection_curve_formula,
+            self._connection_corner_style,
+        )
         self._conn_segments[conn_id] = segments
         memberships = []
         grid_size = self._HIT_GRID_SIZE
@@ -301,39 +393,11 @@ class ConnectionListModel(QAbstractListModel):
 
     @staticmethod
     def _straight_segments(p0x, p0y, p3x, p3y):
-        return [(p0x, p0y, p3x, p3y)]
+        return connection_segments("straight", p0x, p0y, p3x, p3y)
 
     @classmethod
     def _curve_segments(cls, p0x, p0y, p3x, p3y):
-        dx = p3x - p0x
-        p1x = p0x + dx * 0.4
-        p1y = p0y
-        p2x = p3x - dx * 0.4
-        p2y = p3y
-        estimated_length = math.hypot(dx, p3y - p0y) + abs(p3y - p0y) * 0.25
-        steps = max(
-            8,
-            min(
-                cls._MAX_CURVE_SEGMENTS,
-                math.ceil(estimated_length / cls._MAX_SEGMENT_LENGTH),
-            ),
-        )
-        segments = []
-        prev_x = p0x
-        prev_y = p0y
-        for index in range(1, steps + 1):
-            t = index / steps
-            mt = 1.0 - t
-            b0 = mt * mt * mt
-            b1 = 3 * mt * mt * t
-            b2 = 3 * mt * t * t
-            b3 = t * t * t
-            x = b0 * p0x + b1 * p1x + b2 * p2x + b3 * p3x
-            y = b0 * p0y + b1 * p1y + b2 * p2y + b3 * p3y
-            segments.append((prev_x, prev_y, x, y))
-            prev_x = x
-            prev_y = y
-        return segments
+        return connection_segments("curved", p0x, p0y, p3x, p3y)
 
     # Edge Point Computation
 
@@ -351,12 +415,13 @@ class ConnectionListModel(QAbstractListModel):
         n2 = self._node_model.get_node_data(end_id)
         inset1 = 0.0 if n1 and n1.get("type") == "frame" else 8.0
         inset2 = 0.0 if n2 and n2.get("type") == "frame" else 8.0
-        p1 = self._clip_to_rect(
-            c1x, c1y, c2x, c2y, w1 / 2, h1 / 2, inset1
+        anchor = (
+            self._side_center_anchor
+            if self._connection_anchor_mode == "side_centers"
+            else self._clip_to_rect
         )
-        p2 = self._clip_to_rect(
-            c2x, c2y, c1x, c1y, w2 / 2, h2 / 2, inset2
-        )
+        p1 = anchor(c1x, c1y, c2x, c2y, w1 / 2, h1 / 2, inset1)
+        p2 = anchor(c2x, c2y, c1x, c1y, w2 / 2, h2 / 2, inset2)
         return (p1[0], p1[1], p2[0], p2[1])
 
     @staticmethod
@@ -372,6 +437,22 @@ class ConnectionListModel(QAbstractListModel):
         sy = abs(hh / dy) if dy != 0 else 1e6
         s = min(sx, sy)
         return (cx + dx * s, cy + dy * s)
+
+    @staticmethod
+    def _side_center_anchor(
+        cx, cy, tx, ty, hw, hh, endpoint_inset=8.0
+    ):
+        dx, dy = tx - cx, ty - cy
+        if abs(dx) < 0.01 and abs(dy) < 0.01:
+            return (cx, cy)
+
+        hw = max(1.0, hw - endpoint_inset)
+        hh = max(1.0, hh - endpoint_inset)
+        horizontal_weight = abs(dx) / hw
+        vertical_weight = abs(dy) / hh
+        if horizontal_weight >= vertical_weight:
+            return (cx + (hw if dx >= 0.0 else -hw), cy)
+        return (cx, cy + (hh if dy >= 0.0 else -hh))
 
     @classmethod
     def _distance_to_curve_squared(cls, px, py, p0x, p0y, p3x, p3y):

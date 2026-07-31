@@ -5,6 +5,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -14,6 +15,11 @@ from KryptoNote.gui.theme import Theme
 from KryptoNote.gui.theme.icons import SvgIcons
 from KryptoNote.gui.theme.palette import Palette
 from KryptoNote.gui.theme.style_factory import StyleFactory
+from KryptoNote.core.password_policy import (
+    PROJECT_PASSWORD_MAX,
+    WEAK_PASSWORD_LENGTH,
+    is_weak_project_password,
+)
 
 
 class PasswordChangeDialog(QDialog):
@@ -21,7 +27,7 @@ class PasswordChangeDialog(QDialog):
     cancelRequested = Signal()
 
     MIN_PWD = 1
-    MAX_PWD = 512
+    MAX_PWD = PROJECT_PASSWORD_MAX
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -140,6 +146,19 @@ class PasswordChangeDialog(QDialog):
             self.confirm_pwd.selectAll()
             self.confirm_pwd.setFocus()
             return
+        if is_weak_project_password(new):
+            answer = QMessageBox.question(
+                self,
+                "Weak Password",
+                f"This password is shorter than {WEAK_PASSWORD_LENGTH} "
+                "characters and may be easy to guess.\n\nUse it anyway?",
+                QMessageBox.StandardButton.Yes
+                | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                self.new_pwd.setFocus()
+                return
 
         self.set_changing(True, "Changing password...")
         self.passwordChangeRequested.emit(current, new, self.backup_check.isChecked())

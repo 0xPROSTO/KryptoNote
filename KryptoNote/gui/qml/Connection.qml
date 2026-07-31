@@ -36,7 +36,18 @@ Item {
             : (connectionItem.appTheme.connectionStrokeWidth - lodLineAmount * 0.2)
     property real effectiveStrokeWidth: screenStrokeWidth / Math.max(connectionItem.canvasRoot.contentScale, 0.12)
     property real hitRadius: Math.max(10.0 / Math.max(connectionItem.canvasRoot.contentScale, 0.12), effectiveStrokeWidth * 2.0)
-    property real hitPadding: hitRadius + 8.0
+    property real endpointDistance: Math.sqrt(
+        Math.pow(connectionItem.model.connEndEdgeX - connectionItem.model.connStartEdgeX, 2)
+        + Math.pow(connectionItem.model.connEndEdgeY - connectionItem.model.connStartEdgeY, 2)
+    )
+    property real curveOverflow: connectionItem.appTheme.connectionStyle !== "curved"
+            ? 0
+            : (connectionItem.appTheme.connectionCurveFormula === "arc"
+               ? Math.min(80, endpointDistance * 0.22)
+               : (connectionItem.appTheme.connectionCurveFormula === "s_curve"
+                  ? Math.min(64, endpointDistance * 0.18) : 0))
+    property real hitPadding: hitRadius + 8.0 + curveOverflow
+    property var pathGeometry: buildPathGeometry()
     visible: isInViewport || _isDeleting
 
     x: minX - hitPadding
@@ -66,33 +77,17 @@ Item {
             strokeWidth: connectionItem.effectiveStrokeWidth
             fillColor: "transparent"
             capStyle: ShapePath.RoundCap
+            joinStyle: ShapePath.RoundJoin
+            strokeStyle: connectionItem.appTheme.connectionPattern === "solid"
+                         ? ShapePath.SolidLine : ShapePath.DashLine
+            dashPattern: connectionItem.appTheme.connectionPattern === "dotted"
+                         ? [1, 2.4] : [5, 3]
 
             Behavior on strokeColor { ColorAnimation { duration: 120 } }
             Behavior on strokeWidth { NumberAnimation { duration: 120 } }
 
-            startX: connectionItem.model.connStartEdgeX - connectionItem.x
-            startY: connectionItem.model.connStartEdgeY - connectionItem.y
-
-            PathCubic {
-                id: bezierPath
-                x: connectionItem.model.connEndEdgeX - connectionItem.x
-                y: connectionItem.model.connEndEdgeY - connectionItem.y
-
-                property real dx: x - shapePath.startX
-                property real dy: y - shapePath.startY
-
-                control1X: connectionItem.appTheme.connectionCurved
-                        ? shapePath.startX + dx * 0.4
-                        : shapePath.startX + dx / 3.0
-                control1Y: connectionItem.appTheme.connectionCurved
-                        ? shapePath.startY
-                        : shapePath.startY + dy / 3.0
-                control2X: connectionItem.appTheme.connectionCurved
-                        ? x - dx * 0.4
-                        : shapePath.startX + dx * 2.0 / 3.0
-                control2Y: connectionItem.appTheme.connectionCurved
-                        ? y
-                        : shapePath.startY + dy * 2.0 / 3.0
+            PathSvg {
+                path: connectionItem.pathGeometry.path
             }
         }
     }
@@ -123,36 +118,300 @@ Item {
     }
 
     function checkDistance(px, py) {
-        var p0x = shapePath.startX;
-        var p0y = shapePath.startY;
-        var p1x = bezierPath.control1X;
-        var p1y = bezierPath.control1Y;
-        var p2x = bezierPath.control2X;
-        var p2y = bezierPath.control2Y;
-        var p3x = bezierPath.x;
-        var p3y = bezierPath.y;
-
         var minDSq = 1000000;
-        var steps = 80;
-        var prevX = p0x;
-        var prevY = p0y;
-        for (var i = 1; i <= steps; i++) {
-            var t = i / steps;
-            var mt = 1.0 - t;
-            var b0 = mt * mt * mt;
-            var b1 = 3 * mt * mt * t;
-            var b2 = 3 * mt * t * t;
-            var b3 = t * t * t;
-
-            var x = b0*p0x + b1*p1x + b2*p2x + b3*p3x;
-            var y = b0*p0y + b1*p1y + b2*p2y + b3*p3y;
-
-            var dsq = distanceToSegmentSquared(px, py, prevX, prevY, x, y);
+        var segments = connectionItem.pathGeometry.segments;
+        for (var i = 0; i < segments.length; i++) {
+            var segment = segments[i];
+            var dsq = distanceToSegmentSquared(
+                px, py, segment[0], segment[1], segment[2], segment[3]
+            );
             if (dsq < minDSq) minDSq = dsq;
-            prevX = x;
-            prevY = y;
         }
         return minDSq <= connectionItem.hitRadius * connectionItem.hitRadius;
+    }
+
+    function buildPathGeometry() {
+        var start = [
+            connectionItem.model.connStartEdgeX - connectionItem.x,
+            connectionItem.model.connStartEdgeY - connectionItem.y
+        ];
+        var end = [
+            connectionItem.model.connEndEdgeX - connectionItem.x,
+            connectionItem.model.connEndEdgeY - connectionItem.y
+        ];
+        var style = connectionItem.appTheme.connectionStyle;
+        if (style === "straight") {
+            return lineGeometry(start, end);
+        }
+        if (style === "orthogonal" || style === "angled") {
+            return roundedPolylineGeometry(
+                routePoints(style, start, end),
+                cornerRadiusForStyle(
+                    connectionItem.appTheme.connectionCornerStyle
+                )
+            );
+        }
+        return curvedGeometry(
+            start,
+            end,
+            connectionItem.appTheme.connectionCurveFormula
+        );
+    }
+
+    function lineGeometry(start, end) {
+        return {
+            path: "M " + start[0] + " " + start[1]
+                  + " L " + end[0] + " " + end[1],
+            segments: [[start[0], start[1], end[0], end[1]]]
+        };
+    }
+
+    function curvedGeometry(start, end, formula) {
+        var dx = end[0] - start[0];
+        var dy = end[1] - start[1];
+        var length = pointDistance(start, end);
+        if (formula === "arc") {
+            if (length <= 0.001) return lineGeometry(start, end);
+            var arcNormal = stableNormal(dx, dy, length);
+            var arcBow = Math.min(80, length * 0.22);
+            return quadraticGeometry(
+                start,
+                [
+                    (start[0] + end[0]) / 2.0 + arcNormal[0] * arcBow,
+                    (start[1] + end[1]) / 2.0 + arcNormal[1] * arcBow
+                ],
+                end
+            );
+        }
+
+        var control1;
+        var control2;
+        if (formula === "s_curve" && length > 0.001) {
+            var normal = stableNormal(dx, dy, length);
+            var bow = Math.min(64, length * 0.18);
+            control1 = [
+                start[0] + dx / 3.0 + normal[0] * bow,
+                start[1] + dy / 3.0 + normal[1] * bow
+            ];
+            control2 = [
+                start[0] + dx * 2.0 / 3.0 - normal[0] * bow,
+                start[1] + dy * 2.0 / 3.0 - normal[1] * bow
+            ];
+        } else if (formula === "adaptive" && Math.abs(dy) > Math.abs(dx)) {
+            control1 = [start[0], start[1] + dy * 0.4];
+            control2 = [end[0], end[1] - dy * 0.4];
+        } else {
+            control1 = [start[0] + dx * 0.4, start[1]];
+            control2 = [end[0] - dx * 0.4, end[1]];
+        }
+        var estimated = pointDistance(start, control1)
+                        + pointDistance(control1, control2)
+                        + pointDistance(control2, end);
+        var steps = Math.max(8, Math.min(64, Math.ceil(estimated / 24)));
+        var segments = [];
+        var previous = start;
+        for (var index = 1; index <= steps; index++) {
+            var t = index / steps;
+            var mt = 1.0 - t;
+            var point = [
+                mt * mt * mt * start[0]
+                + 3 * mt * mt * t * control1[0]
+                + 3 * mt * t * t * control2[0]
+                + t * t * t * end[0],
+                mt * mt * mt * start[1]
+                + 3 * mt * mt * t * control1[1]
+                + 3 * mt * t * t * control2[1]
+                + t * t * t * end[1]
+            ];
+            segments.push([
+                previous[0], previous[1], point[0], point[1]
+            ]);
+            previous = point;
+        }
+        return {
+            path: "M " + start[0] + " " + start[1]
+                  + " C " + control1[0] + " " + control1[1]
+                  + ", " + control2[0] + " " + control2[1]
+                  + ", " + end[0] + " " + end[1],
+            segments: segments
+        };
+    }
+
+    function quadraticGeometry(start, control, end) {
+        var estimated = pointDistance(start, control)
+                        + pointDistance(control, end);
+        var steps = Math.max(3, Math.min(24, Math.ceil(estimated / 24)));
+        var segments = [];
+        var previous = start;
+        for (var index = 1; index <= steps; index++) {
+            var t = index / steps;
+            var mt = 1.0 - t;
+            var point = [
+                mt * mt * start[0]
+                + 2 * mt * t * control[0]
+                + t * t * end[0],
+                mt * mt * start[1]
+                + 2 * mt * t * control[1]
+                + t * t * end[1]
+            ];
+            appendSegment(segments, previous, point);
+            previous = point;
+        }
+        return {
+            path: "M " + start[0] + " " + start[1]
+                  + " Q " + control[0] + " " + control[1]
+                  + " " + end[0] + " " + end[1],
+            segments: segments
+        };
+    }
+
+    function routePoints(style, start, end) {
+        var dx = end[0] - start[0];
+        var dy = end[1] - start[1];
+        var horizontal = Math.abs(dx) >= Math.abs(dy);
+        if (style === "orthogonal") {
+            if (horizontal) {
+                var middleX = (start[0] + end[0]) / 2.0;
+                return compactPoints([
+                    start, [middleX, start[1]], [middleX, end[1]], end
+                ]);
+            }
+            var middleY = (start[1] + end[1]) / 2.0;
+            return compactPoints([
+                start, [start[0], middleY], [end[0], middleY], end
+            ]);
+        }
+
+        if (horizontal) {
+            var directionX = dx >= 0 ? 1 : -1;
+            var leadX = Math.min(
+                Math.abs(dx) / 3.0, 48
+            );
+            return compactPoints([
+                start,
+                [start[0] + directionX * leadX, start[1]],
+                [end[0] - directionX * leadX, end[1]],
+                end
+            ]);
+        }
+        var directionY = dy >= 0 ? 1 : -1;
+        var leadY = Math.min(
+            Math.abs(dy) / 3.0, 48
+        );
+        return compactPoints([
+            start,
+            [start[0], start[1] + directionY * leadY],
+            [end[0], end[1] - directionY * leadY],
+            end
+        ]);
+    }
+
+    function roundedPolylineGeometry(points, requestedRadius) {
+        if (points.length < 2) {
+            return { path: "", segments: [] };
+        }
+        var radius = Math.max(0, Math.min(64, requestedRadius));
+        var path = "M " + points[0][0] + " " + points[0][1];
+        var segments = [];
+        var current = points[0];
+        for (var index = 1; index < points.length - 1; index++) {
+            var previous = points[index - 1];
+            var corner = points[index];
+            var following = points[index + 1];
+            var localRadius = Math.min(
+                radius,
+                pointDistance(previous, corner) / 2.0,
+                pointDistance(corner, following) / 2.0
+            );
+            if (localRadius <= 0.001) {
+                path += " L " + corner[0] + " " + corner[1];
+                appendSegment(segments, current, corner);
+                current = corner;
+                continue;
+            }
+            var entry = pointToward(corner, previous, localRadius);
+            var exitPoint = pointToward(corner, following, localRadius);
+            path += " L " + entry[0] + " " + entry[1];
+            appendSegment(segments, current, entry);
+
+            path += " Q " + corner[0] + " " + corner[1]
+                    + " " + exitPoint[0] + " " + exitPoint[1];
+            var estimated = pointDistance(entry, corner)
+                            + pointDistance(corner, exitPoint);
+            var steps = Math.max(3, Math.min(24, Math.ceil(estimated / 24)));
+            var curveStart = entry;
+            var curvePrevious = entry;
+            for (var step = 1; step <= steps; step++) {
+                var t = step / steps;
+                var mt = 1.0 - t;
+                var curvePoint = [
+                    mt * mt * curveStart[0]
+                    + 2 * mt * t * corner[0]
+                    + t * t * exitPoint[0],
+                    mt * mt * curveStart[1]
+                    + 2 * mt * t * corner[1]
+                    + t * t * exitPoint[1]
+                ];
+                appendSegment(segments, curvePrevious, curvePoint);
+                curvePrevious = curvePoint;
+            }
+            current = exitPoint;
+        }
+        var end = points[points.length - 1];
+        path += " L " + end[0] + " " + end[1];
+        appendSegment(segments, current, end);
+        return { path: path, segments: segments };
+    }
+
+    function compactPoints(points) {
+        var compact = [];
+        for (var index = 0; index < points.length; index++) {
+            if (!compact.length
+                    || pointDistance(compact[compact.length - 1], points[index])
+                       > 0.001) {
+                compact.push(points[index]);
+            }
+        }
+        return compact;
+    }
+
+    function pointToward(origin, target, distance) {
+        var length = pointDistance(origin, target);
+        if (length <= 0.001) return origin;
+        var amount = distance / length;
+        return [
+            origin[0] + (target[0] - origin[0]) * amount,
+            origin[1] + (target[1] - origin[1]) * amount
+        ];
+    }
+
+    function pointDistance(first, second) {
+        var dx = second[0] - first[0];
+        var dy = second[1] - first[1];
+        return Math.sqrt(dx * dx + dy * dy);
+    }
+
+    function stableNormal(dx, dy, length) {
+        var normalX = -dy / length;
+        var normalY = dx / length;
+        if (normalY < -0.001
+                || (Math.abs(normalY) <= 0.001 && normalX < 0)) {
+            normalX = -normalX;
+            normalY = -normalY;
+        }
+        return [normalX, normalY];
+    }
+
+    function cornerRadiusForStyle(style) {
+        if (style === "sharp") return 0;
+        if (style === "tight") return 8;
+        return 24;
+    }
+
+    function appendSegment(segments, start, end) {
+        if (pointDistance(start, end) > 0.001) {
+            segments.push([start[0], start[1], end[0], end[1]]);
+        }
     }
 
     function distanceToSegmentSquared(px, py, x1, y1, x2, y2) {

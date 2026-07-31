@@ -38,6 +38,7 @@ from .native_window import NativeWindowMixin
 from ..controllers.canvas_controller_qml import QmlCanvasController
 from ..controllers.viewer_controller import ViewerController
 from ..services.frame_clock import HighRefreshFrameClock
+from ..services.qml_network_policy import RestrictedQmlNetworkAccessManagerFactory
 from ..services.window_state_service import WindowStateService
 from ..services.operation_coordinator import OperationCoordinator
 from ..models.node_list_model import NodeListModel, NodeRoles
@@ -53,7 +54,6 @@ from ..widgets.dialogs.keybinds_dialog import KeybindsDialog
 from ..widgets.dialogs.theme_dialog import ThemeDialog
 from ..widgets.overlays.dim_overlay import WindowOverlayManager
 from ..widgets.overlays.arraylist_overlay import ArrayListOverlay
-from ..widgets.overlays.node_properties_overlay import NodePropertiesOverlay
 from ..widgets.progress_bar import ProgressBarWidget
 from ..widgets.title_bar import CustomTitleBar
 from ...config import Config
@@ -128,11 +128,13 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self._password_change_finished.connect(self._on_password_change_finished)
 
         self._init_core(db_path, db_conn, crypto, repo, service)
+        self._activate_saved_appearance()
         self._setup_canvas()
         self._setup_menubar()
         self._theme_manager.appearanceChanged.connect(
             self._apply_runtime_appearance
         )
+        self._apply_runtime_appearance()
 
         self.operation_coordinator.state_changed.connect(
             self._on_operation_state_changed)
@@ -144,6 +146,9 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
                 self,
                 "Error",
                 f"Failed to decrypt/load DB. Incorrect password?\nError: {e}",
+            )
+            self._theme_manager.preview(
+                self._theme_manager.committed_settings
             )
             self._close_core_resources(wait=False)
             raise RuntimeError("Failed to load DB")
@@ -178,6 +183,11 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
                 dlg.setWindowTitle("KryptoNote")
                 dlg.setLabelText(prompt)
                 dlg.setTextEchoMode(QLineEdit.EchoMode.Password)
+                dlg.setInputMode(QInputDialog.InputMode.TextInput)
+                dlg.setTextValue("")
+                line_edit = dlg.findChild(QLineEdit)
+                if line_edit is not None:
+                    line_edit.setMaxLength(512)
                 dlg.setMinimumWidth(400)
                 dlg.resize(420, 160)
                 center_on_parent_window(dlg, self)
@@ -192,8 +202,11 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
     def _setup_canvas(self):
         self.node_model = NodeListModel(self)
         self.connection_model = ConnectionListModel(self.node_model, self)
-        self.connection_model.set_connection_style(
-            self._theme_manager.settings.connection_style
+        self.connection_model.set_connection_appearance(
+            self._theme_manager.settings.connection_style,
+            self._theme_manager.settings.connection_curve_formula,
+            self._theme_manager.settings.connection_corner_style,
+            self._theme_manager.settings.connection_anchor_mode,
         )
         self._theme_manager.canvasAppearanceChanged.connect(self._sync_connection_style)
         self.node_viewport_model = NodeViewportProxyModel(self.node_model, self)
@@ -223,6 +236,16 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         format = QSurfaceFormat()
         format.setSamples(8)
         self.view = QQuickWidget()
+        gui_root = os.path.dirname(os.path.dirname(__file__))
+        self._qml_network_factory = RestrictedQmlNetworkAccessManagerFactory(
+            (
+                os.path.join(gui_root, "qml"),
+                os.path.join(gui_root, "assets"),
+            )
+        )
+        self.view.engine().setNetworkAccessManagerFactory(
+            self._qml_network_factory
+        )
         self.view.setFormat(format)
         self.view.setResizeMode(QQuickWidget.SizeRootObjectToView)
         self.view.setClearColor(QColor(Theme.Palette.BG_CANVAS))
@@ -658,7 +681,14 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         enabled = not active
         if hasattr(self, "_cancel_operation_action"):
             self._cancel_operation_action.setEnabled(
-                active and kind in {"backup", "initial_load", "graph_export"}
+                active
+                and kind
+                in {
+                    "backup",
+                    "initial_load",
+                    "graph_export",
+                    "media_import",
+                }
             )
         for action in self._operation_blocked_actions:
             action.setEnabled(enabled)
@@ -929,6 +959,8 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             self.canvas_controller.cancel_initial_load()
         elif kind == "graph_export":
             self.canvas_controller.cancel_graph_export()
+        elif kind == "media_import":
+            self.canvas_controller.cancel_media_import()
 
     def _on_add_text_node(self):
         self.canvas_controller.add_text_node()
@@ -968,9 +1000,23 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self._exec_dimmed_dialog("dashboard", dialog)
 
     def open_theme(self):
-        dialog = ThemeDialog(self, self._theme_manager)
+        dialog = ThemeDialog(
+            self,
+            self._theme_manager,
+            project_store=self.service,
+        )
         center_on_parent_window(dialog, self)
         return dialog.exec()
+
+    def _activate_saved_appearance(self):
+        profile = self.service.load_project_appearance()
+        if profile and profile.get("scope") == "project":
+            settings = self._theme_manager.validate(
+                profile.get("settings", {})
+            )
+        else:
+            settings = self._theme_manager.committed_settings
+        self._theme_manager.preview(settings)
 
     def _exec_dimmed_dialog(self, owner, dialog):
         self._window_overlay_manager.acquire(owner)
@@ -981,8 +1027,11 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             self._window_overlay_manager.release(owner)
 
     def _sync_connection_style(self):
-        self.connection_model.set_connection_style(
-            self._theme_manager.settings.connection_style
+        self.connection_model.set_connection_appearance(
+            self._theme_manager.settings.connection_style,
+            self._theme_manager.settings.connection_curve_formula,
+            self._theme_manager.settings.connection_corner_style,
+            self._theme_manager.settings.connection_anchor_mode,
         )
 
     def _apply_runtime_appearance(self, _settings=None):
@@ -1005,15 +1054,6 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         if hasattr(self, "overlay"):
             self.overlay.update()
         self.update()
-
-    def show_node_properties_overlay(self, metadata_lines):
-        """Show themed node properties overlay over the canvas."""
-        if hasattr(self, 'view'):
-            if hasattr(self, '_node_props_overlay') and self._node_props_overlay:
-                self._node_props_overlay.fade_out(delete_on_finish=True)
-            self._node_props_overlay = NodePropertiesOverlay(metadata_lines, parent=self.view)
-            self._node_props_overlay.destroyed.connect(lambda: setattr(self, '_node_props_overlay', None))
-            self._node_props_overlay.raise_()
 
     # ── Password Change ─────────────────────────────────────────────
 
@@ -1167,6 +1207,8 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         if not self.isActiveWindow():
             return False
         key = event.key()
+        if self._is_qml_node_properties_open():
+            return True
         if key == Qt.Key.Key_Escape and self._is_qml_tag_picker_open():
             return True
         editor_open = (
@@ -1200,6 +1242,12 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
 
         key = event.key()
         modifiers = event.modifiers()
+
+        if self._is_qml_node_properties_open():
+            if key == Qt.Key.Key_Escape:
+                self._invoke_qml_root("closeNodeProperties")
+                return True
+            return False
 
         if key == Qt.Key.Key_Escape and self._is_qml_tag_picker_open():
             self._invoke_qml_root("closeTagPicker")
@@ -1408,6 +1456,12 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         root = self.view.rootObject()
         return bool(root and root.property("isFrameEditorOpen"))
 
+    def _is_qml_node_properties_open(self):
+        if not hasattr(self, "view"):
+            return False
+        root = self.view.rootObject()
+        return bool(root and root.property("isNodePropertiesOpen"))
+
     def _is_qml_search_panel_open(self):
         if not hasattr(self, "view"):
             return False
@@ -1448,6 +1502,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         if (
             self._is_qml_text_editor_open()
             or self._is_qml_frame_editor_open()
+            or self._is_qml_node_properties_open()
         ):
             return
         key = event.key()
@@ -1463,6 +1518,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         if (
             self._is_qml_text_editor_open()
             or self._is_qml_frame_editor_open()
+            or self._is_qml_node_properties_open()
         ):
             return
         key = event.key()
@@ -1636,7 +1692,10 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         if operation_kind == "initial_load":
             self.canvas_controller.cancel_initial_load()
             operation_kind = self.operation_coordinator.active_kind
-        if self.operation_coordinator.is_busy and operation_kind != "video_import":
+        if (
+            self.operation_coordinator.is_busy
+            and operation_kind not in {"media_import", "video_import"}
+        ):
             event.ignore()
             message = self.operation_coordinator.active_message or operation_kind
             self._handle_status_update(f"Cannot close: {message}", "warning")
@@ -1673,5 +1732,8 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
                 self.service.commit_changes()
             except Exception as e:
                 print(f"Error saving changes on close: {e}")
+        self._theme_manager.preview(
+            self._theme_manager.committed_settings
+        )
         self._close_core_resources(wait=True)
         super().closeEvent(event)

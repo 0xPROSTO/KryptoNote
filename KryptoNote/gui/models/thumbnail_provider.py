@@ -1,5 +1,6 @@
 """Demand-driven thumbnail provider with a bounded decoded-image cache."""
 
+import logging
 import threading
 from collections import OrderedDict
 
@@ -7,6 +8,8 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage
 from PySide6.QtQml import QQmlImageProviderBase
 from PySide6.QtQuick import QQuickImageProvider
+
+logger = logging.getLogger(__name__)
 
 
 class ThumbnailProvider(QQuickImageProvider):
@@ -63,7 +66,12 @@ class ThumbnailProvider(QQuickImageProvider):
                     self._service.read_thumbnail(node_id)
                     if self._service is not None else None
                 )
-            except Exception:
+            except Exception as exc:
+                logger.warning(
+                    "Unable to load thumbnail for node %s: %s",
+                    node_id,
+                    exc,
+                )
                 payload = None
             image = QImage.fromData(payload) if payload else QImage()
             if image.isNull():

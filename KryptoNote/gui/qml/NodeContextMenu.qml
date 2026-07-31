@@ -358,7 +358,6 @@ Popup {
             anchors.fill: parent
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
-            onPressed: menuButton.forceActiveFocus()
             onClicked: menuButton.clicked()
         }
     }

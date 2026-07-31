@@ -9,6 +9,16 @@ from .exceptions import CryptoError
 
 class CryptoManager:
     DATA_KEY_AAD = b"KryptoNote.DEK.v2"
+    PAYLOAD_AAD_PREFIX = b"KryptoNote.Payload.v3"
+    ITEM_FIELDS = frozenset(
+        {
+            "title",
+            "text_content",
+            "thumbnail",
+            "full_data",
+            "original_filename",
+        }
+    )
     KDF_NAME = "argon2id"
     KDF_ITERATIONS = 4
     KDF_MEMORY_COST = 1024 * 128
@@ -117,20 +127,68 @@ class CryptoManager:
             raise CryptoError("Invalid unwrapped data key")
         return data_key
 
-    def encrypt(self, data: bytes) -> bytes:
+    @classmethod
+    def item_aad(cls, item_id, field) -> bytes:
+        if field not in cls.ITEM_FIELDS:
+            raise CryptoError(f"Unsupported encrypted item field: {field}")
+        return cls._context_aad("item", int(item_id), field)
+
+    @classmethod
+    def chunk_aad(cls, item_id, chunk_index) -> bytes:
+        return cls._context_aad("chunk", int(item_id), int(chunk_index))
+
+    @classmethod
+    def tag_aad(cls, tag_id) -> bytes:
+        return cls._context_aad("tag", int(tag_id), "name")
+
+    @classmethod
+    def auth_check_aad(cls) -> bytes:
+        return cls._context_aad("metadata", "auth_check")
+
+    @classmethod
+    def _context_aad(cls, *parts) -> bytes:
+        encoded = [cls.PAYLOAD_AAD_PREFIX]
+        for part in parts:
+            value = str(part).encode("utf-8")
+            encoded.append(str(len(value)).encode("ascii") + b":" + value)
+        return b"\0".join(encoded)
+
+    def encrypt(self, data: bytes, *, aad: bytes) -> bytes:
+        if not aad:
+            raise CryptoError("Encryption context is required")
+        return self._encrypt(data, aad)
+
+    def decrypt(self, data: bytes, *, aad: bytes) -> bytes:
+        if not aad:
+            raise CryptoError("Decryption context is required")
+        return self._decrypt(data, aad)
+
+    def encrypt_legacy(self, data: bytes) -> bytes:
+        return self._encrypt(data, None)
+
+    def decrypt_legacy(self, data: bytes) -> bytes:
+        return self._decrypt(data, None)
+
+    def _encrypt(self, data: bytes, aad) -> bytes:
         if not self.key:
             raise CryptoError("Encryption key not loaded")
+        if not isinstance(data, bytes):
+            data = bytes(data)
         nonce = os.urandom(12)
         aesgcm = AESGCM(self.key)
-        return nonce + aesgcm.encrypt(nonce, data, None)
+        return nonce + aesgcm.encrypt(nonce, data, aad)
 
-    def decrypt(self, data: bytes) -> bytes:
+    def _decrypt(self, data: bytes, aad) -> bytes:
         if not self.key:
             raise CryptoError("Decryption key not loaded")
+        if not isinstance(data, bytes):
+            data = bytes(data)
+        if len(data) < 28:
+            raise CryptoError("Invalid encrypted payload")
         nonce = data[:12]
         ciphertext = data[12:]
         aesgcm = AESGCM(self.key)
-        return aesgcm.decrypt(nonce, ciphertext, None)
+        return aesgcm.decrypt(nonce, ciphertext, aad)
 
     def create_clone(self):
         """Create a new CryptoManager with the same key for thread-safe use."""

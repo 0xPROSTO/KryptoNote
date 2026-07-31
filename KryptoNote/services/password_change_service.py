@@ -49,7 +49,28 @@ class PasswordChangeService:
 
             crypto = CryptoManager()
             crypto.load_data_key(data_key)
-            if crypto.decrypt(auth_check) != AuthService.AUTH_CHECK_PLAINTEXT:
+            version_value = PasswordChangeService._get_metadata(
+                cursor, "crypto_version"
+            )
+            try:
+                version = int(
+                    version_value.decode("ascii")
+                    if isinstance(version_value, bytes)
+                    else version_value or 1
+                )
+            except (TypeError, ValueError, UnicodeDecodeError) as exc:
+                raise AuthError("Invalid encryption version metadata") from exc
+            if version == 3:
+                plaintext = crypto.decrypt(
+                    auth_check, aad=crypto.auth_check_aad()
+                )
+            elif version == 2:
+                plaintext = crypto.decrypt_legacy(auth_check)
+            else:
+                raise AuthError(
+                    "Database is not using supported envelope encryption"
+                )
+            if plaintext != AuthService.AUTH_CHECK_PLAINTEXT:
                 raise AuthError("Incorrect password")
 
             if on_progress:
@@ -111,12 +132,15 @@ class PasswordChangeService:
     def _open_connection(db_path, on_waiting_lock):
         last_error = None
         for attempt in range(1, 9):
+            c = None
             try:
                 c = sqlite3.connect(db_path, timeout=2.0)
                 c.execute("PRAGMA busy_timeout=2000;")
                 c.execute("PRAGMA journal_mode=WAL;")
                 return c
             except sqlite3.OperationalError as e:
+                if c is not None:
+                    c.close()
                 last_error = e
                 if "locked" not in str(e).lower() and "busy" not in str(e).lower():
                     raise

@@ -27,6 +27,9 @@ Rectangle {
     property alias isSearchResizing: searchPanel.resizing
     property bool isTextEditorOpen: textEditorPanel.open
     property bool isFrameEditorOpen: frameEditor.visible
+    property bool isNodePropertiesOpen: nodeProperties.visible
+    readonly property int propertiesFocusNodeId:
+            nodeProperties.visible ? nodeProperties.nodeId : 0
     property bool isTagPickerOpen: globalTagPicker.visible
     property bool isSearchPanelOpen: searchPanel.open
     property int hoveredConnectionId: 0
@@ -81,6 +84,7 @@ Rectangle {
     Item {
         id: contentLayer
         z: 1
+        enabled: !root.isNodePropertiesOpen
         x: 0
         y: 0
         transformOrigin: Item.TopLeft
@@ -167,6 +171,7 @@ Rectangle {
         connectionModel: root.connectionModel
         canvasController: root.canvasController
         id: inputLayer
+        enabled: !root.isNodePropertiesOpen
         anchors.fill: parent
         focus: true
         contentLayer: contentLayer
@@ -221,6 +226,16 @@ Rectangle {
         }
     }
 
+    NodePropertiesOverlay {
+        id: nodeProperties
+        appTheme: root.appTheme
+        nodeModel: root.nodeModel
+        contentLayer: contentLayer
+        contentScale: root.contentScale
+
+        onClosed: root.forceActiveFocus()
+    }
+
     FrameEditorDialog {
         id: frameEditor
         canvasController: root.canvasController
@@ -255,6 +270,9 @@ Rectangle {
         }
         function onOpenFrameEditorRequested(nodeId) {
             root.openFrameEditorForNode(nodeId)
+        }
+        function onOpenNodePropertiesRequested(nodeId) {
+            nodeProperties.openForNode(nodeId)
         }
     }
 
@@ -383,6 +401,10 @@ Rectangle {
 
     function cancelFrameEditor() {
         frameEditor.close()
+    }
+
+    function closeNodeProperties() {
+        nodeProperties.closeOverlay()
     }
 
     function openSearchPanel() {

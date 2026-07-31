@@ -19,6 +19,10 @@ from PySide6.QtWidgets import (
 )
 
 from KryptoNote.config import Config
+from KryptoNote.core.password_policy import (
+    WEAK_PASSWORD_LENGTH,
+    is_weak_project_password,
+)
 from KryptoNote.gui.services.case_directory_service import CaseDirectoryService
 from KryptoNote.gui.theme import Theme
 from KryptoNote.gui.services.operation_coordinator import OperationCoordinator
@@ -390,7 +394,7 @@ class ProjectLauncher(QDialog):
             self.create_project()
 
     def create_project(self):
-        name = self.new_name_input.text().strip()
+        name = self.new_name_input.text()
         if not name:
             return
         try:
@@ -402,9 +406,13 @@ class ProjectLauncher(QDialog):
                 f"Unable to use the selected case folder.\nError: {exc}",
             )
             return
-        if not name.endswith(".zrx"):
-            name += ".zrx"
-        db_path = os.path.join(self.base_dir, name)
+        try:
+            db_path = CaseDirectoryService.resolve_project_path(
+                self.base_dir, name
+            )
+        except (TypeError, ValueError) as exc:
+            QMessageBox.warning(self, "Invalid Project Name", str(exc))
+            return
         if os.path.exists(db_path):
             QMessageBox.warning(self, "Error", "Project already exists!")
             return
@@ -449,6 +457,7 @@ class ProjectLauncher(QDialog):
             "is_new": is_new,
             "salt": salt,
             "first_password": None,
+            "legacy_confirmation": False,
         }
         self._overlay_callback = self._on_password_input
 
@@ -481,15 +490,52 @@ class ProjectLauncher(QDialog):
                 self.launcher_overlay.show_overlay("create", context["db_name"])
                 self.launcher_overlay.show_error("Passwords do not match")
                 return
+            if is_weak_project_password(password):
+                answer = QMessageBox.question(
+                    self,
+                    "Weak Password",
+                    f"This password is shorter than {WEAK_PASSWORD_LENGTH} "
+                    "characters and may be easy to guess.\n\nUse it anyway?",
+                    QMessageBox.StandardButton.Yes
+                    | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if answer != QMessageBox.StandardButton.Yes:
+                    context["first_password"] = None
+                    self.launcher_overlay.show_overlay(
+                        "create", context["db_name"]
+                    )
+                    return
+        elif context.get("legacy_confirmation"):
+            if password != context["first_password"]:
+                context["first_password"] = None
+                context["legacy_confirmation"] = False
+                self.launcher_overlay.show_overlay(
+                    "enter", context["db_name"]
+                )
+                self.launcher_overlay.show_error(
+                    "Passwords do not match"
+                )
+                return
+            self._start_auth_worker(
+                password, allow_unverifiable_legacy=True
+            )
+            return
 
         self._start_auth_worker(password)
 
-    def _start_auth_worker(self, password):
+    def _start_auth_worker(
+        self, password, allow_unverifiable_legacy=False
+    ):
         from cryptography.exceptions import InvalidTag
 
         from KryptoNote.core.crypto import CryptoManager
         from KryptoNote.core.database import DatabaseConnection
-        from KryptoNote.core.exceptions import AuthError, OperationCancelledError
+        from KryptoNote.core.exceptions import (
+            AuthError,
+            OperationCancelledError,
+            UnverifiableLegacyPassword,
+        )
         from KryptoNote.services.auth_service import AuthService
 
         if self._auth_executor is not None or self._auth_context is None:
@@ -521,7 +567,7 @@ class ProjectLauncher(QDialog):
                 db_conn = DatabaseConnection(context["db_path"])
                 crypto = CryptoManager()
                 if context["is_new"]:
-                    AuthService.initialize_v2_project(
+                    AuthService.initialize_v3_project(
                         db_conn, crypto, password, cancel_check=cancel_check
                     )
                 else:
@@ -533,12 +579,19 @@ class ProjectLauncher(QDialog):
                         before_legacy_migration=migration_signal.emit,
                         cancel_check=cancel_check,
                         progress_callback=progress_signal.emit,
+                        allow_unverifiable_legacy=allow_unverifiable_legacy,
                     )
                 if cancel_check():
                     raise OperationCancelledError("Operation cancelled")
                 result = {"status": "success", "crypto": crypto}
             except InvalidTag:
                 result = {"status": "wrong_password", "message": "Incorrect password"}
+            except UnverifiableLegacyPassword as exc:
+                result = {
+                    "status": "unverifiable_legacy",
+                    "message": str(exc),
+                    "password": password,
+                }
             except OperationCancelledError:
                 result = {"status": "cancelled", "message": "Authentication cancelled"}
             except AuthError as exc:
@@ -627,6 +680,22 @@ class ProjectLauncher(QDialog):
             self._overlay_callback = self._on_password_input
             self.launcher_overlay.show_overlay("enter", context["db_name"])
             self.launcher_overlay.show_error("Incorrect password")
+            return
+        if (
+            status == "unverifiable_legacy"
+            and not context["is_new"]
+            and not was_cancelled
+        ):
+            context["first_password"] = result.pop("password", "")
+            context["legacy_confirmation"] = True
+            self._overlay_callback = self._on_password_input
+            self.launcher_overlay.show_overlay(
+                "confirm", context["db_name"]
+            )
+            self.launcher_overlay.show_error(
+                "This empty legacy project cannot verify its password. "
+                "Enter the same password again to migrate it."
+            )
             return
 
         if status not in {"cancelled", "wrong_password"} and not was_cancelled:

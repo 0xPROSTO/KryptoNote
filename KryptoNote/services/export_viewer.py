@@ -431,24 +431,93 @@ dialog::backdrop { background:rgba(0,0,0,.72); }
     canvas.style.width=`${graphBounds.width}px`; canvas.style.height=`${graphBounds.height}px`;
     svg.setAttribute("width",graphBounds.width); svg.setAttribute("height",graphBounds.height); svg.setAttribute("viewBox",`0 0 ${graphBounds.width} ${graphBounds.height}`);
   }
-  const edgePoint = (a,b) => {
+  const edgePoint = (a,b,anchorMode) => {
     const cx=Number(a.position.x)+Number(a.size.width)/2+graphBounds.offsetX;
     const cy=Number(a.position.y)+Number(a.size.height)/2+graphBounds.offsetY;
     const tx=Number(b.position.x)+Number(b.size.width)/2+graphBounds.offsetX;
     const ty=Number(b.position.y)+Number(b.size.height)/2+graphBounds.offsetY;
     const dx=tx-cx,dy=ty-cy,hw=Number(a.size.width)/2,hh=Number(a.size.height)/2;
     if (Math.abs(dx)<.01 && Math.abs(dy)<.01) return [cx,cy];
-    const inset=a.type==="frame" ? 0 : 8; const sx=Math.abs(dx)>0.01 ? Math.max(1,hw-inset)/Math.abs(dx) : Infinity;
-    const sy=Math.abs(dy)>0.01 ? Math.max(1,hh-inset)/Math.abs(dy) : Infinity;
+    const inset=a.type==="frame" ? 0 : 8,anchorWidth=Math.max(1,hw-inset),anchorHeight=Math.max(1,hh-inset);
+    if (anchorMode==="side_centers") {
+      if (Math.abs(dx)/anchorWidth>=Math.abs(dy)/anchorHeight) return [cx+(dx>=0 ? anchorWidth : -anchorWidth),cy];
+      return [cx,cy+(dy>=0 ? anchorHeight : -anchorHeight)];
+    }
+    const sx=Math.abs(dx)>0.01 ? anchorWidth/Math.abs(dx) : Infinity;
+    const sy=Math.abs(dy)>0.01 ? anchorHeight/Math.abs(dy) : Infinity;
     const factor=Math.min(sx,sy); return [cx+dx*factor,cy+dy*factor];
   };
+  const pointDistance=(a,b)=>Math.hypot(b[0]-a[0],b[1]-a[1]);
+  const compactPoints=points=>points.filter((point,index)=>!index || pointDistance(points[index-1],point)>.001);
+  const pointToward=(origin,target,distance)=>{
+    const length=pointDistance(origin,target); if (length<=.001) return origin;
+    const amount=distance/length; return [origin[0]+(target[0]-origin[0])*amount,origin[1]+(target[1]-origin[1])*amount];
+  };
+  const stableNormal=(dx,dy,length)=>{
+    let nx=-dy/length,ny=dx/length;
+    if (ny<-.001 || (Math.abs(ny)<=.001 && nx<0)) { nx=-nx; ny=-ny; }
+    return [nx,ny];
+  };
+  function routePoints(style,start,end) {
+    const dx=end[0]-start[0],dy=end[1]-start[1],horizontal=Math.abs(dx)>=Math.abs(dy);
+    if (style==="orthogonal") {
+      if (horizontal) { const middle=(start[0]+end[0])/2; return compactPoints([start,[middle,start[1]],[middle,end[1]],end]); }
+      const middle=(start[1]+end[1])/2; return compactPoints([start,[start[0],middle],[end[0],middle],end]);
+    }
+    if (horizontal) {
+      const direction=dx>=0 ? 1 : -1,lead=Math.min(Math.abs(dx)/3,48);
+      return compactPoints([start,[start[0]+direction*lead,start[1]],[end[0]-direction*lead,end[1]],end]);
+    }
+    const direction=dy>=0 ? 1 : -1,lead=Math.min(Math.abs(dy)/3,48);
+    return compactPoints([start,[start[0],start[1]+direction*lead],[end[0],end[1]-direction*lead],end]);
+  }
+  function roundedPolylinePath(points,radius) {
+    if (points.length<2) return "";
+    let path=`M ${points[0][0]} ${points[0][1]}`;
+    for (let index=1;index<points.length-1;index+=1) {
+      const previous=points[index-1],corner=points[index],following=points[index+1];
+      const local=Math.min(radius,pointDistance(previous,corner)/2,pointDistance(corner,following)/2);
+      if (local<=.001) { path+=` L ${corner[0]} ${corner[1]}`; continue; }
+      const entry=pointToward(corner,previous,local),exit=pointToward(corner,following,local);
+      path+=` L ${entry[0]} ${entry[1]} Q ${corner[0]} ${corner[1]} ${exit[0]} ${exit[1]}`;
+    }
+    const end=points[points.length-1]; return path+` L ${end[0]} ${end[1]}`;
+  }
+  function connectionPath(style,start,end,curveFormula,cornerStyle) {
+    if (style==="straight") return `M ${start[0]} ${start[1]} L ${end[0]} ${end[1]}`;
+    const cornerRadius=cornerStyle==="sharp" ? 0 : (cornerStyle==="tight" ? 8 : 24);
+    if (style==="orthogonal" || style==="angled") return roundedPolylinePath(routePoints(style,start,end),cornerRadius);
+    const dx=end[0]-start[0],dy=end[1]-start[1],length=pointDistance(start,end);
+    if (curveFormula==="arc" && length>.001) {
+      const normal=stableNormal(dx,dy,length),bow=Math.min(80,length*.22);
+      const control=[(start[0]+end[0])/2+normal[0]*bow,(start[1]+end[1])/2+normal[1]*bow];
+      return `M ${start[0]} ${start[1]} Q ${control[0]} ${control[1]} ${end[0]} ${end[1]}`;
+    }
+    if (curveFormula==="s_curve" && length>.001) {
+      const normal=stableNormal(dx,dy,length),bow=Math.min(64,length*.18);
+      const c1=[start[0]+dx/3+normal[0]*bow,start[1]+dy/3+normal[1]*bow];
+      const c2=[start[0]+dx*2/3-normal[0]*bow,start[1]+dy*2/3-normal[1]*bow];
+      return `M ${start[0]} ${start[1]} C ${c1[0]} ${c1[1]}, ${c2[0]} ${c2[1]}, ${end[0]} ${end[1]}`;
+    }
+    if (curveFormula==="adaptive" && Math.abs(dy)>Math.abs(dx)) {
+      return `M ${start[0]} ${start[1]} C ${start[0]} ${start[1]+dy*.4}, ${end[0]} ${end[1]-dy*.4}, ${end[0]} ${end[1]}`;
+    }
+    return `M ${start[0]} ${start[1]} C ${start[0]+dx*.4} ${start[1]}, ${end[0]-dx*.4} ${end[1]}, ${end[0]} ${end[1]}`;
+  }
   function renderConnections() {
-    const curved=(graph.appearance && graph.appearance.connection_style)!=="straight";
+    const appearance=graph.appearance || {};
+    const style=appearance.connection_style || "curved";
+    const curveFormula=appearance.connection_curve_formula || "horizontal";
+    const cornerStyle=appearance.connection_corner_style || "smooth";
+    const anchorMode=appearance.connection_anchor_mode || "perimeter";
+    const pattern=appearance.connection_pattern || "solid";
     connections.forEach(connection => {
       const start=nodeMap.get(connection.start_id),end=nodeMap.get(connection.end_id); if (!start || !end) return;
-      const [x1,y1]=edgePoint(start,end),[x2,y2]=edgePoint(end,start);
+      const [x1,y1]=edgePoint(start,end,anchorMode),[x2,y2]=edgePoint(end,start,anchorMode);
       const path=document.createElementNS("http://www.w3.org/2000/svg","path"); path.classList.add("connection");
-      path.setAttribute("d",curved ? `M ${x1} ${y1} C ${x1+(x2-x1)*.4} ${y1}, ${x2-(x2-x1)*.4} ${y2}, ${x2} ${y2}` : `M ${x1} ${y1} L ${x2} ${y2}`);
+      path.setAttribute("d",connectionPath(style,[x1,y1],[x2,y2],curveFormula,cornerStyle));
+      if (pattern==="dashed") path.style.strokeDasharray="8 5";
+      else if (pattern==="dotted") path.style.strokeDasharray="1 5";
       svg.appendChild(path);
     });
   }

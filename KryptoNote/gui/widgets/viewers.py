@@ -9,17 +9,16 @@ from PySide6.QtWidgets import (
 
 from .components.player_controls import PlayerControlsWidget
 from ..theme.style_factory import StyleFactory
-from ...core.io.stream import BlockEncryptedStream
 
 
 class SecureVideoPlayer(QDialog):
-    def __init__(self, repo, item_id, total_size, chunk_size, title="Secure Video", parent=None):
+    def __init__(self, node_service, item_id, title="Secure Video", parent=None):
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         self.setWindowTitle(title)
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowMinMaxButtonsHint)
         self.setStyleSheet(StyleFactory.get_player_qss())
-        self.repo = repo
+        self.node_service = node_service
         self._has_resized = False
         self._cleaned_up = False
         self.finished.connect(lambda _result: self._cleanup_media())
@@ -73,13 +72,7 @@ class SecureVideoPlayer(QDialog):
         self.player.metaDataChanged.connect(self._on_meta_data_changed)
         self.player.errorOccurred.connect(self.handle_errors)
 
-        self.io_device = BlockEncryptedStream(
-            self.repo.conn_manager.db_path,
-            self.repo.crypto,
-            item_id,
-            total_size,
-            chunk_size,
-        )
+        self.io_device = self.node_service.open_item_stream(item_id)
 
         self.player.setSourceDevice(self.io_device, QUrl("secure.mp4"))
 
@@ -190,7 +183,8 @@ class SecureVideoPlayer(QDialog):
         except Exception:
             pass
         try:
-            self.io_device.close()
+            if self.io_device is not None:
+                self.io_device.close()
         except Exception:
             pass
         try:

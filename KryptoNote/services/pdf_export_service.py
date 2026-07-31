@@ -14,6 +14,7 @@ from PySide6.QtGui import (
     QPen,
 )
 
+from ..core.connection_geometry import connection_path_commands
 from ..core.exceptions import OperationCancelledError
 
 
@@ -212,9 +213,30 @@ class PdfExportService:
             )
         painter.setBrush(Qt.BrushStyle.NoBrush)
 
-        connection_width = max(0.8, float(appearance.get("connection_width", 1.5)) * scale)
-        painter.setPen(QPen(link_color, connection_width))
-        curved = appearance.get("connection_style", "curved") != "straight"
+        connection_width = max(
+            0.8, float(appearance.get("connection_width", 1.5)) * scale
+        )
+        connection_pen = QPen(link_color, connection_width)
+        connection_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        connection_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        pattern = appearance.get("connection_pattern", "solid")
+        if pattern == "dashed":
+            connection_pen.setStyle(Qt.PenStyle.CustomDashLine)
+            connection_pen.setDashPattern([5.0, 3.0])
+        elif pattern == "dotted":
+            connection_pen.setStyle(Qt.PenStyle.CustomDashLine)
+            connection_pen.setDashPattern([1.0, 2.4])
+        painter.setPen(connection_pen)
+        connection_style = appearance.get("connection_style", "curved")
+        curve_formula = appearance.get(
+            "connection_curve_formula", "horizontal"
+        )
+        corner_style = appearance.get(
+            "connection_corner_style", "smooth"
+        )
+        anchor_mode = appearance.get(
+            "connection_anchor_mode", "perimeter"
+        )
         nodes_by_id = {node["id"]: node for node in nodes}
         for link in graph.manifest.get("connections", []):
             first = rects.get(link["start_id"])
@@ -241,19 +263,43 @@ class PdfExportService:
                 first_edge = first
             if second_edge.width() < 2 or second_edge.height() < 2:
                 second_edge = second
-            start = self._edge_point(first_edge, second.center())
-            end = self._edge_point(second_edge, first.center())
-            if curved:
-                path = QPainterPath(start)
-                delta = (end.x() - start.x()) * 0.4
-                path.cubicTo(
-                    QPointF(start.x() + delta, start.y()),
-                    QPointF(end.x() - delta, end.y()),
-                    end,
-                )
-                painter.drawPath(path)
-            else:
-                painter.drawLine(start, end)
+            anchor_point = (
+                self._side_center_point
+                if anchor_mode == "side_centers"
+                else self._edge_point
+            )
+            start = anchor_point(first_edge, second.center())
+            end = anchor_point(second_edge, first.center())
+            commands = connection_path_commands(
+                connection_style,
+                start.x(),
+                start.y(),
+                end.x(),
+                end.y(),
+                curve_formula,
+                corner_style,
+                scale,
+            )
+            path = QPainterPath()
+            for command in commands:
+                if command[0] == "M":
+                    path.moveTo(command[1], command[2])
+                elif command[0] == "L":
+                    path.lineTo(command[1], command[2])
+                elif command[0] == "Q":
+                    path.quadTo(
+                        command[1], command[2], command[3], command[4]
+                    )
+                elif command[0] == "C":
+                    path.cubicTo(
+                        command[1],
+                        command[2],
+                        command[3],
+                        command[4],
+                        command[5],
+                        command[6],
+                    )
+            painter.drawPath(path)
 
         media_by_node = {item.node_id: item for item in graph.media}
         regular_nodes = [
@@ -301,8 +347,9 @@ class PdfExportService:
                 )
             else:
                 media = media_by_node.get(node["id"])
-                if media and media.thumbnail:
-                    image = QImage.fromData(media.thumbnail)
+                thumbnail = graph.read_thumbnail(media) if media else None
+                if thumbnail:
+                    image = QImage.fromData(thumbnail)
                     if not image.isNull():
                         target = self._fit_rect(image.width(), image.height(), body)
                         painter.drawImage(target, image)
@@ -488,7 +535,7 @@ class PdfExportService:
             self._check_cancelled()
             media_record = media_by_node.get(node["id"])
             minimum_space = (
-                430 if media_record and media_record.thumbnail else 150
+                430 if media_record and media_record.has_thumbnail else 150
             )
             if y > content.top() + 2 and content.bottom() - y < minimum_space:
                 new_page()
@@ -554,8 +601,12 @@ class PdfExportService:
                 )
             y += 8
 
-            if media_record and media_record.thumbnail:
-                image = QImage.fromData(media_record.thumbnail)
+            thumbnail = (
+                graph.read_thumbnail(media_record)
+                if media_record else None
+            )
+            if thumbnail:
+                image = QImage.fromData(thumbnail)
                 if not image.isNull():
                     desired_height = min(260.0, max(100.0, content.height() * 0.30))
                     if content.bottom() - y < desired_height + 20:
@@ -696,6 +747,27 @@ class PdfExportService:
         scale_y = (rect.height() / 2) / abs(dy) if abs(dy) > 0.01 else math.inf
         factor = min(scale_x, scale_y)
         return QPointF(center.x() + dx * factor, center.y() + dy * factor)
+
+    @staticmethod
+    def _side_center_point(rect, target):
+        center = rect.center()
+        dx = target.x() - center.x()
+        dy = target.y() - center.y()
+        if math.isclose(dx, 0.0, abs_tol=0.01) and math.isclose(
+            dy, 0.0, abs_tol=0.01
+        ):
+            return center
+        half_width = max(1.0, rect.width() / 2.0)
+        half_height = max(1.0, rect.height() / 2.0)
+        if abs(dx) / half_width >= abs(dy) / half_height:
+            return QPointF(
+                center.x() + (half_width if dx >= 0.0 else -half_width),
+                center.y(),
+            )
+        return QPointF(
+            center.x(),
+            center.y() + (half_height if dy >= 0.0 else -half_height),
+        )
 
     def _check_cancelled(self):
         if self.cancel_check():

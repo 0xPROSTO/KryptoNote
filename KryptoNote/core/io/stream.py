@@ -1,16 +1,23 @@
 import sqlite3
+import threading
 import weakref
 from pathlib import Path
 
 from PySide6.QtCore import QIODevice
 
 _active_streams = weakref.WeakSet()
+_active_streams_lock = threading.RLock()
 
 
 def close_streams_for_item(item_id):
-    for stream in list(_active_streams):
-        if getattr(stream, "item_id", None) == item_id:
-            stream.close()
+    with _active_streams_lock:
+        streams = [
+            stream
+            for stream in list(_active_streams)
+            if getattr(stream, "item_id", None) == item_id
+        ]
+    for stream in streams:
+        stream.close()
 
 
 class BlockEncryptedStream(QIODevice):
@@ -25,43 +32,58 @@ class BlockEncryptedStream(QIODevice):
         self.chunk_size = chunk_size
         self.conn = None
         self.cursor = None
-        _active_streams.add(self)
+        self._lock = threading.RLock()
+        self._closed = False
+        with _active_streams_lock:
+            _active_streams.add(self)
         self.open(QIODevice.OpenModeFlag.ReadOnly)
 
     def open(self, mode):
-        try:
-            db_path = Path(self.db_path).resolve()
-            uri = f"{db_path.as_uri()}?mode=ro"
-            self.conn = sqlite3.connect(
-                uri, uri=True, check_same_thread=False, timeout=5.0
-            )
-            self.cursor = self.conn.cursor()
-            return super().open(mode)
+        with self._lock:
+            try:
+                db_path = Path(self.db_path).resolve()
+                uri = f"{db_path.as_uri()}?mode=ro"
+                self.conn = sqlite3.connect(
+                    uri, uri=True, check_same_thread=False, timeout=5.0
+                )
+                self.cursor = self.conn.cursor()
+                self._closed = False
+                return super().open(mode)
 
-        except Exception as e:
-            if self.cursor is not None:
-                self.cursor.close()
-            if self.conn is not None:
-                self.conn.close()
-            self.cursor = None
-            self.conn = None
-            self.setErrorString(str(e))
-            print(f"IO Error: {e}")
-            return False
+            except Exception as e:
+                if self.cursor is not None:
+                    self.cursor.close()
+                if self.conn is not None:
+                    self.conn.close()
+                self.cursor = None
+                self.conn = None
+                self._closed = True
+                with _active_streams_lock:
+                    _active_streams.discard(self)
+                self.setErrorString(str(e))
+                print(f"IO Error: {e}")
+                return False
 
     def close(self):
-        if self.cursor:
-            try:
-                self.cursor.close()
-            except Exception:
-                pass
-        if self.conn:
-            self.conn.close()
-            self.conn = None
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            if self.cursor:
+                try:
+                    self.cursor.close()
+                except Exception:
+                    pass
             self.cursor = None
-        _active_streams.discard(self)
-
-        super().close()
+            if self.conn:
+                try:
+                    self.conn.close()
+                except Exception:
+                    pass
+            self.conn = None
+            with _active_streams_lock:
+                _active_streams.discard(self)
+            super().close()
 
     def isSequential(self):
         return False
@@ -70,71 +92,81 @@ class BlockEncryptedStream(QIODevice):
         return self._size
 
     def bytesAvailable(self):
-        if not self.isOpen():
-            return 0
-        logical_pos = max(0, int(super().pos()))
-        if self._read_failed:
-            return max(0, self._read_pos - logical_pos)
-        return max(0, self._size - logical_pos)
+        with self._lock:
+            if self._closed or not self.isOpen():
+                return 0
+            logical_pos = max(0, int(super().pos()))
+            if self._read_failed:
+                return max(0, self._read_pos - logical_pos)
+            return max(0, self._size - logical_pos)
 
     def seek(self, pos):
-        if not 0 <= pos <= self._size:
-            return False
-        if not super().seek(pos):
-            return False
-        self._read_pos = pos
-        self._read_failed = False
-        self.setErrorString("")
-        return True
+        with self._lock:
+            if self._closed or not 0 <= pos <= self._size:
+                return False
+            if not super().seek(pos):
+                return False
+            self._read_pos = pos
+            self._read_failed = False
+            self.setErrorString("")
+            return True
 
     def readData(self, max_len):
-        try:
-            if not self.cursor:
-                return b""
-            if self._read_failed or self._read_pos >= self._size or max_len <= 0:
-                return b""
+        with self._lock:
+            try:
+                if self._closed or not self.cursor:
+                    self.setErrorString("Encrypted media stream is closed")
+                    return -1
+                if self._read_failed:
+                    return -1
+                if self._read_pos >= self._size or max_len <= 0:
+                    return b""
 
-            remaining = min(int(max_len), self._size - self._read_pos)
-            output = bytearray()
-            while remaining > 0:
-                chunk_idx = self._read_pos // self.chunk_size
-                offset_in_chunk = self._read_pos % self.chunk_size
-                self.cursor.execute(
-                    "SELECT data FROM media_chunks WHERE item_id=? AND chunk_index=?",
-                    (self.item_id, chunk_idx),
-                )
-
-                row = self.cursor.fetchone()
-                self.cursor.fetchall()  # Finalize statement to release read lock
-                if not row or not row[0]:
-                    self._read_failed = True
-                    self.setErrorString(
-                        f"Missing media chunk {chunk_idx} for item {self.item_id}"
+                remaining = min(int(max_len), self._size - self._read_pos)
+                output = bytearray()
+                while remaining > 0:
+                    chunk_idx = self._read_pos // self.chunk_size
+                    offset_in_chunk = self._read_pos % self.chunk_size
+                    self.cursor.execute(
+                        "SELECT data FROM media_chunks "
+                        "WHERE item_id=? AND chunk_index=?",
+                        (self.item_id, chunk_idx),
                     )
-                    break
 
-                decrypted_chunk = self.crypto.decrypt(row[0])
-                available = len(decrypted_chunk) - offset_in_chunk
-                if available <= 0:
-                    self._read_failed = True
-                    self.setErrorString(
-                        f"Invalid media chunk {chunk_idx} for item {self.item_id}"
+                    row = self.cursor.fetchone()
+                    self.cursor.fetchall()
+                    if not row or not row[0]:
+                        raise OSError(
+                            f"Missing media chunk {chunk_idx} for item {self.item_id}"
+                        )
+
+                    decrypted_chunk = self.crypto.decrypt(
+                        row[0],
+                        aad=self.crypto.chunk_aad(self.item_id, chunk_idx),
                     )
-                    break
-                to_read = min(remaining, available)
-                output.extend(
-                    decrypted_chunk[offset_in_chunk: offset_in_chunk + to_read]
-                )
-                self._read_pos += to_read
-                remaining -= to_read
+                    available = len(decrypted_chunk) - offset_in_chunk
+                    if available <= 0:
+                        raise OSError(
+                            f"Invalid media chunk {chunk_idx} for item {self.item_id}"
+                        )
+                    to_read = min(remaining, available)
+                    output.extend(
+                        decrypted_chunk[
+                            offset_in_chunk: offset_in_chunk + to_read
+                        ]
+                    )
+                    self._read_pos += to_read
+                    remaining -= to_read
 
-            return bytes(output)
+                return bytes(output)
 
-        except Exception as e:
-            self._read_failed = True
-            self.setErrorString(str(e))
-            print(f"Stream Error: {e}")
-            return b""
+            except Exception as e:
+                self._read_failed = True
+                self.setErrorString(str(e))
+                print(f"Stream Error: {e}")
+                if "output" in locals() and output:
+                    return bytes(output)
+                return -1
 
     def writeData(self, data):
         return -1
