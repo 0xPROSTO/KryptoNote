@@ -1,0 +1,35 @@
+[project]
+name = "zeroxx-kryptonote"
+version = "3.3.0"
+description = "Local visual knowledge base for encrypted notes, media, and connections."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [
+    { name = "0xPROSTO" },
+]
+dependencies = [
+    "cryptography==46.0.3",
+    "numpy==2.4.1",
+    "opencv-python-headless==4.13.0.90",
+    "ordered-set==4.1.0",
+    "pillow==12.1.0",
+    "pyside6==6.11.0",
+    "pyzipper==0.4.0",
+]
+
+[project.optional-dependencies]
+build = [
+    "nuitka==4.0.8",
+]
+
+[project.urls]
+Repository = "https://github.com/0xPROSTO/KryptoNote"
+Issues = "https://github.com/0xPROSTO/KryptoNote/issues"
+
+[tool.uv]
+package = false
+constraint-dependencies = [
+    "cffi==2.0.0",
+    "pycparser==3.0",
+]
