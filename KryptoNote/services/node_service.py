@@ -9,6 +9,7 @@ from PySide6.QtGui import QImageReader
 from ..core.constants import MEDIA_CHUNK_SIZE
 from ..core.database.models import NodeItemDTO, ConnectionDTO
 from ..core.io.stream import BlockEncryptedStream
+from .graph_clipboard_service import GraphClipboardService
 
 
 class NodeService:
@@ -16,9 +17,17 @@ class NodeService:
 
     def __init__(self, repo):
         self.repo = repo
+        self._graph_clipboard = GraphClipboardService(repo)
 
     def get_all_items(self, include_thumbnails=True) -> list[NodeItemDTO]:
         return self.repo.get_all_items(include_thumbnails=include_thumbnails)
+
+    def get_items_by_ids(
+        self, item_ids, include_thumbnails=True
+    ) -> list[NodeItemDTO]:
+        return self.repo.get_items_by_ids(
+            item_ids, include_thumbnails=include_thumbnails
+        )
 
     def iter_item_batches(self, batch_size=200, include_thumbnails=False):
         return self.repo.iter_item_batches(
@@ -71,11 +80,13 @@ class NodeService:
             data=None, title_size=14, text_size=10, media_width=0,
             media_height=0, media_duration=0.0, original_filename="",
             frame_locked=False, frame_color="", frame_opacity=0.21,
+            commit=True,
     ):
         return self.repo.add_item(
             item_type, x, y, w, h, title, text, thumb, data, title_size,
             text_size, media_width, media_height, media_duration,
             original_filename, frame_locked, frame_color, frame_opacity,
+            commit,
         )
 
     def add_streamed_media(
@@ -91,22 +102,100 @@ class NodeService:
     def add_connection(self, start_id, end_id, commit=True):
         return self.repo.add_connection(start_id, end_id, commit=commit)
 
+    def copy_graph(self, node_ids):
+        return self._graph_clipboard.copy_graph(node_ids)
+
+    def prepare_paste_graph(
+        self,
+        offset=None,
+        offset_y=None,
+        *,
+        offset_x=None,
+    ):
+        return self._graph_clipboard.prepare_paste(
+            offset, offset_y, offset_x=offset_x
+        )
+
+    def prepare_duplicate_graph(
+        self,
+        node_ids,
+        offset=None,
+        offset_y=None,
+        *,
+        offset_x=None,
+    ):
+        return self._graph_clipboard.prepare_duplicate(
+            node_ids,
+            offset,
+            offset_y,
+            offset_x=offset_x,
+        )
+
+    # Short names are kept for service integrations that do not use the
+    # graph-prefixed synchronous API names.
+    prepare_paste = prepare_paste_graph
+    prepare_duplicate = prepare_duplicate_graph
+
+    def paste_graph(
+        self,
+        offset=None,
+        offset_y=None,
+        *,
+        offset_x=None,
+        progress_callback=None,
+        cancel_check=None,
+    ):
+        return self._graph_clipboard.paste_graph(
+            offset,
+            offset_y,
+            offset_x=offset_x,
+            progress_callback=progress_callback,
+            cancel_check=cancel_check,
+        )
+
+    def duplicate_graph(
+        self,
+        node_ids,
+        offset=None,
+        offset_y=None,
+        *,
+        offset_x=None,
+        progress_callback=None,
+        cancel_check=None,
+    ):
+        return self._graph_clipboard.duplicate_graph(
+            node_ids,
+            offset,
+            offset_y,
+            offset_x=offset_x,
+            progress_callback=progress_callback,
+            cancel_check=cancel_check,
+        )
+
+    def clear_clipboard(self):
+        self._graph_clipboard.clear_clipboard()
+
+    def has_clipboard(self):
+        return self._graph_clipboard.has_clipboard()
+
     def delete_node_cascade(
             self,
             item_id,
             on_start_vacuum=None,
             on_finish_vacuum=None,
             on_waiting_lock=None,
+            progress_callback=None,
             on_success=None,
             on_error=None,
     ):
         return self.repo.delete_node_cascade(
             item_id,
-            on_start_vacuum,
-            on_finish_vacuum,
-            on_waiting_lock,
-            on_success,
-            on_error,
+            on_start_vacuum=on_start_vacuum,
+            on_finish_vacuum=on_finish_vacuum,
+            on_waiting_lock=on_waiting_lock,
+            progress_callback=progress_callback,
+            on_success=on_success,
+            on_error=on_error,
         )
 
     def delete_nodes_cascade(
@@ -115,16 +204,18 @@ class NodeService:
             on_start_vacuum=None,
             on_finish_vacuum=None,
             on_waiting_lock=None,
+            progress_callback=None,
             on_success=None,
             on_error=None,
     ):
         return self.repo.delete_nodes_cascade(
             item_ids,
-            on_start_vacuum,
-            on_finish_vacuum,
-            on_waiting_lock,
-            on_success,
-            on_error,
+            on_start_vacuum=on_start_vacuum,
+            on_finish_vacuum=on_finish_vacuum,
+            on_waiting_lock=on_waiting_lock,
+            progress_callback=progress_callback,
+            on_success=on_success,
+            on_error=on_error,
         )
 
     def delete_connection(self, conn_id):
@@ -304,7 +395,8 @@ class NodeService:
         db_path = self.get_db_path()
         if db_path == ":memory:":
             self.repo.cursor.execute(
-                "SELECT thumbnail FROM items WHERE id=?", (item_id,)
+                "SELECT thumbnail FROM items "
+                "WHERE id=? AND storage_state='ready'", (item_id,)
             )
             row = self.repo.cursor.fetchone()
             return (
@@ -319,7 +411,8 @@ class NodeService:
         uri = f"{Path(db_path).resolve().as_uri()}?mode=ro"
         with closing(sqlite3.connect(uri, uri=True, timeout=5.0)) as connection:
             row = connection.execute(
-                "SELECT thumbnail FROM items WHERE id=?", (item_id,)
+                "SELECT thumbnail FROM items "
+                "WHERE id=? AND storage_state='ready'", (item_id,)
             ).fetchone()
         if not row or not row[0]:
             return None
@@ -331,6 +424,9 @@ class NodeService:
     def commit_changes(self):
         self.repo.commit_changes()
 
+    def rollback_changes(self):
+        self.repo.rollback_changes()
+
     def vacuum_database(
             self,
             on_start_vacuum=None,
@@ -340,11 +436,11 @@ class NodeService:
             on_error=None,
     ):
         return self.repo.vacuum_database(
-            on_start_vacuum,
-            on_finish_vacuum,
-            on_waiting_lock,
-            on_success,
-            on_error,
+            on_start_vacuum=on_start_vacuum,
+            on_finish_vacuum=on_finish_vacuum,
+            on_waiting_lock=on_waiting_lock,
+            on_success=on_success,
+            on_error=on_error,
         )
 
     def get_db_path(self):

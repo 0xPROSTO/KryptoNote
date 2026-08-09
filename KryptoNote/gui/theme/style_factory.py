@@ -407,6 +407,24 @@ class StyleFactory:
             QPushButton:focus {{
                 border: 2px solid {Palette.ACCENT_MAIN};
             }}
+            QComboBox#font_combo {{
+                min-height: 28px;
+                padding: 0 8px;
+                color: {Palette.TEXT_MAIN};
+                background: {Palette.BG_INPUT};
+                border: 1px solid {Palette.BORDER_DEFAULT};
+                border-radius: 5px;
+            }}
+            QComboBox#font_combo:hover,
+            QComboBox#font_combo:focus {{
+                border: 2px solid {Palette.ACCENT_MAIN};
+            }}
+            QComboBox#font_combo QAbstractItemView {{
+                color: {Palette.TEXT_MAIN};
+                background: {Palette.BG_POPOVER};
+                selection-background-color: {Palette.ACCENT_LOW};
+                selection-color: {Palette.TEXT_MAIN};
+            }}
             QPushButton:checked {{
                 color: {Palette.TEXT_MAIN};
                 background: {Palette.ACCENT_LOW};

@@ -106,10 +106,11 @@ class ProgressBarWidget(QWidget):
             self._indeterminate_offset = 0.0
         self.update()
 
-    def set_progress(self, value: float, message: str = ""):
+    def set_progress(self, value: float, message: str = "", animate=False):
         """
         Update progress (0.0 to 1.0).
-        Updates instantly without animation to avoid Qt crashes in tight loops.
+        Updates instantly by default. Long-running, low-frequency operations
+        may opt into a short interpolation with ``animate=True``.
         """
         if not self._active:
             self.start(message)
@@ -123,7 +124,12 @@ class ProgressBarWidget(QWidget):
             self._message = message
 
         self._progress_anim.stop()
-        self._visible_progress = self._progress
+        if animate:
+            self._progress_anim.setStartValue(self._visible_progress)
+            self._progress_anim.setEndValue(self._progress)
+            self._progress_anim.start()
+        else:
+            self._visible_progress = self._progress
         self.raise_()
         self.update()
 

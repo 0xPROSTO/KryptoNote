@@ -92,7 +92,8 @@ class GraphExportService:
                     row = connection.execute(
                         "SELECT COALESCE(SUM(total_size), 0), "
                         "COALESCE(SUM(length(thumbnail)), 0) "
-                        f"FROM items WHERE id IN ({placeholders})",
+                        "FROM items WHERE storage_state='ready' "
+                        f"AND id IN ({placeholders})",
                         batch,
                     ).fetchone()
                     media_bytes += int(row[0] or 0)
@@ -100,7 +101,8 @@ class GraphExportService:
             else:
                 media_bytes, thumbnail_bytes = connection.execute(
                     "SELECT COALESCE(SUM(total_size), 0), "
-                    "COALESCE(SUM(length(thumbnail)), 0) FROM items"
+                    "COALESCE(SUM(length(thumbnail)), 0) FROM items "
+                    "WHERE storage_state='ready'"
                 ).fetchone()
         binary_bytes = int(media_bytes or 0) + int(thumbnail_bytes or 0)
         return int(binary_bytes * 4 / 3) + 2 * 1024 * 1024
@@ -173,13 +175,22 @@ class GraphExportService:
             all_connections = [
                 {"id": row[0], "start_id": row[1], "end_id": row[2]}
                 for row in connection.execute(
-                    "SELECT id, start_id, end_id FROM connections ORDER BY id"
+                    "SELECT connections.id, connections.start_id, "
+                    "connections.end_id FROM connections "
+                    "JOIN items AS start_item "
+                    "ON start_item.id=connections.start_id "
+                    "JOIN items AS end_item "
+                    "ON end_item.id=connections.end_id "
+                    "WHERE start_item.storage_state='ready' "
+                    "AND end_item.storage_state='ready' "
+                    "ORDER BY connections.id"
                 )
             ]
             exported_ids = {
                 int(row[0])
                 for row in connection.execute(
-                    "SELECT id FROM items ORDER BY id"
+                    "SELECT id FROM items "
+                    "WHERE storage_state='ready' ORDER BY id"
                 )
                 if self.selected_ids is None
                 or int(row[0]) in self.selected_ids
@@ -190,7 +201,7 @@ class GraphExportService:
                 "created_at, updated_at, media_width, media_height, "
                 "media_duration, original_filename, frame_locked, "
                 "frame_color, frame_opacity "
-                "FROM items ORDER BY id"
+                "FROM items WHERE storage_state='ready' ORDER BY id"
             )
             connections = [
                 link for link in all_connections
@@ -459,8 +470,12 @@ class GraphExportService:
     def _iter_media_bytes(self, connection, media):
         if media.is_chunked:
             cursor = connection.execute(
-                "SELECT chunk_index, data FROM media_chunks "
-                "WHERE item_id=? ORDER BY chunk_index",
+                "SELECT media_chunks.chunk_index, media_chunks.data "
+                "FROM media_chunks JOIN items "
+                "ON items.id=media_chunks.item_id "
+                "WHERE media_chunks.item_id=? "
+                "AND items.storage_state='ready' "
+                "ORDER BY media_chunks.chunk_index",
                 (media.node_id,),
             )
             for chunk_index, encrypted_chunk in cursor:
@@ -473,7 +488,8 @@ class GraphExportService:
                 )
             return
         row = connection.execute(
-            "SELECT full_data FROM items WHERE id=?", (media.node_id,)
+            "SELECT full_data FROM items "
+            "WHERE id=? AND storage_state='ready'", (media.node_id,)
         ).fetchone()
         if not row or not row[0]:
             if media.total_size == 0:
@@ -516,8 +532,10 @@ class GraphExportService:
     def _read_node_tags(connection, tags):
         result = {}
         for node_id, tag_id in connection.execute(
-            "SELECT item_id, tag_id FROM item_tags "
-            "ORDER BY item_id, priority, tag_id"
+            "SELECT item_tags.item_id, item_tags.tag_id FROM item_tags "
+            "JOIN items ON items.id=item_tags.item_id "
+            "WHERE items.storage_state='ready' "
+            "ORDER BY item_tags.item_id, item_tags.priority, item_tags.tag_id"
         ):
             tag = tags.get(int(tag_id))
             if tag:
@@ -542,13 +560,17 @@ class GraphExportService:
     def _read_media_prefix(self, connection, node_id, is_chunked):
         if is_chunked:
             row = connection.execute(
-                "SELECT data FROM media_chunks WHERE item_id=? "
-                "ORDER BY chunk_index LIMIT 1",
+                "SELECT media_chunks.data FROM media_chunks JOIN items "
+                "ON items.id=media_chunks.item_id "
+                "WHERE media_chunks.item_id=? "
+                "AND items.storage_state='ready' "
+                "ORDER BY media_chunks.chunk_index LIMIT 1",
                 (node_id,),
             ).fetchone()
         else:
             row = connection.execute(
-                "SELECT full_data FROM items WHERE id=?", (node_id,)
+                "SELECT full_data FROM items "
+                "WHERE id=? AND storage_state='ready'", (node_id,)
             ).fetchone()
         if not row or not row[0]:
             return b""
@@ -561,7 +583,8 @@ class GraphExportService:
 
     def _read_non_chunked_media_size(self, connection, node_id):
         row = connection.execute(
-            "SELECT full_data FROM items WHERE id=?", (node_id,)
+            "SELECT full_data FROM items "
+            "WHERE id=? AND storage_state='ready'", (node_id,)
         ).fetchone()
         if not row or not row[0]:
             return 0
@@ -603,7 +626,8 @@ class GraphExportService:
 
     def _read_thumbnail(self, connection, media):
         row = connection.execute(
-            "SELECT thumbnail FROM items WHERE id=?", (media.node_id,)
+            "SELECT thumbnail FROM items "
+            "WHERE id=? AND storage_state='ready'", (media.node_id,)
         ).fetchone()
         if not row or not row[0]:
             return None

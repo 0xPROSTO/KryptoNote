@@ -20,6 +20,11 @@ from ...core.connection_geometry import (
     corner_style_from_legacy_radius,
 )
 from .palette import DEFAULT_DARK_2, Palette
+from .typography import (
+    SYSTEM_DEFAULT_FONT,
+    Typography,
+    resolve_font_family,
+)
 
 
 DEFAULT_TONE = "dark_2"
@@ -398,12 +403,15 @@ class ThemeManager(QObject):
     paletteChanged = Signal()
     canvasAppearanceChanged = Signal()
     appearanceChanged = Signal(object)
+    fontChanged = Signal()
 
     def __init__(self, store=None, parent=None):
         super().__init__(parent)
         self._store = store or QSettings("ZeroXware", "KryptoNote")
         self._settings = AppearanceSettings()
         self._committed = self._settings
+        self._font_family = SYSTEM_DEFAULT_FONT
+        self._committed_font_family = SYSTEM_DEFAULT_FONT
 
     @property
     def settings(self):
@@ -412,6 +420,28 @@ class ThemeManager(QObject):
     @property
     def committed_settings(self):
         return self._committed
+
+    @property
+    def font_family(self):
+        """Persisted global text-node font choice."""
+        return self._font_family
+
+    @property
+    def committed_font_family(self):
+        return self._committed_font_family
+
+    @property
+    def resolved_text_font_family(self):
+        return resolve_font_family(self._font_family)
+
+    @staticmethod
+    def font_choices():
+        return Typography.available_font_choices()
+
+    @staticmethod
+    def validate_font_family(value):
+        value = str(value or SYSTEM_DEFAULT_FONT).strip()
+        return value or SYSTEM_DEFAULT_FONT
 
     @staticmethod
     def defaults():
@@ -508,9 +538,15 @@ class ThemeManager(QObject):
             "grid_intensity": self._store.value("grid_intensity", DEFAULT_GRID_INTENSITY),
         }
         self._store.endGroup()
+        self._store.beginGroup("font")
+        stored_font = self._store.value("family", SYSTEM_DEFAULT_FONT)
+        self._store.endGroup()
         loaded = self.validate(values)
         self._committed = loaded
+        self._font_family = self.validate_font_family(stored_font)
+        self._committed_font_family = self._font_family
         self._apply(loaded)
+        self.fontChanged.emit()
         return loaded
 
     def preview(self, settings):
@@ -531,6 +567,30 @@ class ThemeManager(QObject):
         self._store.sync()
         self._committed = settings
         return settings
+
+    def preview_font_family(self, value):
+        value = self.validate_font_family(value)
+        if value == self._font_family:
+            return self.resolved_text_font_family
+        self._font_family = value
+        self.fontChanged.emit()
+        return self.resolved_text_font_family
+
+    def commit_font_family(self, value=None):
+        if value is not None:
+            self.preview_font_family(value)
+        self._store.beginGroup("font")
+        self._store.setValue("family", self._font_family)
+        self._store.endGroup()
+        self._store.sync()
+        self._committed_font_family = self._font_family
+        return self._font_family
+
+    def restore_committed_font_family(self):
+        self.preview_font_family(self._committed_font_family)
+
+    def reset_font_family(self):
+        self.preview_font_family(SYSTEM_DEFAULT_FONT)
 
     def restore_committed(self):
         self.preview(self._committed)

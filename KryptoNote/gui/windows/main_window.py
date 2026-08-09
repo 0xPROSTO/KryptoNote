@@ -368,6 +368,8 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
     def _update_overlay_stats(self):
         if not hasattr(self, "overlay"):
             return
+        if self.operation_coordinator.active_kind == "vacuum":
+            return
         stats = self._overlay_stats()
         self.overlay.set_stats(
             stats["node_count"],
@@ -431,6 +433,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             if getattr(self, "title_bar", None)
             else self.menuBar()
         )
+        self._main_menubar = menubar
         file_menu = menubar.addMenu("File")
 
         act_save = QAction("Save\t[Ctrl+S]", self)
@@ -661,7 +664,25 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self._status_protected = False
 
     def _on_progress_updated(self, value: float, message: str):
-        self.progress_bar.set_progress(value, message)
+        is_finalizing = str(message or "").lower().startswith(
+            ("finalizing", "завершение обработки")
+        )
+        if is_finalizing:
+            if (
+                not self.progress_bar.is_active
+                or not self.progress_bar.is_indeterminate
+            ):
+                self.progress_bar.start(message, indeterminate=True)
+            else:
+                self.progress_bar.set_message(message)
+        else:
+            self.progress_bar.set_progress(
+                value,
+                message,
+                animate=(
+                    self.operation_coordinator.active_kind == "graph_clone"
+                ),
+            )
         self.progress_label.setText(message)
         self.progress_label.setVisible(True)
         self.status_label.setVisible(False)
@@ -687,11 +708,14 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
                     "backup",
                     "initial_load",
                     "graph_export",
+                    "graph_clone",
                     "media_import",
                 }
             )
         for action in self._operation_blocked_actions:
             action.setEnabled(enabled)
+        if hasattr(self, "_main_menubar"):
+            self._main_menubar.setEnabled(not (active and kind == "vacuum"))
         if hasattr(self, "search_shortcut"):
             self.search_shortcut.setEnabled(enabled)
         if hasattr(self, "overlay"):
@@ -708,7 +732,12 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
                 self.status_label.setVisible(True)
                 return
             display_message = message or "Database operation in progress..."
-            if not self.progress_bar.is_active:
+            if kind == "vacuum":
+                self.progress_bar.start(
+                    "Optimizing database...", indeterminate=True
+                )
+                display_message = message or "Optimizing database..."
+            elif not self.progress_bar.is_active:
                 self.progress_bar.start(display_message, indeterminate=True)
             else:
                 self.progress_bar.set_message(display_message)
@@ -720,6 +749,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self.progress_bar.finish()
         self.progress_label.setVisible(False)
         self.status_label.setVisible(True)
+        self._schedule_overlay_stats_update()
 
 
     # ── Blocking Progress Overlay ───────────────────────────────────
@@ -845,8 +875,11 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             message = f"Waiting for database lock... retry {attempt}/8"
             self.operation_coordinator.update(token, message)
 
-        def on_success():
-            self._manual_vacuum_finished.emit(True, "Database optimized.")
+        def on_success(result):
+            self._manual_vacuum_finished.emit(
+                True,
+                getattr(result, "message", "Database optimized."),
+            )
 
         def on_error(exc):
             self._manual_vacuum_finished.emit(False, str(exc))
@@ -959,6 +992,8 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             self.canvas_controller.cancel_initial_load()
         elif kind == "graph_export":
             self.canvas_controller.cancel_graph_export()
+        elif kind == "graph_clone":
+            self.canvas_controller.cancel_graph_clone()
         elif kind == "media_import":
             self.canvas_controller.cancel_media_import()
 
@@ -1107,8 +1142,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             finished_signal.emit(success, msg)
 
         try:
-            if create_backup:
-                self.service.commit_changes()
+            self.service.commit_changes()
 
             def run_password_change():
                 if create_backup:
@@ -1216,7 +1250,10 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             or self._is_qml_frame_editor_open()
         )
         if not editor_open:
-            return False
+            return bool(
+                self._canvas_has_keyboard_focus()
+                and self._canvas_graph_shortcut(event)
+            )
         modifiers = event.modifiers()
         is_s_key = key == Qt.Key.Key_S or event.nativeVirtualKey() == 0x53
         if is_s_key and modifiers & Qt.KeyboardModifier.ControlModifier:
@@ -1314,6 +1351,23 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         if search_open:
             return False
 
+        graph_shortcut = self._canvas_graph_shortcut(event)
+        if graph_shortcut:
+            if not self._is_auto_repeat_event(event):
+                {
+                    "copy": lambda: self.canvas_controller.copy_nodes(0),
+                    "paste": self.canvas_controller.paste_nodes,
+                    "system_copy": (
+                        lambda: self.canvas_controller.copy_to_system_clipboard(0)
+                    ),
+                    "system_paste": (
+                        self.canvas_controller.paste_from_system_clipboard
+                    ),
+                    "undo": self.canvas_controller.undo_graph,
+                    "redo": self.canvas_controller.redo_graph,
+                }[graph_shortcut]()
+            return True
+
         if self._is_select_all_shortcut(event):
             self.canvas_controller.select_all_nodes()
             return True
@@ -1363,6 +1417,32 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         except AttributeError:
             native = 0
         return event.key() == Qt.Key.Key_A or native == 0x41
+
+    @staticmethod
+    def _canvas_graph_shortcut(event):
+        modifiers = event.modifiers()
+        if not (modifiers & Qt.KeyboardModifier.ControlModifier):
+            return None
+        if modifiers & (
+            Qt.KeyboardModifier.AltModifier
+            | Qt.KeyboardModifier.MetaModifier
+        ):
+            return None
+        try:
+            native = event.nativeVirtualKey()
+        except AttributeError:
+            native = 0
+        key = event.key()
+        shift = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
+        if key == Qt.Key.Key_C or native == 0x43:
+            return "system_copy" if shift else "copy"
+        if key == Qt.Key.Key_V or native == 0x56:
+            return "system_paste" if shift else "paste"
+        if key == Qt.Key.Key_Z or native == 0x5A:
+            return "redo" if shift else "undo"
+        if (key == Qt.Key.Key_Y or native == 0x59) and not shift:
+            return "redo"
+        return None
 
     def _handle_global_key_release(self, event):
         if self._keyboard_pan_key_name(event.key()) is None:
@@ -1697,6 +1777,11 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             and operation_kind not in {"media_import", "video_import"}
         ):
             event.ignore()
+            if operation_kind == "vacuum":
+                self._handle_status_update(
+                    "Database optimization is still running", "warning"
+                )
+                return
             message = self.operation_coordinator.active_message or operation_kind
             self._handle_status_update(f"Cannot close: {message}", "warning")
             return

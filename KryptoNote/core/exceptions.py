@@ -26,3 +26,8 @@ class DatabaseError(KryptoNoteError):
 class OperationCancelledError(KryptoNoteError):
     """Raised when a cooperative background operation is cancelled."""
     pass
+
+
+class InsufficientDiskSpaceError(DatabaseError):
+    """Raised when a database operation cannot be completed safely."""
+    pass

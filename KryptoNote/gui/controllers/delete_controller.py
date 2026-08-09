@@ -1,6 +1,8 @@
 from PySide6.QtCore import QObject, Signal, Slot
 from PySide6.QtWidgets import QMessageBox
 
+from ...core.exceptions import InsufficientDiskSpaceError
+from ...core.database.operations import DatabaseOperationProgress
 from ..services.operation_coordinator import OperationCoordinator
 
 
@@ -13,7 +15,10 @@ class DeleteController(QObject):
     progress_updated = Signal(float, str)
     progress_finished = Signal(str)
     status_message = Signal(str, str)
-    _node_delete_finished = Signal(object, object)
+    _node_delete_finished = Signal(object, object, bool)
+    _vacuum_finished = Signal(bool, object)
+
+    VACUUM_THRESHOLD_BYTES = 10 * 1024 * 1024
 
     def __init__(self, node_model, connection_model, graph_commands, parent=None,
                  operation_coordinator=None):
@@ -25,6 +30,7 @@ class DeleteController(QObject):
         self._delete_token = None
         self._pending_delete_batch = None
         self._node_delete_finished.connect(self._handle_node_delete_finished)
+        self._vacuum_finished.connect(self._handle_vacuum_finished)
 
     @Slot(int)
     def request_animated_delete(self, node_id):
@@ -52,9 +58,9 @@ class DeleteController(QObject):
             self._pending_delete_batch["completed"].add(node_id)
             if self._pending_delete_batch["completed"] == self._pending_delete_batch["pending"]:
                 batch_ids = list(self._pending_delete_batch["ids"])
-                is_video_batch = self._pending_delete_batch["has_video"]
+                requires_vacuum = self._pending_delete_batch["requires_vacuum"]
                 self._pending_delete_batch = None
-                self._perform_delete_batch(batch_ids, is_video_batch)
+                self._perform_delete_batch(batch_ids, requires_vacuum)
             return
 
         node = self._node_model.get_node_data(node_id)
@@ -68,9 +74,24 @@ class DeleteController(QObject):
                 return
             self._delete_token = token
 
+        requires_vacuum = self._node_requires_vacuum(node)
+
         def on_start():
-            self._operations.update(self._delete_token, "Deleting item...")
-            self.progress_updated.emit(0.5, "Deleting item...")
+            self._operations.update(self._delete_token, "Deleting data...")
+            self.progress_updated.emit(0.0, "Deleting data...")
+
+        def on_progress(current, total, message):
+            snapshot = DatabaseOperationProgress(
+                kind="delete",
+                phase=self._delete_phase(message),
+                determinate=True,
+                current_bytes=current,
+                total_bytes=total,
+                message=message,
+            )
+            value = self._delete_progress_value(snapshot)
+            self._operations.update(self._delete_token, message)
+            self.progress_updated.emit(value, message)
 
         def on_waiting_lock(attempt):
             message = f"Waiting for database lock... retry {attempt}/8"
@@ -85,7 +106,8 @@ class DeleteController(QObject):
                 return
             completion_sent = True
             self._node_delete_finished.emit(
-                [node_id], None if error is None else str(error)
+                [node_id], None if error is None else str(error),
+                requires_vacuum,
             )
 
         try:
@@ -93,16 +115,30 @@ class DeleteController(QObject):
                 node_id,
                 on_start_vacuum=on_start,
                 on_waiting_lock=on_waiting_lock,
+                progress_callback=on_progress,
                 on_success=complete,
                 on_error=complete,
             )
         except Exception as exc:
             complete(exc)
 
-    def _perform_delete_batch(self, node_ids, _has_video):
+    def _perform_delete_batch(self, node_ids, requires_vacuum):
         def on_start():
-            self._operations.update(self._delete_token, "Deleting items...")
-            self.progress_updated.emit(0.5, "Deleting items...")
+            self._operations.update(self._delete_token, "Deleting data...")
+            self.progress_updated.emit(0.0, "Deleting data...")
+
+        def on_progress(current, total, message):
+            snapshot = DatabaseOperationProgress(
+                kind="delete",
+                phase=self._delete_phase(message),
+                determinate=True,
+                current_bytes=current,
+                total_bytes=total,
+                message=message,
+            )
+            value = self._delete_progress_value(snapshot)
+            self._operations.update(self._delete_token, message)
+            self.progress_updated.emit(value, message)
 
         def on_waiting_lock(attempt):
             message = f"Waiting for database lock... retry {attempt}/8"
@@ -118,7 +154,7 @@ class DeleteController(QObject):
                 return
             completion_sent = True
             self._node_delete_finished.emit(
-                ids, None if error is None else str(error)
+                ids, None if error is None else str(error), requires_vacuum
             )
 
         try:
@@ -126,13 +162,14 @@ class DeleteController(QObject):
                 ids,
                 on_start_vacuum=on_start,
                 on_waiting_lock=on_waiting_lock,
+                progress_callback=on_progress,
                 on_success=complete,
                 on_error=complete,
             )
         except Exception as exc:
             complete(exc)
 
-    def _handle_node_delete_finished(self, node_ids, error):
+    def _handle_node_delete_finished(self, node_ids, error, requires_vacuum):
         ids = [int(node_id) for node_id in node_ids]
         if error:
             for node_id in ids:
@@ -149,10 +186,83 @@ class DeleteController(QObject):
         for node_id in ids:
             self._node_model.remove_node(node_id)
 
+        if requires_vacuum:
+            if len(ids) == 1:
+                message = "Item deleted. Optimizing database..."
+            else:
+                message = f"Deleted {len(ids)} items. Optimizing database..."
+            self.status_message.emit(message, "normal")
+            self._start_vacuum_after_delete()
+            return
+
         if len(ids) == 1:
             self.status_message.emit("Item deleted.", "normal")
         else:
             self.status_message.emit(f"Deleted {len(ids)} items.", "normal")
+        self._finish_delete()
+
+    def _start_vacuum_after_delete(self):
+        token = self._operations.transition(
+            self._delete_token,
+            "vacuum",
+            "Optimizing database...",
+            blocking=True,
+        )
+        if token is None:
+            self.status_message.emit(
+                "Item deleted, but database optimization could not start.",
+                "error",
+            )
+            self._finish_delete()
+            return
+        self._delete_token = token
+
+        def on_start():
+            self._operations.update(token, "Optimizing database...")
+
+        def on_waiting_lock(attempt):
+            self._operations.update(
+                token,
+                f"Waiting to optimize database... retry {attempt}/8",
+            )
+
+        def on_success(result):
+            self._vacuum_finished.emit(True, result)
+
+        def on_error(error):
+            self._vacuum_finished.emit(False, error)
+
+        try:
+            self._graph_commands.vacuum_database(
+                on_start=on_start,
+                on_waiting_lock=on_waiting_lock,
+                on_success=on_success,
+                on_error=on_error,
+            )
+        except Exception as exc:
+            self._vacuum_finished.emit(False, exc)
+
+    def _handle_vacuum_finished(self, success, payload):
+        if success:
+            self.status_message.emit(
+                getattr(
+                    payload,
+                    "message",
+                    "Database optimized successfully.",
+                ),
+                "secure",
+            )
+        elif isinstance(payload, InsufficientDiskSpaceError):
+            self.status_message.emit(
+                "Item deleted. Database optimization failed: "
+                "insufficient free space.",
+                "error",
+            )
+        else:
+            self.status_message.emit(
+                f"Item deleted, but database optimization failed: {payload}",
+                "error",
+            )
         self._finish_delete()
 
     @Slot()
@@ -185,14 +295,14 @@ class DeleteController(QObject):
             return
 
         valid_ids = []
-        has_video = False
+        requires_vacuum = False
         for node_id in node_ids:
             node = self._node_model.get_node_data(node_id)
             if not node or node.get("is_deleting"):
                 continue
             valid_ids.append(node_id)
-            if node["type"] == "video":
-                has_video = True
+            if self._node_requires_vacuum(node):
+                requires_vacuum = True
 
         if not valid_ids:
             return
@@ -205,7 +315,7 @@ class DeleteController(QObject):
             "ids": valid_ids,
             "pending": set(valid_ids),
             "completed": set(),
-            "has_video": has_video,
+            "requires_vacuum": requires_vacuum,
         }
         try:
             for node_id in valid_ids:
@@ -227,3 +337,31 @@ class DeleteController(QObject):
         if token is not None:
             self._operations.finish(token)
         self.progress_finished.emit("")
+
+    @classmethod
+    def _node_requires_vacuum(cls, node):
+        return bool(
+            node
+            and (
+                node.get("type") == "video"
+                or int(node.get("total_size") or 0)
+                >= cls.VACUUM_THRESHOLD_BYTES
+            )
+        )
+
+    @staticmethod
+    def _delete_phase(message):
+        text = str(message)
+        if text.startswith("Deleting media blocks"):
+            return "media"
+        if text.startswith("Deleting related"):
+            return "relations"
+        return "commit"
+
+    @staticmethod
+    def _delete_progress_value(progress):
+        if progress.phase == "media":
+            return progress.fraction * 0.8
+        if progress.phase == "relations":
+            return 0.9
+        return 0.98

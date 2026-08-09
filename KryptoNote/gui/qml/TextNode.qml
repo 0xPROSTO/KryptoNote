@@ -46,7 +46,7 @@ Rectangle {
         visible: opacity > 0.01
         opacity: 1.0 - textNode.lodAmount
         color: textNode.appTheme.accentMain
-        font.family: "Segoe UI Semibold"
+        font.family: textNode.appTheme.textFontFamily
         font.pointSize: textNode.titleSize > 0 ? textNode.titleSize : 14
         font.bold: true
         wrapMode: Text.WordWrap
@@ -79,7 +79,7 @@ Rectangle {
         visible: opacity > 0.01
         opacity: 1.0 - textNode.lodAmount
         color: textNode.appTheme.textMain
-        font.family: "Segoe UI"
+        font.family: textNode.appTheme.textFontFamily
         font.pointSize: textNode.textSize > 0 ? textNode.textSize : 12
         textFormat: Text.MarkdownText
         wrapMode: Text.WordWrap
@@ -94,7 +94,7 @@ Rectangle {
         opacity: textNode.lodAmount
         text: textNode.nodeTitle
         color: textNode.appTheme.accentMain
-        font.family: "Segoe UI Semibold"
+        font.family: textNode.appTheme.textFontFamily
         font.bold: true
         font.pointSize: 72
         fontSizeMode: Text.Fit

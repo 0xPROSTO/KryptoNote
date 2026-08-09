@@ -564,7 +564,15 @@ class ProjectLauncher(QDialog):
         def authenticate_in_worker():
             db_conn = None
             try:
-                db_conn = DatabaseConnection(context["db_path"])
+                if context["is_new"]:
+                    db_conn = DatabaseConnection(context["db_path"])
+                else:
+                    db_conn = DatabaseConnection(
+                        context["db_path"],
+                        initialize=False,
+                        must_exist=True,
+                        writable=False,
+                    )
                 crypto = CryptoManager()
                 if context["is_new"]:
                     AuthService.initialize_v3_project(
@@ -581,6 +589,10 @@ class ProjectLauncher(QDialog):
                         progress_callback=progress_signal.emit,
                         allow_unverifiable_legacy=allow_unverifiable_legacy,
                     )
+                db_conn.recover_interrupted_operations(
+                    cancel_check=cancel_check,
+                    progress_callback=progress_signal.emit,
+                )
                 if cancel_check():
                     raise OperationCancelledError("Operation cancelled")
                 result = {"status": "success", "crypto": crypto}
@@ -648,7 +660,11 @@ class ProjectLauncher(QDialog):
             db_conn = None
             repo = None
             try:
-                db_conn = DatabaseConnection(context["db_path"])
+                db_conn = DatabaseConnection(
+                    context["db_path"],
+                    initialize=False,
+                    must_exist=True,
+                )
                 repo = NodeRepository(db_conn, result["crypto"])
                 service = NodeService(repo)
                 self.auth_data = (

@@ -9,6 +9,7 @@ class ThemeBridge(QObject):
 
     paletteChanged = Signal()
     canvasAppearanceChanged = Signal()
+    fontChanged = Signal()
 
     def __init__(self, parent=None, manager=None):
         super().__init__(parent)
@@ -17,6 +18,7 @@ class ThemeBridge(QObject):
         self._manager.canvasAppearanceChanged.connect(
             self.canvasAppearanceChanged.emit
         )
+        self._manager.fontChanged.connect(self.fontChanged.emit)
 
     bgCanvas = Property(str, lambda self: Palette.BG_CANVAS, notify=paletteChanged)
     bgPanel = Property(str, lambda self: Palette.BG_PANEL, notify=paletteChanged)
@@ -87,6 +89,12 @@ class ThemeBridge(QObject):
         bool,
         lambda self: self._manager.settings.grid_intensity != "off",
         notify=canvasAppearanceChanged,
+    )
+
+    textFontFamily = Property(
+        str,
+        lambda self: self._manager.resolved_text_font_family,
+        notify=fontChanged,
     )
 
     connectionStyle = Property(

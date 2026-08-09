@@ -29,11 +29,12 @@ class AutoFitService:
         title_size = node.get("title_size", 14) or 14
         text_size = node.get("text_size", 10) or 10
 
-        title_font = QFont(Theme.Typography.FONT_DISPLAY, title_size, QFont.Weight.Bold)
+        text_family = Theme.Typography.current_text_family()
+        title_font = QFont(text_family, title_size, QFont.Weight.Bold)
         title_fm = QFontMetricsF(title_font)
         title_w = title_fm.horizontalAdvance(title) * 1.05 if title else 0.0  # QML renders ~5% wider
 
-        body_font = QFont(Theme.Typography.FONT_BODY, text_size)
+        body_font = QFont(text_family, text_size)
         body_fm = QFontMetricsF(body_font)
 
         avg_char_w = body_fm.averageCharWidth()

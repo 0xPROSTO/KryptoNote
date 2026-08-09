@@ -1,8 +1,9 @@
 from PySide6.QtCore import QPoint, QRectF, QSize, Qt, QSignalBlocker, QTimer
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QButtonGroup,
     QColorDialog,
+    QComboBox,
     QDialog,
     QFrame,
     QGridLayout,
@@ -33,6 +34,11 @@ from KryptoNote.gui.theme.theme_manager import (
     ThemeManager,
     contrast_ratio,
     get_theme_manager,
+)
+from KryptoNote.gui.theme.typography import (
+    SYSTEM_DEFAULT_FONT,
+    resolve_font_family,
+    system_font_family,
 )
 
 
@@ -140,6 +146,8 @@ class ThemeDialog(QDialog):
         self._project_store = project_store
         self._original_active = self._manager.settings
         self._global_original = self._manager.committed_settings
+        self._original_font_family = self._manager.font_family
+        self._font_draft = self._original_font_family
         profile = (
             self._project_store.load_project_appearance()
             if self._project_store is not None
@@ -227,6 +235,8 @@ class ThemeDialog(QDialog):
         settings_layout.setContentsMargins(0, 0, 0, 0)
         settings_layout.setSpacing(7)
         self._build_tone_section(settings_layout)
+        self._separator(settings_layout)
+        self._build_font_section(settings_layout)
         self._separator(settings_layout)
         self._build_accent_section(settings_layout)
         self._separator(settings_layout)
@@ -326,6 +336,51 @@ class ThemeDialog(QDialog):
             self._tone_buttons[tone] = button
             grid.addWidget(button, index // 4, index % 4)
         layout.addLayout(grid)
+
+    def _build_font_section(self, layout):
+        self._section_header(layout, "Text node font", self._reset_font)
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(8)
+        label = QLabel("Global font")
+        label.setProperty("controlLabel", True)
+        row.addWidget(label)
+
+        self._font_combo = QComboBox()
+        self._font_combo.setObjectName("font_combo")
+        self._font_combo.setAccessibleName("Global text node font")
+        for display, value in self._manager.font_choices():
+            self._font_combo.addItem(display, value)
+            index = self._font_combo.count() - 1
+            if value == SYSTEM_DEFAULT_FONT:
+                preview_family = system_font_family()
+            else:
+                preview_family = value
+            self._font_combo.setItemData(
+                index,
+                QFont(preview_family),
+                Qt.ItemDataRole.FontRole,
+            )
+        if self._font_combo.findData(self._font_draft) < 0:
+            self._font_combo.addItem(
+                f"{self._font_draft} (unavailable)",
+                self._font_draft,
+            )
+            self._font_combo.setItemData(
+                self._font_combo.count() - 1,
+                QFont(resolve_font_family(self._font_draft)),
+                Qt.ItemDataRole.FontRole,
+            )
+        self._font_combo.currentIndexChanged.connect(self._on_font_changed)
+        row.addWidget(self._font_combo, 1)
+
+        hint = QLabel(
+            "Global only; unavailable fonts fall back to the system font."
+        )
+        hint.setProperty("controlHint", True)
+        hint.setWordWrap(True)
+        row.addWidget(hint, 1)
+        layout.addLayout(row)
 
     def _build_accent_section(self, layout):
         self._section_header(layout, "Accent color", self._reset_accent)
@@ -580,6 +635,14 @@ class ThemeDialog(QDialog):
         self._manager.preview(self._draft)
         self._sync_controls()
 
+    def _on_font_changed(self, index):
+        value = self._font_combo.itemData(index)
+        if value is None:
+            return
+        self._font_draft = str(value)
+        self._manager.preview_font_family(self._font_draft)
+        self._sync_controls()
+
     def _switch_scope(self, scope):
         if scope not in self._drafts or scope == self._scope:
             return
@@ -593,6 +656,11 @@ class ThemeDialog(QDialog):
 
     def _reset_tone(self):
         self._set_draft(tone="dark_2")
+
+    def _reset_font(self):
+        self._font_draft = SYSTEM_DEFAULT_FONT
+        self._manager.reset_font_family()
+        self._sync_controls()
 
     def _reset_accent(self):
         self._set_draft(accent_seed=DEFAULT_ACCENT)
@@ -615,6 +683,8 @@ class ThemeDialog(QDialog):
         self._draft = ThemeManager.defaults()
         self._drafts[self._scope] = self._draft
         self._manager.preview(self._draft)
+        self._font_draft = SYSTEM_DEFAULT_FONT
+        self._manager.reset_font_family()
         self._sync_controls()
 
     def _choose_custom_color(self):
@@ -660,9 +730,15 @@ class ThemeDialog(QDialog):
             + list(self._anchor_buttons.values())
         ):
             blockers.append(QSignalBlocker(button))
+        blockers.append(QSignalBlocker(self._font_combo))
 
         self._scope_buttons[self._scope].setChecked(True)
         self._tone_buttons[self._draft.tone].setChecked(True)
+        font_index = self._font_combo.findData(self._font_draft)
+        if font_index < 0:
+            font_index = self._font_combo.findData(SYSTEM_DEFAULT_FONT)
+            self._font_draft = SYSTEM_DEFAULT_FONT
+        self._font_combo.setCurrentIndex(font_index)
         for color, button in self._accent_buttons.items():
             button.setChecked(self._draft.accent_seed == color)
         self._style_buttons[self._draft.connection_style].setChecked(True)
@@ -752,6 +828,7 @@ class ThemeDialog(QDialog):
                     },
                 )
             self._manager.commit(global_settings)
+            self._manager.commit_font_family(self._font_draft)
             self._manager.preview(
                 project_settings
                 if self._scope == "project"
@@ -759,6 +836,7 @@ class ThemeDialog(QDialog):
             )
         except Exception as error:
             self._manager.preview(self._original_active)
+            self._manager.preview_font_family(self._original_font_family)
             QMessageBox.critical(
                 self,
                 "Appearance Settings",
@@ -773,12 +851,14 @@ class ThemeDialog(QDialog):
         self._pending_color = None
         if not self._applied:
             self._manager.preview(self._original_active)
+            self._manager.preview_font_family(self._original_font_family)
             self._draft = self._original_active
         super().reject()
 
     def closeEvent(self, event):
         if not self._applied:
             self._manager.preview(self._original_active)
+            self._manager.preview_font_family(self._original_font_family)
         super().closeEvent(event)
 
     def mousePressEvent(self, event):

@@ -5,6 +5,7 @@ import time
 from cryptography.exceptions import InvalidTag
 
 from ..core.crypto import CryptoManager
+from ..core.database.connection import open_sqlite_connection
 from ..core.exceptions import AuthError, OperationCancelledError
 from .auth_service import AuthService
 
@@ -134,9 +135,9 @@ class PasswordChangeService:
         for attempt in range(1, 9):
             c = None
             try:
-                c = sqlite3.connect(db_path, timeout=2.0)
-                c.execute("PRAGMA busy_timeout=2000;")
-                c.execute("PRAGMA journal_mode=WAL;")
+                c = open_sqlite_connection(
+                    db_path, timeout=2.0, must_exist=True
+                )
                 return c
             except sqlite3.OperationalError as e:
                 if c is not None:

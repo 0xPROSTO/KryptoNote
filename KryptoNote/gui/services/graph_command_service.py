@@ -14,6 +14,7 @@ class GraphCommandService:
         on_start_vacuum=None,
         on_finish_vacuum=None,
         on_waiting_lock=None,
+        progress_callback=None,
         on_success=None,
         on_error=None,
     ):
@@ -22,6 +23,7 @@ class GraphCommandService:
             on_start_vacuum=on_start_vacuum,
             on_finish_vacuum=on_finish_vacuum,
             on_waiting_lock=on_waiting_lock,
+            progress_callback=progress_callback,
             on_success=on_success,
             on_error=on_error,
         )
@@ -32,6 +34,7 @@ class GraphCommandService:
         on_start_vacuum=None,
         on_finish_vacuum=None,
         on_waiting_lock=None,
+        progress_callback=None,
         on_success=None,
         on_error=None,
     ):
@@ -48,6 +51,21 @@ class GraphCommandService:
             on_start_vacuum=on_start_vacuum,
             on_finish_vacuum=on_finish_vacuum,
             on_waiting_lock=on_waiting_lock,
+            progress_callback=progress_callback,
+            on_success=on_success,
+            on_error=on_error,
+        )
+
+    def vacuum_database(
+        self,
+        on_start=None,
+        on_waiting_lock=None,
+        on_success=None,
+        on_error=None,
+    ):
+        return self._node_service.vacuum_database(
+            on_start_vacuum=on_start,
+            on_waiting_lock=on_waiting_lock,
             on_success=on_success,
             on_error=on_error,
         )
@@ -61,10 +79,9 @@ class GraphCommandService:
         if self._link_start_id != node_id:
             if not self._conn_model.connection_exists(self._link_start_id, node_id):
                 conn_id = self._node_service.add_connection(
-                    self._link_start_id, node_id, commit=False
+                    self._link_start_id, node_id, commit=True
                 )
                 self._conn_model.add_connection(conn_id, self._link_start_id, node_id)
-                self._pending_commits = True
                 status = ("LINKED! Chain moves to new node.", "secure")
             else:
                 status = None

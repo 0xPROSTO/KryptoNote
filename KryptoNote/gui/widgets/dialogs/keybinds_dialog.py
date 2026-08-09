@@ -175,6 +175,18 @@ class KeybindsDialog(QDialog):
                 ],
             ),
             (
+                "Clipboard & History",
+                [
+                    (["Ctrl", "C"], "Copy selected nodes to the internal clipboard."),
+                    (["Ctrl", "V"], "Paste nodes from the internal clipboard."),
+                    (["Ctrl", "Shift", "C"], "Copy selected text and photos to the system clipboard."),
+                    (["Ctrl", "Shift", "V"], "Paste system text or an image as nodes."),
+                    (["Ctrl", "Z"], "Undo the last duplicate or internal paste."),
+                    (["Ctrl", "Y"], "Redo the last undone duplicate or internal paste."),
+                    (["Ctrl", "Shift", "Z"], "Redo on platforms using the alternate shortcut."),
+                ],
+            ),
+            (
                 "Editor",
                 [
                     (["Ctrl", "S"], "Save text editor changes and close the editor."),

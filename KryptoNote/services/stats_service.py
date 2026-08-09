@@ -2,6 +2,8 @@ import datetime
 import os
 from collections import Counter
 
+from ..core.database.operations import read_database_space_stats
+
 
 class KnowledgeStatsService:
     """Build dashboard stats from already loaded nodes and local DB files."""
@@ -12,13 +14,30 @@ class KnowledgeStatsService:
         nodes = list(nodes or [])
         node_count = len(nodes)
         link_count = int(link_count or 0)
-        db_size = KnowledgeStatsService.database_size(db_path)
+        space = read_database_space_stats(db_path)
+        db_size = space.physical_bytes
         content_size = KnowledgeStatsService.content_size(nodes)
         return {
             "node_count": node_count,
             "link_count": link_count,
             "db_size": db_size,
             "db_size_label": KnowledgeStatsService.format_size(db_size),
+            "db_main_size": space.main_bytes,
+            "db_main_size_label": KnowledgeStatsService.format_size(
+                space.main_bytes
+            ),
+            "db_wal_size": space.wal_bytes,
+            "db_wal_size_label": KnowledgeStatsService.format_size(
+                space.wal_bytes
+            ),
+            "db_shm_size": space.shm_bytes,
+            "db_shm_size_label": KnowledgeStatsService.format_size(
+                space.shm_bytes
+            ),
+            "db_reusable_size": space.reusable_bytes,
+            "db_reusable_size_label": KnowledgeStatsService.format_size(
+                space.reusable_bytes
+            ),
             "content_size": content_size,
             "content_size_label": KnowledgeStatsService.format_size(content_size),
         }
@@ -50,7 +69,8 @@ class KnowledgeStatsService:
         if not connected_node_ids and link_count:
             connected_node_ids = set()
         orphan_nodes = max(0, node_count - len(connected_node_ids))
-        db_size = KnowledgeStatsService.database_size(db_path)
+        space = read_database_space_stats(db_path)
+        db_size = space.physical_bytes
         backup = KnowledgeStatsService.latest_backup(db_path)
         created_at = KnowledgeStatsService.project_created_at(nodes, db_path)
         updated_at = KnowledgeStatsService.last_modified_at(nodes, db_path)
@@ -60,6 +80,22 @@ class KnowledgeStatsService:
             "link_count": link_count,
             "db_size": db_size,
             "db_size_label": KnowledgeStatsService.format_size(db_size),
+            "db_main_size": space.main_bytes,
+            "db_main_size_label": KnowledgeStatsService.format_size(
+                space.main_bytes
+            ),
+            "db_wal_size": space.wal_bytes,
+            "db_wal_size_label": KnowledgeStatsService.format_size(
+                space.wal_bytes
+            ),
+            "db_shm_size": space.shm_bytes,
+            "db_shm_size_label": KnowledgeStatsService.format_size(
+                space.shm_bytes
+            ),
+            "db_reusable_size": space.reusable_bytes,
+            "db_reusable_size_label": KnowledgeStatsService.format_size(
+                space.reusable_bytes
+            ),
             "content_size": content_size,
             "content_size_label": KnowledgeStatsService.format_size(content_size),
             "media_size": media_size,

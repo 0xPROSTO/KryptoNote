@@ -167,6 +167,7 @@ class ImportExportController(QObject):
         self._media_import_token = token
         thread = None
         try:
+            self._service.commit_changes()
             thread = QThread(self)
             worker = MediaImportWorker(
                 db_path,
@@ -205,10 +206,13 @@ class ImportExportController(QObject):
                 thread.deleteLater()
             QMessageBox.critical(None, "Import Error", str(exc))
 
-    @Slot(float, str)
-    def _on_async_media_import_progress(self, value, message):
+    @Slot(object)
+    def _on_async_media_import_progress(self, progress):
+        message = progress.message
         self._operations.update(self._media_import_token, message)
-        self.progress_updated.emit(value, message)
+        self.progress_updated.emit(
+            min(0.995, progress.fraction), message
+        )
 
     @Slot(object)
     def _on_async_media_item_imported(self, item):

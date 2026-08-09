@@ -90,7 +90,14 @@ class DashboardDialog(QDialog):
             ("Media nodes", self.stats.get("media_node_count", 0)),
             ("Text characters", self.stats.get("text_chars_label", "0")),
             ("Text words", self.stats.get("text_words_label", "0")),
-            ("DB file", self.stats.get("db_size_label", "0 B")),
+            ("Physical DB size", self.stats.get("db_size_label", "0 B")),
+            ("Main DB file", self.stats.get("db_main_size_label", "0 B")),
+            ("WAL file", self.stats.get("db_wal_size_label", "0 B")),
+            ("SHM file", self.stats.get("db_shm_size_label", "0 B")),
+            (
+                "Reusable inside DB",
+                self.stats.get("db_reusable_size_label", "0 B"),
+            ),
             ("Media payload", self.stats.get("media_size_label", "0 B")),
             ("Last backup", self.stats.get("last_backup_label", "Never")),
         ]

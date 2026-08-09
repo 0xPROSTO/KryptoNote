@@ -8,7 +8,7 @@ Popup {
     id: contextPopup
     required property var canvasController
     required property var appTheme
-    width: 160
+    width: 236
     parent: Overlay.overlay
     padding: 4
     modal: true
@@ -68,7 +68,7 @@ Popup {
 
     contentItem: Column {
         spacing: 2
-        width: parent ? parent.width : 160
+        width: parent ? parent.width : 236
 
         MenuButton {
             visible: contextPopup.targetKind === "connection"
@@ -244,6 +244,76 @@ Popup {
         }
 
         MenuButton {
+            text: "Duplicate"
+            iconSource: "../assets/icons/add.svg"
+            visible: contextPopup.targetKind === "node"
+            onClicked: {
+                contextPopup.canvasController.duplicate_node(contextPopup.nodeId)
+                contextPopup.close()
+            }
+        }
+
+        MenuButton {
+            text: "Copy"
+            iconSource: "../assets/icons/export.svg"
+            visible: contextPopup.targetKind === "node"
+            onClicked: {
+                contextPopup.canvasController.copy_nodes(contextPopup.nodeId)
+                contextPopup.close()
+            }
+        }
+
+        MenuButton {
+            text: "Paste"
+            iconSource: "../assets/icons/open.svg"
+            visible: contextPopup.targetKind === "node"
+            onClicked: {
+                contextPopup.canvasController.paste_nodes()
+                contextPopup.close()
+            }
+        }
+
+        Rectangle {
+            width: parent.width - 8
+            height: 1
+            visible: contextPopup.targetKind === "node"
+            color: contextPopup.appTheme.borderDefault
+            anchors.horizontalCenter: parent.horizontalCenter
+        }
+
+        MenuButton {
+            text: "Copy to System Clipboard"
+            iconSource: "../assets/icons/export.svg"
+            visible: contextPopup.targetKind === "node"
+                     && (contextPopup.nodeType === "text"
+                         || contextPopup.nodeType === "image")
+            onClicked: {
+                contextPopup.canvasController.copy_to_system_clipboard(
+                    contextPopup.nodeId
+                )
+                contextPopup.close()
+            }
+        }
+
+        MenuButton {
+            text: "Paste from System Clipboard"
+            iconSource: "../assets/icons/open.svg"
+            visible: contextPopup.targetKind === "node"
+            onClicked: {
+                contextPopup.canvasController.paste_from_system_clipboard()
+                contextPopup.close()
+            }
+        }
+
+        Rectangle {
+            width: parent.width - 8
+            height: 1
+            visible: contextPopup.targetKind === "node"
+            color: contextPopup.appTheme.borderDefault
+            anchors.horizontalCenter: parent.horizontalCenter
+        }
+
+        MenuButton {
             id: tagsMenuButton
             text: "Tags…"
             iconSource: "../assets/icons/tag.svg"
@@ -296,7 +366,7 @@ Popup {
 
     component MenuButton: Rectangle {
         id: menuButton
-        width: parent ? parent.width : 152
+        width: parent ? parent.width : 228
         height: 28
         activeFocusOnTab: true
         color: menuMouseArea.containsMouse ? contextPopup.appTheme.bgControlHover

@@ -128,8 +128,11 @@ class BlockEncryptedStream(QIODevice):
                     chunk_idx = self._read_pos // self.chunk_size
                     offset_in_chunk = self._read_pos % self.chunk_size
                     self.cursor.execute(
-                        "SELECT data FROM media_chunks "
-                        "WHERE item_id=? AND chunk_index=?",
+                        "SELECT media_chunks.data FROM media_chunks "
+                        "JOIN items ON items.id=media_chunks.item_id "
+                        "WHERE media_chunks.item_id=? "
+                        "AND media_chunks.chunk_index=? "
+                        "AND items.storage_state='ready'",
                         (self.item_id, chunk_idx),
                     )
 

@@ -75,6 +75,23 @@ class OperationCoordinator(QObject):
         self.state_changed.emit(*state)
         return True
 
+    def transition(self, token, kind, message="", blocking=True):
+        """Atomically replace the active operation without an idle UI frame."""
+        kind = str(kind).strip()
+        if not kind:
+            raise ValueError("Operation kind cannot be empty")
+        with self._lock:
+            if not self._owns_unlocked(token):
+                return None
+            self._sequence += 1
+            replacement = OperationToken(self._owner, self._sequence, kind)
+            self._token = replacement
+            self._message = str(message)
+            self._blocking = bool(blocking)
+            state = self._state_unlocked()
+        self.state_changed.emit(*state)
+        return replacement
+
     def set_blocking(self, token, blocking):
         with self._lock:
             if not self._owns_unlocked(token):

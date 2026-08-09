@@ -30,7 +30,9 @@ class AuthService:
         if mode not in {"create", "open"}:
             raise ValueError(f"Unsupported authentication mode: {mode}")
 
-        salt = None
+        crypto = CryptoManager()
+        db_name = os.path.basename(db_path)
+        db_conn = None
         if mode == "open":
             try:
                 salt = DatabaseConnection.read_metadata_readonly(
@@ -44,19 +46,28 @@ class AuthService:
                 raise AuthError(
                     "Corrupted database: missing authentication salt"
                 )
-
-        db_conn = DatabaseConnection(db_path)
+            db_conn = DatabaseConnection(
+                db_path,
+                initialize=False,
+                must_exist=True,
+                writable=False,
+            )
+        else:
+            password = AuthService._request_new_password(
+                db_name, password_provider
+            )
+            db_conn = DatabaseConnection(db_path)
         try:
-            crypto = CryptoManager()
-            db_name = os.path.basename(db_path)
             if mode == "create":
-                AuthService.create_new_password(
-                    db_conn, crypto, db_name, password_provider
+                AuthService.initialize_v3_project(
+                    db_conn, crypto, password
                 )
             else:
                 AuthService.verify_existing_password(
                     db_conn, crypto, salt, db_name, password_provider
                 )
+
+            db_conn.recover_interrupted_operations()
 
             repo = NodeRepository(db_conn, crypto)
             return db_conn, crypto, repo, NodeService(repo)
@@ -69,6 +80,12 @@ class AuthService:
 
     @staticmethod
     def create_new_password(db_conn, crypto, db_name, provider):
+        password = AuthService._request_new_password(db_name, provider)
+        AuthService.initialize_v3_project(db_conn, crypto, password)
+        return db_conn.get_salt()
+
+    @staticmethod
+    def _request_new_password(db_name, provider):
         error_msg = None
         while True:
             pwd1, ok1 = provider("create", db_name, error_msg)
@@ -78,10 +95,7 @@ class AuthService:
             if not ok2:
                 raise AuthError("Password entry cancelled")
             if pwd1 == pwd2:
-                AuthService.initialize_v3_project(
-                    db_conn, crypto, pwd1
-                )
-                return db_conn.get_salt()
+                return pwd1
             error_msg = "Passwords do not match"
 
     @staticmethod
@@ -129,6 +143,8 @@ class AuthService:
     ):
         version = AuthService.crypto_version(db_conn)
         last_error = None
+        verified_salt = None
+        legacy_crypto = None
         for candidate_salt in AuthService.salt_candidates(salt):
             try:
                 if version == 3:
@@ -149,32 +165,90 @@ class AuthService:
                         cancel_check,
                     )
                     AuthService._verify_auth_check(crypto, db_conn, version=2)
-                    if before_legacy_migration:
-                        before_legacy_migration()
-                    AuthService.migrate_v2_to_v3(
-                        db_conn,
-                        crypto,
-                        cancel_check=cancel_check,
-                        progress_callback=progress_callback,
-                    )
                 else:
-                    AuthService.unlock_and_migrate_legacy(
+                    legacy_crypto = AuthService._verify_legacy_password(
                         db_conn,
-                        crypto,
                         password,
                         candidate_salt,
-                        before_migration=before_legacy_migration,
                         cancel_check=cancel_check,
-                        progress_callback=progress_callback,
                         allow_unverifiable=allow_unverifiable_legacy,
                     )
-                AuthService._verify_auth_check(crypto, db_conn, version=3)
-                return
+                verified_salt = candidate_salt
+                break
             except UnverifiableLegacyPassword:
                 raise
             except (InvalidTag, CryptoError, TypeError, ValueError) as exc:
                 last_error = exc
-        raise InvalidTag() from last_error
+        if verified_salt is None:
+            raise InvalidTag() from last_error
+
+        # Credentials are proven while the connection is read-only. Only now
+        # is the database reopened for schema/encryption migrations.
+        if hasattr(db_conn, "promote_to_writable"):
+            db_conn.promote_to_writable()
+        current_version = AuthService.crypto_version(db_conn)
+        if current_version != version:
+            raise AuthError("Database changed while it was being unlocked")
+        if version in {2, 3}:
+            AuthService._unlock_envelope_database(
+                db_conn,
+                crypto,
+                password,
+                verified_salt,
+                cancel_check,
+            )
+            AuthService._verify_auth_check(
+                crypto, db_conn, version=version
+            )
+        else:
+            legacy_crypto = AuthService._verify_legacy_password(
+                db_conn,
+                password,
+                verified_salt,
+                cancel_check=cancel_check,
+                allow_unverifiable=allow_unverifiable_legacy,
+            )
+
+        backup_created = False
+
+        def ensure_migration_backup():
+            nonlocal backup_created
+            if backup_created:
+                return
+            if before_legacy_migration:
+                before_legacy_migration()
+            db_path = getattr(db_conn, "db_path", ":memory:")
+            if db_path != ":memory:":
+                AuthService.create_pre_migration_backup(
+                    db_path, cancel_check=cancel_check
+                )
+            backup_created = True
+
+        db_conn.initialize_schema(
+            before_destructive_migration=ensure_migration_backup
+        )
+
+        if version == 2:
+            ensure_migration_backup()
+            AuthService.migrate_v2_to_v3(
+                db_conn,
+                crypto,
+                cancel_check=cancel_check,
+                progress_callback=progress_callback,
+                backup_already_created=backup_created,
+            )
+        elif version == 1:
+            ensure_migration_backup()
+            AuthService.migrate_legacy_to_v3(
+                db_conn,
+                legacy_crypto,
+                crypto,
+                password,
+                cancel_check=cancel_check,
+                progress_callback=progress_callback,
+                backup_already_created=backup_created,
+            )
+        AuthService._verify_auth_check(crypto, db_conn, version=3)
 
     @staticmethod
     def crypto_version(db_conn):
@@ -397,6 +471,32 @@ class AuthService:
         progress_callback=None,
         allow_unverifiable=False,
     ):
+        legacy_crypto = AuthService._verify_legacy_password(
+            db_conn,
+            password,
+            salt,
+            cancel_check=cancel_check,
+            allow_unverifiable=allow_unverifiable,
+        )
+        if before_migration:
+            before_migration()
+        AuthService.migrate_legacy_to_v3(
+            db_conn,
+            legacy_crypto,
+            crypto,
+            password,
+            cancel_check=cancel_check,
+            progress_callback=progress_callback,
+        )
+
+    @staticmethod
+    def _verify_legacy_password(
+        db_conn,
+        password,
+        salt,
+        cancel_check=None,
+        allow_unverifiable=False,
+    ):
         AuthService._raise_if_cancelled(cancel_check)
         legacy_crypto = CryptoManager()
         legacy_crypto.derive_key(password, salt)
@@ -414,16 +514,7 @@ class AuthService:
                 legacy_crypto,
                 allow_unverifiable=allow_unverifiable,
             )
-        if before_migration:
-            before_migration()
-        AuthService.migrate_legacy_to_v3(
-            db_conn,
-            legacy_crypto,
-            crypto,
-            password,
-            cancel_check=cancel_check,
-            progress_callback=progress_callback,
-        )
+        return legacy_crypto
 
     @staticmethod
     def _verify_legacy_payload_decryptable(
@@ -494,6 +585,7 @@ class AuthService:
         crypto,
         cancel_check=None,
         progress_callback=None,
+        backup_already_created=False,
     ):
         AuthService._migrate_payloads_to_v3(
             db_conn,
@@ -503,6 +595,7 @@ class AuthService:
             replace_envelope=False,
             cancel_check=cancel_check,
             progress_callback=progress_callback,
+            backup_already_created=backup_already_created,
         )
 
     @staticmethod
@@ -513,6 +606,7 @@ class AuthService:
         password,
         cancel_check=None,
         progress_callback=None,
+        backup_already_created=False,
     ):
         AuthService._migrate_payloads_to_v3(
             db_conn,
@@ -522,6 +616,7 @@ class AuthService:
             replace_envelope=True,
             cancel_check=cancel_check,
             progress_callback=progress_callback,
+            backup_already_created=backup_already_created,
         )
 
     # Compatibility name retained for integrations built against 3.2.x.
@@ -564,11 +659,12 @@ class AuthService:
         replace_envelope,
         cancel_check=None,
         progress_callback=None,
+        backup_already_created=False,
     ):
         AuthService._raise_if_cancelled(cancel_check)
         db_conn.conn.execute("PRAGMA secure_delete=ON;")
         db_path = getattr(db_conn, "db_path", ":memory:")
-        if db_path != ":memory:":
+        if db_path != ":memory:" and not backup_already_created:
             db_conn.conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
             AuthService.create_pre_migration_backup(
                 db_path, cancel_check=cancel_check

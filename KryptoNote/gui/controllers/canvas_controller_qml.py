@@ -1,17 +1,35 @@
-from PySide6.QtCore import QObject, Signal, Slot, Property, QTimer
-from PySide6.QtGui import QColor
+import re
+
+from PySide6.QtCore import (
+    QByteArray,
+    QBuffer,
+    QIODevice,
+    QMimeData,
+    QObject,
+    Signal,
+    Slot,
+    Property,
+    QTimer,
+    QThread,
+    Qt,
+)
+from PySide6.QtGui import QColor, QGuiApplication, QImage
 from PySide6.QtWidgets import QLineEdit
 
 from ...config import Config
 from ..theme.palette import Palette
 from ..services.auto_fit_service import AutoFitService
 from ..services.graph_command_service import GraphCommandService
+from ..services.graph_clone_worker import GraphCloneWorker
 from ..services.operation_coordinator import OperationCoordinator
 from .delete_controller import DeleteController
 from .import_export_controller import ImportExportController
 
 
 class QmlCanvasController(QObject):
+    _SYSTEM_MIXED_MIME = "application/x-kryptonote-mixed-selection"
+    _SYSTEM_TITLE_RE = re.compile(r"^\s*##[ \t]+(.+?)\s*$")
+
     status_message = Signal(str, str)
     progress_updated = Signal(float, str)
     progress_finished = Signal(str)
@@ -22,6 +40,7 @@ class QmlCanvasController(QObject):
     open_media_viewer_requested = Signal(int)  # node_id
     initial_load_failed = Signal(str)
     initial_load_finished = Signal()
+    _graph_delete_finished = Signal(object, object, str)
 
     def __init__(self, node_model, connection_model, service, parent=None,
                  operation_coordinator=None):
@@ -43,6 +62,17 @@ class QmlCanvasController(QObject):
         self._initial_tags_by_item = {}
         self._initial_loaded = 0
         self._initial_total = 0
+        self._last_graph_copy_summary = None
+        self._graph_paste_count = 0
+        self._graph_history = []
+        self._graph_redo = []
+        self._pending_graph_history = None
+        self._graph_clone_thread = None
+        self._graph_clone_worker = None
+        self._graph_clone_token = None
+        self._graph_delete_token = None
+        self._pending_graph_clone = None
+        self._graph_delete_finished.connect(self._on_graph_delete_finished)
 
         # --- Delegate controllers ---
         self._delete_ctrl = DeleteController(
@@ -294,14 +324,17 @@ class QmlCanvasController(QObject):
 
     def create_text_node_at(
             self, x, y, title, content, title_size=14, text_size=10,
-            auto_fit_pending=False, draft=False, auto_fit_now=True
+            auto_fit_pending=False, draft=False, auto_fit_now=True,
+            commit=True, created_ids=None,
     ):
         """Actually create the node after editor confirms."""
         w, h = Config.NODE_DEFAULT_WIDTH, Config.NODE_DEFAULT_HEIGHT
         rid = self._service.add_item(
             "text", x, y, w, h, title=title, text=content,
-            title_size=title_size, text_size=text_size
+            title_size=title_size, text_size=text_size, commit=commit,
         )
+        if created_ids is not None:
+            created_ids.append(rid)
         self._node_model.add_node(
             rid, "text", x, y, w, h,
             title=title, content=content,
@@ -364,13 +397,59 @@ class QmlCanvasController(QObject):
         return self._import_export_ctrl.has_active_synchronous_import()
 
     def has_active_background_jobs(self):
-        return self._import_export_ctrl.has_active_background_jobs()
+        return (
+            self._import_export_ctrl.has_active_background_jobs()
+            or self.has_active_graph_clone()
+        )
 
     def cancel_media_import(self):
         return self._import_export_ctrl.cancel_media_import()
 
     def shutdown_background_jobs(self, timeout_ms=15000):
-        return self._import_export_ctrl.shutdown_background_jobs(timeout_ms)
+        graph_stopped = True
+        thread = self._graph_clone_thread
+        if thread is not None:
+            try:
+                if thread.isRunning():
+                    thread.requestInterruption()
+                    thread.quit()
+                    graph_stopped = bool(thread.wait(timeout_ms))
+            except RuntimeError:
+                graph_stopped = True
+            if graph_stopped:
+                self._clear_active_graph_clone(thread, report_unexpected=False)
+        delegated_stopped = self._import_export_ctrl.shutdown_background_jobs(
+            timeout_ms
+        )
+        return graph_stopped and delegated_stopped
+
+    def has_active_graph_clone(self):
+        thread = self._graph_clone_thread
+        if thread is None:
+            return False
+        try:
+            return thread.isRunning()
+        except RuntimeError:
+            self._clear_active_graph_clone(thread)
+            return False
+
+    @Slot(result=bool)
+    def cancel_graph_clone(self):
+        thread = self._graph_clone_thread
+        if thread is None:
+            return False
+        try:
+            if not thread.isRunning():
+                return False
+            thread.requestInterruption()
+            if self._graph_clone_token is not None:
+                self._operations.update(
+                    self._graph_clone_token,
+                    "Cancelling graph copy safely...",
+                )
+            return True
+        except RuntimeError:
+            return False
 
     # ── Delete (delegated) ──────────────────────────────────────────
 
@@ -404,6 +483,756 @@ class QmlCanvasController(QObject):
     def clear_selection(self):
         self._node_model.clear_selection()
         self.status_message.emit("Selection cleared.", "normal")
+
+    # ── Graph clipboard / duplication ─────────────────────────────
+
+    def _graph_target_ids(self, node_id=0):
+        selected = self._node_model.get_selected_ids()
+        node_id = int(node_id or 0)
+        if node_id and node_id in selected:
+            return selected
+        if node_id:
+            return [node_id]
+        return selected
+
+    def _paste_offset_for_bounds(self, width, height, cascade=0):
+        center_x, center_y = self.get_viewport_center()
+        shift = max(0, int(cascade)) * 32.0
+        return (
+            center_x - float(width) / 2.0 + shift,
+            center_y - float(height) / 2.0 + shift,
+        )
+
+    @Slot(int, result=bool)
+    def copy_nodes(self, node_id=0):
+        node_ids = self._graph_target_ids(node_id)
+        if not node_ids:
+            self.status_message.emit("Select a node to copy.", "warning")
+            return False
+        try:
+            summary = self._service.copy_graph(node_ids)
+        except Exception as exc:
+            self.status_message.emit(f"Copy failed: {exc}", "error")
+            return False
+        self._last_graph_copy_summary = summary
+        self._graph_paste_count = 0
+        count = int(summary.get("count", len(node_ids)))
+        self.status_message.emit(
+            f"Copied {count} node{'s' if count != 1 else ''}.", "accent"
+        )
+        return True
+
+    @Slot(result=bool)
+    def paste_nodes(self):
+        if not self._service.has_clipboard():
+            self.status_message.emit("Internal clipboard is empty.", "warning")
+            return False
+        if self._operations.is_busy:
+            self.status_message.emit(
+                "Another database operation is active.", "warning"
+            )
+            return False
+        summary = self._last_graph_copy_summary or {}
+        bounds = summary.get("bounds") or {}
+        offset = self._paste_offset_for_bounds(
+            bounds.get("width", 0.0),
+            bounds.get("height", 0.0),
+            self._graph_paste_count,
+        )
+        try:
+            preparation = self._service.prepare_paste_graph(offset=offset)
+        except Exception as exc:
+            self.status_message.emit(f"Paste failed: {exc}", "error")
+            return False
+        return self._start_graph_clone(
+            preparation,
+            "paste",
+            list(preparation.get("source_ids") or []),
+            history_action="paste",
+        )
+
+    @Slot(int, result=bool)
+    def duplicate_node(self, node_id=0):
+        node_ids = self._graph_target_ids(node_id)
+        if not node_ids:
+            self.status_message.emit("Select a node to duplicate.", "warning")
+            return False
+        if self._operations.is_busy:
+            self.status_message.emit(
+                "Another database operation is active.", "warning"
+            )
+            return False
+        try:
+            preparation = self._service.prepare_duplicate_graph(node_ids)
+        except Exception as exc:
+            self.status_message.emit(f"Duplicate failed: {exc}", "error")
+            return False
+        return self._start_graph_clone(
+            preparation,
+            "duplicate",
+            node_ids,
+            history_action="duplicate",
+        )
+
+    def _start_graph_clone(
+        self,
+        preparation,
+        operation_kind,
+        source_ids,
+        *,
+        history_action,
+        redo_entry=None,
+        clear_redo=True,
+    ):
+        if self.has_active_graph_clone():
+            self.status_message.emit("Graph copy is already running.", "warning")
+            return False
+
+        db_path = self._service.get_db_path()
+        try:
+            crypto = self._service.create_crypto_clone()
+        except Exception as exc:
+            self.status_message.emit(f"Graph copy failed: {exc}", "error")
+            return False
+        if not db_path or not crypto:
+            self.status_message.emit("Database is not ready.", "error")
+            return False
+
+        verb = "Pasting" if operation_kind == "paste" else "Duplicating"
+        if history_action == "redo":
+            verb = "Redoing"
+        token = self._operations.begin(
+            "graph_clone", f"{verb} nodes...", blocking=True
+        )
+        if token is None:
+            self.status_message.emit(
+                "Another database operation is active.", "warning"
+            )
+            return False
+
+        target = (
+            preparation.get("target_origin")
+            or preparation.get("offset")
+            or {}
+        )
+        offset = (
+            float(preparation.get("offset_x", target.get("x", 0.0))),
+            float(preparation.get("offset_y", target.get("y", 0.0))),
+        )
+        self._graph_clone_token = token
+        self._pending_graph_clone = {
+            "operation_kind": operation_kind,
+            "history_action": history_action,
+            "source_ids": [int(node_id) for node_id in source_ids],
+            "offset": offset,
+            "redo_entry": redo_entry,
+            "clear_redo": bool(clear_redo),
+        }
+
+        thread = None
+        try:
+            self._service.commit_changes()
+            thread = QThread(self)
+            worker = GraphCloneWorker(db_path, crypto, preparation)
+            worker.moveToThread(thread)
+
+            thread.started.connect(worker.run)
+            worker.progress.connect(self._on_graph_clone_progress)
+            worker.finished.connect(self._on_graph_clone_finished)
+            worker.cancelled.connect(self._on_graph_clone_cancelled)
+            worker.failed.connect(self._on_graph_clone_failed)
+            worker.finished.connect(thread.quit)
+            worker.cancelled.connect(thread.quit)
+            worker.failed.connect(thread.quit)
+            worker.finished.connect(worker.deleteLater)
+            worker.cancelled.connect(worker.deleteLater)
+            worker.failed.connect(worker.deleteLater)
+            thread.finished.connect(thread.deleteLater)
+            thread.finished.connect(
+                lambda: self._clear_active_graph_clone(thread)
+            )
+
+            self._graph_clone_thread = thread
+            self._graph_clone_worker = worker
+            thread.start()
+        except Exception as exc:
+            self._pending_graph_clone = None
+            self._graph_clone_thread = None
+            self._graph_clone_worker = None
+            self._finish_graph_clone()
+            if thread is not None:
+                thread.deleteLater()
+            self.progress_finished.emit("")
+            self.status_message.emit(f"Graph copy failed: {exc}", "error")
+            return False
+        return True
+
+    @Slot(object, object, str)
+    def _on_graph_clone_progress(self, current_bytes, total_bytes, message):
+        total = max(1, int(total_bytes or 0))
+        current = max(0, min(int(current_bytes or 0), total))
+        self._operations.update(self._graph_clone_token, message)
+        self.progress_updated.emit(current / total, message)
+
+    @Slot(object)
+    def _on_graph_clone_finished(self, result):
+        pending = self._pending_graph_clone
+        self._pending_graph_clone = None
+        if pending is None:
+            self._finish_graph_clone()
+            self.progress_finished.emit("")
+            return
+        try:
+            created_ids = self._materialize_graph_result(
+                result,
+                pending["operation_kind"],
+                pending["source_ids"],
+                pending["offset"],
+                clear_redo=pending["clear_redo"],
+            )
+            if not created_ids:
+                self._restore_graph_clone_redo(pending)
+            elif pending["history_action"] == "paste":
+                self._graph_paste_count += 1
+        except Exception as exc:
+            self._restore_graph_clone_redo(pending)
+            self._finish_graph_clone()
+            self.progress_finished.emit("")
+            self.status_message.emit(f"Graph copy failed: {exc}", "error")
+            return
+        self._finish_graph_clone()
+        self.progress_finished.emit("")
+
+    @Slot()
+    def _on_graph_clone_cancelled(self):
+        pending = self._pending_graph_clone
+        self._pending_graph_clone = None
+        self._restore_graph_clone_redo(pending)
+        self._finish_graph_clone()
+        self.progress_finished.emit("")
+        self.status_message.emit("Graph copy cancelled.", "warning")
+
+    @Slot(str)
+    def _on_graph_clone_failed(self, message):
+        pending = self._pending_graph_clone
+        self._pending_graph_clone = None
+        self._restore_graph_clone_redo(pending)
+        self._finish_graph_clone()
+        self.progress_finished.emit("")
+        self.status_message.emit(f"Graph copy failed: {message}", "error")
+
+    def _restore_graph_clone_redo(self, pending):
+        if not pending:
+            return
+        redo_entry = pending.get("redo_entry")
+        if redo_entry is not None:
+            self._graph_redo.append(redo_entry)
+
+    def _finish_graph_clone(self):
+        token = self._graph_clone_token
+        self._graph_clone_token = None
+        if token is not None:
+            self._operations.finish(token)
+
+    def _clear_active_graph_clone(self, thread, report_unexpected=True):
+        if self._graph_clone_thread is not thread:
+            return
+        self._graph_clone_thread = None
+        self._graph_clone_worker = None
+        pending = self._pending_graph_clone
+        self._pending_graph_clone = None
+        if pending is not None:
+            self._restore_graph_clone_redo(pending)
+            self.progress_finished.emit("")
+            if report_unexpected:
+                self.status_message.emit(
+                    "Graph copy stopped unexpectedly.", "error"
+                )
+        self._finish_graph_clone()
+
+    def _materialize_graph_result(
+        self,
+        result,
+        operation_kind,
+        source_ids,
+        offset,
+        record_history=True,
+        clear_redo=True,
+    ):
+        created_ids = [int(node_id) for node_id in result.get("created_ids", [])]
+        if not created_ids:
+            self.status_message.emit("Nothing was pasted.", "warning")
+            return []
+        created_set = set(created_ids)
+        existing_ids = {
+            int(node["id"])
+            for node in getattr(self._node_model, "_nodes", ())
+        }
+        tags_by_item = self._service.get_item_tags_map()
+        items = [
+            item
+            for item in self._service.get_items_by_ids(
+                created_ids, include_thumbnails=True
+            )
+            if int(item.id) not in existing_ids
+        ]
+        for item in sorted(items, key=lambda value: int(value.id)):
+            self._node_model.add_node(
+                item.id,
+                item.type,
+                item.x,
+                item.y,
+                item.width,
+                item.height,
+                title=item.title,
+                content=item.text_content,
+                thumbnail_bytes=item.thumbnail,
+                title_size=item.title_size,
+                text_size=item.text_size,
+                total_size=item.total_size,
+                media_width=item.media_width,
+                media_height=item.media_height,
+                media_duration=item.media_duration,
+                created_at=item.created_at,
+                updated_at=item.updated_at,
+                frame_locked=getattr(item, "frame_locked", False),
+                frame_color=getattr(item, "frame_color", ""),
+                frame_opacity=getattr(item, "frame_opacity", 0.21),
+            )
+            self._node_model.set_node_tags(
+                item.id,
+                [
+                    {"id": tag.id, "name": tag.name, "color": tag.color}
+                    for tag in tags_by_item.get(item.id, [])
+                ],
+            )
+
+        connection_ids = [
+            int(connection_id)
+            for connection_id in result.get("connection_ids", [])
+        ]
+        connection_set = set(connection_ids)
+        if connection_set:
+            for connection in self._service.get_all_connections():
+                if int(connection.id) in connection_set:
+                    self._conn_model.add_connection(
+                        connection.id,
+                        connection.start_id,
+                        connection.end_id,
+                    )
+
+        selected_ids = [
+            int(node_id)
+            for node_id in result.get("selection")
+            or result.get("selected_ids")
+            or created_ids
+            if int(node_id) in created_set
+        ]
+        self._node_model.clear_selection()
+        for node_id in selected_ids:
+            self._node_model.set_selected(node_id, True)
+
+        if record_history:
+            self._graph_history.append({
+                "kind": operation_kind,
+                "source_ids": [int(node_id) for node_id in source_ids],
+                "offset": (float(offset[0]), float(offset[1])),
+                "created_ids": created_ids,
+                "connection_ids": connection_ids,
+            })
+            if clear_redo:
+                self._graph_redo.clear()
+        label = "Pasted" if operation_kind == "paste" else "Duplicated"
+        self.status_message.emit(
+            f"{label} {len(created_ids)} node{'s' if len(created_ids) != 1 else ''}.",
+            "accent",
+        )
+        return created_ids
+
+    @Slot(result=bool)
+    def undo_graph(self):
+        if (
+            self._pending_graph_history is not None
+            or self.has_active_graph_clone()
+        ):
+            return False
+        if not self._graph_history:
+            self.status_message.emit("Nothing to undo.", "normal")
+            return False
+        token = self._operations.begin(
+            "graph_undo", "Undoing graph operation...", blocking=True
+        )
+        if token is None:
+            self.status_message.emit(
+                "Another database operation is active.", "warning"
+            )
+            return False
+        entry = self._graph_history.pop()
+        self._graph_delete_token = token
+        self._pending_graph_history = {"action": "undo", "entry": entry}
+        try:
+            self._service.delete_nodes_cascade(
+                entry["created_ids"],
+                on_success=lambda: self._graph_delete_finished.emit(
+                    entry, None, "undo"
+                ),
+                on_error=lambda error: self._graph_delete_finished.emit(
+                    entry, error, "undo"
+                ),
+            )
+        except Exception as exc:
+            self._pending_graph_history = None
+            self._graph_history.append(entry)
+            self._finish_graph_delete()
+            self.status_message.emit(f"Undo failed: {exc}", "error")
+            return False
+        return True
+
+    @Slot(result=bool)
+    def redo_graph(self):
+        if (
+            self._pending_graph_history is not None
+            or self.has_active_graph_clone()
+        ):
+            return False
+        if not self._graph_redo:
+            self.status_message.emit("Nothing to redo.", "normal")
+            return False
+        entry = self._graph_redo.pop()
+        try:
+            preparation = self._service.prepare_duplicate_graph(
+                entry["source_ids"], offset=entry["offset"]
+            )
+            started = self._start_graph_clone(
+                preparation,
+                entry["kind"],
+                entry["source_ids"],
+                history_action="redo",
+                redo_entry=entry,
+                clear_redo=False,
+            )
+        except Exception as exc:
+            self._graph_redo.append(entry)
+            self.status_message.emit(f"Redo failed: {exc}", "error")
+            return False
+        if not started:
+            self._graph_redo.append(entry)
+            return False
+        return True
+
+    @Slot(object, object, str)
+    def _on_graph_delete_finished(self, entry, error, action):
+        if self._pending_graph_history is None:
+            self._finish_graph_delete()
+            return
+        self._pending_graph_history = None
+        try:
+            if error:
+                if action == "undo":
+                    self._graph_history.append(entry)
+                else:
+                    self._graph_redo.append(entry)
+                self.status_message.emit(f"Undo failed: {error}", "error")
+                return
+            for node_id in entry.get("created_ids", []):
+                self._conn_model.remove_connections_for_node(node_id)
+            for node_id in entry.get("created_ids", []):
+                self._node_model.remove_node(node_id)
+            if action == "undo":
+                self._graph_redo.append(entry)
+                self.status_message.emit("Undo complete.", "normal")
+            else:
+                self._graph_history.append(entry)
+        finally:
+            self._finish_graph_delete()
+
+    def _finish_graph_delete(self):
+        token = self._graph_delete_token
+        self._graph_delete_token = None
+        if token is not None:
+            self._operations.finish(token)
+
+    def _system_clipboard_nodes(self, node_id=0):
+        node_ids = self._graph_target_ids(node_id)
+        primary_id = int(node_id or 0)
+        if primary_id in node_ids:
+            node_ids = [primary_id] + [
+                candidate_id
+                for candidate_id in node_ids
+                if candidate_id != primary_id
+            ]
+        compatible = []
+        for candidate_id in node_ids:
+            node = self._node_model.get_node_data(candidate_id)
+            if node and node.get("type") in ("text", "image"):
+                compatible.append(node)
+        return compatible, len(node_ids) - len(compatible)
+
+    @staticmethod
+    def _text_for_system_clipboard(node):
+        parts = []
+        title = " ".join(str(node.get("title") or "").splitlines()).strip()
+        content = str(node.get("content") or "")
+        if title:
+            parts.append(f"## {title}")
+        if content:
+            parts.append(content)
+        return "\n\n".join(parts)
+
+    @classmethod
+    def _parse_system_clipboard_text(cls, text):
+        text = str(text or "")
+        first_line, separator, remainder = text.partition("\n")
+        match = cls._SYSTEM_TITLE_RE.fullmatch(first_line.rstrip("\r"))
+        if not match:
+            return "", text
+        title = match.group(1).strip()
+        body = remainder if separator else ""
+        if body.startswith("\r\n"):
+            body = body[2:]
+        elif body.startswith("\n"):
+            body = body[1:]
+        return title, body
+
+    def _image_for_system_clipboard(self, node):
+        try:
+            payload = self._service.get_item_data(int(node["id"]))
+        except Exception:
+            payload = None
+        image = QImage.fromData(payload) if payload else QImage()
+        if image.isNull():
+            thumbnail = node.get("thumbnail")
+            if isinstance(thumbnail, QImage) and not thumbnail.isNull():
+                image = QImage(thumbnail)
+        return image
+
+    @Slot(int, result=bool)
+    def copy_to_system_clipboard(self, node_id=0):
+        nodes, ignored_count = self._system_clipboard_nodes(node_id)
+        if not nodes:
+            self.status_message.emit(
+                "System clipboard supports text and photo nodes only.",
+                "warning",
+            )
+            return False
+        clipboard = QGuiApplication.clipboard()
+        if clipboard is None:
+            self.status_message.emit("System clipboard is unavailable.", "error")
+            return False
+
+        text_nodes = [node for node in nodes if node["type"] == "text"]
+        image_nodes = [node for node in nodes if node["type"] == "image"]
+        mime = QMimeData()
+        if text_nodes:
+            mime.setText(
+                "\n\n".join(
+                    self._text_for_system_clipboard(node)
+                    for node in text_nodes
+                )
+            )
+
+        copied_image = False
+        if image_nodes:
+            for image_node in image_nodes:
+                image = self._image_for_system_clipboard(image_node)
+                if image.isNull():
+                    continue
+                mime.setImageData(image)
+                copied_image = True
+                break
+            if not copied_image and not text_nodes:
+                self.status_message.emit("Photo data is unavailable.", "warning")
+                return False
+
+        if text_nodes and copied_image:
+            mime.setData(self._SYSTEM_MIXED_MIME, QByteArray(b"1"))
+        clipboard.setMimeData(mime)
+
+        labels = []
+        if text_nodes:
+            labels.append(f"{len(text_nodes)} text")
+        if copied_image:
+            labels.append("1 image")
+        skipped = ignored_count + max(0, len(image_nodes) - int(copied_image))
+        suffix = f"; skipped {skipped}" if skipped else ""
+        self.status_message.emit(
+            f"Copied {' and '.join(labels)} to system clipboard{suffix}.",
+            "accent",
+        )
+        return True
+
+    @staticmethod
+    def _clipboard_image_bytes(image):
+        buffer = QBuffer()
+        buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+        if not image.save(buffer, "PNG"):
+            return None
+        return bytes(buffer.data())
+
+    @staticmethod
+    def _clipboard_qimage(mime):
+        if mime.hasImage():
+            value = mime.imageData()
+            try:
+                if isinstance(value, QImage):
+                    image = QImage(value)
+                elif hasattr(value, "toImage"):
+                    image = value.toImage()
+                else:
+                    image = QImage(value)
+            except (TypeError, ValueError):
+                image = QImage()
+            if not image.isNull():
+                return image
+        for mime_type in mime.formats():
+            if not str(mime_type).lower().startswith("image/"):
+                continue
+            image = QImage.fromData(bytes(mime.data(mime_type)))
+            if not image.isNull():
+                return image
+        return QImage()
+
+    def _create_clipboard_image_node(
+        self, image, center_x, center_y, *, commit=True, created_ids=None
+    ):
+        payload = self._clipboard_image_bytes(image)
+        if not payload:
+            raise ValueError("Clipboard image could not be encoded")
+        thumbnail_image = image.scaled(
+            800,
+            800,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        thumbnail = self._clipboard_image_bytes(thumbnail_image) or payload
+        width, height = self._auto_fit_service.fit_media(
+            {"title": "Pasted image"}, thumbnail_image
+        )
+        x = float(center_x) - width / 2.0
+        y = float(center_y) - height / 2.0
+        node_id = self._service.add_item(
+            "image",
+            x,
+            y,
+            width,
+            height,
+            title="Pasted image",
+            thumb=thumbnail,
+            data=payload,
+            media_width=image.width(),
+            media_height=image.height(),
+            original_filename="pasted-image.png",
+            commit=commit,
+        )
+        if created_ids is not None:
+            created_ids.append(node_id)
+        self._node_model.add_node(
+            node_id,
+            "image",
+            x,
+            y,
+            width,
+            height,
+            title="Pasted image",
+            thumbnail_bytes=thumbnail,
+            total_size=len(payload),
+            media_width=image.width(),
+            media_height=image.height(),
+        )
+        return node_id
+
+    def _create_clipboard_text_node(
+        self, text, center_x, center_y, *, commit=True, created_ids=None
+    ):
+        title, content = self._parse_system_clipboard_text(text)
+        return self.create_text_node_at(
+            float(center_x) - Config.NODE_DEFAULT_WIDTH / 2.0,
+            float(center_y) - Config.NODE_DEFAULT_HEIGHT / 2.0,
+            title,
+            content,
+            14,
+            10,
+            auto_fit_now=False,
+            commit=commit,
+            created_ids=created_ids,
+        )
+
+    @Slot(result=bool)
+    def paste_from_system_clipboard(self):
+        clipboard = QGuiApplication.clipboard()
+        mime = clipboard.mimeData() if clipboard is not None else None
+        if mime is None:
+            self.status_message.emit("System clipboard is unavailable.", "warning")
+            return False
+        center_x, center_y = self.get_viewport_center()
+        image = self._clipboard_qimage(mime)
+        text = mime.text() if mime.hasText() else ""
+        paste_mixed = bool(mime.data(self._SYSTEM_MIXED_MIME))
+        created_ids = []
+        text_ids = []
+        try:
+            if not image.isNull():
+                image_x = center_x - 130.0 if paste_mixed and text else center_x
+                self._create_clipboard_image_node(
+                    image,
+                    image_x,
+                    center_y,
+                    commit=False,
+                    created_ids=created_ids,
+                )
+            if text and (image.isNull() or paste_mixed):
+                text_x = center_x + 130.0 if created_ids else center_x
+                text_id = self._create_clipboard_text_node(
+                    text,
+                    text_x,
+                    center_y,
+                    commit=False,
+                    created_ids=created_ids,
+                )
+                text_ids.append(text_id)
+            if created_ids:
+                self._service.commit_changes()
+        except Exception as exc:
+            rollback_error = None
+            try:
+                self._service.rollback_changes()
+            except Exception as cleanup_exc:
+                rollback_error = cleanup_exc
+            finally:
+                for node_id in reversed(created_ids):
+                    self._conn_model.remove_connections_for_node(node_id)
+                    self._node_model.remove_node(node_id)
+            message = f"System paste failed: {exc}"
+            if rollback_error is not None:
+                message += f"; rollback failed: {rollback_error}"
+            self.status_message.emit(message, "error")
+            return False
+
+        if created_ids:
+            auto_fit_error = None
+            for node_id in text_ids:
+                try:
+                    self._auto_fit_text_node(node_id)
+                except Exception as exc:
+                    auto_fit_error = exc
+            self._node_model.clear_selection()
+            for node_id in created_ids:
+                self._node_model.set_selected(node_id, True)
+            message = (
+                f"Pasted {len(created_ids)} clipboard node"
+                f"{'s' if len(created_ids) != 1 else ''}."
+            )
+            if auto_fit_error is not None:
+                message += f" Text auto-fit failed: {auto_fit_error}"
+            self.status_message.emit(
+                message, "warning" if auto_fit_error is not None else "accent"
+            )
+            return True
+        self.status_message.emit(
+            "System clipboard contains no supported text or image.",
+            "warning",
+        )
+        return False
 
     # ── Text Editing ────────────────────────────────────────────────
 
