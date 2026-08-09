@@ -41,9 +41,7 @@ Rectangle {
         var rx2 = ((x + width) - contentLayer.x) / contentScale
         var ry2 = ((y + height) - contentLayer.y) / contentScale
         var selected = rubberBand.nodeModel.get_nodes_in_rect(rx1, ry1, rx2, ry2)
-        for (var i = 0; i < selected.length; i++) {
-            rubberBand.nodeModel.set_selected(selected[i], true)
-        }
+        rubberBand.nodeModel.add_selection(selected)
         visible = false
     }
 }

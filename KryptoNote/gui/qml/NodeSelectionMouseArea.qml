@@ -56,9 +56,8 @@ MouseArea {
             if (selector.canvasRoot.isCtrlHeld) {
                 selector.nodeModel.toggle_selected(nodeId)
             } else {
-                selector.nodeModel.clear_selection()
                 selector.nodeModel.clear_hovered()
-                selector.nodeModel.set_selected(nodeId, true)
+                selector.nodeModel.set_selection([nodeId])
             }
         }
     }

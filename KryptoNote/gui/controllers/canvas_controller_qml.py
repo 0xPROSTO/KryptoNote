@@ -99,12 +99,16 @@ class QmlCanvasController(QObject):
 
         # Persist position/size changes to DB
         self._node_model.node_position_changed.connect(self._on_position_changed)
+        self._node_model.node_positions_changed.connect(self._on_positions_changed)
         self._node_model.node_size_changed.connect(self._on_size_changed)
 
     # ── DB Persistence Slots ────────────────────────────────────────
 
     def _on_position_changed(self, node_id, x, y):
         self._service.update_pos(node_id, x, y)
+
+    def _on_positions_changed(self, positions):
+        self._service.update_positions(positions)
 
     def _on_size_changed(self, node_id, w, h):
         self._service.update_size(node_id, w, h)
@@ -318,8 +322,7 @@ class QmlCanvasController(QObject):
             draft=True,
             auto_fit_now=False,
         )
-        self._node_model.clear_selection()
-        self._node_model.set_selected(node_id, True)
+        self._node_model.set_selection([node_id])
         self.openTextEditorRequested.emit(node_id)
 
     def create_text_node_at(
@@ -365,8 +368,7 @@ class QmlCanvasController(QObject):
             frame_color="",
             frame_opacity=Config.FRAME_DEFAULT_OPACITY,
         )
-        self._node_model.clear_selection()
-        self._node_model.set_selected(frame_id, True)
+        self._node_model.set_selection([frame_id])
         self.status_message.emit(
             "Frame added unlocked. Lock it to move contained nodes.", "accent"
         )
@@ -828,9 +830,7 @@ class QmlCanvasController(QObject):
             or created_ids
             if int(node_id) in created_set
         ]
-        self._node_model.clear_selection()
-        for node_id in selected_ids:
-            self._node_model.set_selected(node_id, True)
+        self._node_model.set_selection(selected_ids)
 
         if record_history:
             self._graph_history.append({
@@ -1215,9 +1215,7 @@ class QmlCanvasController(QObject):
                     self._auto_fit_text_node(node_id)
                 except Exception as exc:
                     auto_fit_error = exc
-            self._node_model.clear_selection()
-            for node_id in created_ids:
-                self._node_model.set_selected(node_id, True)
+            self._node_model.set_selection(created_ids)
             message = (
                 f"Pasted {len(created_ids)} clipboard node"
                 f"{'s' if len(created_ids) != 1 else ''}."
@@ -1572,7 +1570,6 @@ class QmlCanvasController(QObject):
             return
         new_w, new_h = self._auto_fit_service.fit_text(node)
         self._node_model.update_size(node_id, float(new_w), float(new_h))
-        self._service.update_size(node_id, int(new_w), int(new_h))
 
     def _auto_fit_media_node(self, node_id, thumb_bytes):
         node = self._node_model.get_node_data(node_id)
@@ -1587,4 +1584,3 @@ class QmlCanvasController(QObject):
             return
         new_w, new_h = self._auto_fit_service.fit_media(node, thumb_image)
         self._node_model.update_size(node_id, float(new_w), float(new_h))
-        self._service.update_size(node_id, int(new_w), int(new_h))

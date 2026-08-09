@@ -15,6 +15,8 @@ Item {
     property real lastDx: 0
     property real lastDy: 0
     property var dragNodes: []
+    property bool dragging: false
+    property bool previewPending: false
 
     readonly property real edgeThickness: 8
     readonly property bool canDrag:
@@ -28,15 +30,13 @@ Item {
         dragController.nodeModel.clear_hovered()
         dragController.lastDx = 0
         dragController.lastDy = 0
+        dragController.previewPending = false
         if (!dragController.canvasRoot.isCtrlHeld) {
             if (!dragController.nodeIsSelected) {
-                dragController.nodeModel.clear_selection()
-                dragController.nodeModel.set_selected(
-                    dragController.nodeId, true
-                )
+                dragController.nodeModel.set_selection([dragController.nodeId])
             }
         } else if (!dragController.nodeIsSelected) {
-            dragController.nodeModel.set_selected(dragController.nodeId, true)
+            dragController.nodeModel.add_selection([dragController.nodeId])
         }
         dragController.dragNodes =
             dragController.nodeModel.get_drag_node_positions(
@@ -50,6 +50,8 @@ Item {
                 "y": dragController.delegateItem.y
             }]
         }
+        dragController.dragging = true
+        dragController.canvasRoot.activeNodeDragController = dragController
     }
 
     function appliedDragDelta() {
@@ -77,6 +79,7 @@ Item {
     }
 
     function updateDrag(handler) {
+        if (!dragController.dragging) return
         var scale = Math.max(dragController.canvasRoot.contentScale, 0.01)
         dragController.lastDx = (
             handler.centroid.scenePosition.x
@@ -86,6 +89,12 @@ Item {
             handler.centroid.scenePosition.y
             - handler.centroid.scenePressPosition.y
         ) / scale
+
+        dragController.previewPending = true
+    }
+
+    function currentPositionUpdates() {
+        var updates = []
 
         var applied = dragController.appliedDragDelta()
         var snapAsGroup = dragController.canvasRoot.snapToGrid
@@ -103,35 +112,45 @@ Item {
                     newY / dragController.canvasRoot.gridSize
                 ) * dragController.canvasRoot.gridSize
             }
-            dragController.nodeModel.preview_position(node.id, newX, newY)
+            updates.push({"id": node.id, "x": newX, "y": newY})
         }
+        return updates
+    }
+
+    function advanceDragFrame() {
+        if (!dragController.dragging || !dragController.previewPending) return
+        dragController.previewPending = false
+        dragController.nodeModel.preview_positions(
+            dragController.currentPositionUpdates()
+        )
     }
 
     function finishDrag() {
-        if (!dragController.dragNodes
-                || dragController.dragNodes.length === 0) {
-            return
-        }
-        var applied = dragController.appliedDragDelta()
-        var snapAsGroup = dragController.canvasRoot.snapToGrid
-                          && dragController.nodeType === "frame"
-        for (var i = 0; i < dragController.dragNodes.length; i++) {
-            var node = dragController.dragNodes[i]
-            var finalX = node.x + applied.x
-            var finalY = node.y + applied.y
-            if (dragController.canvasRoot.snapToGrid && !snapAsGroup) {
-                finalX = Math.round(
-                    finalX / dragController.canvasRoot.gridSize
-                ) * dragController.canvasRoot.gridSize
-                finalY = Math.round(
-                    finalY / dragController.canvasRoot.gridSize
-                ) * dragController.canvasRoot.gridSize
+        if (!dragController.dragging) return
+
+        var updates = dragController.currentPositionUpdates()
+        dragController.previewPending = false
+        try {
+            if (updates.length > 0) {
+                dragController.nodeModel.update_positions(updates)
             }
-            dragController.nodeModel.update_position(
-                node.id, finalX, finalY
-            )
+        } finally {
+            dragController.dragNodes = []
+            dragController.dragging = false
+            if (dragController.canvasRoot
+                    && dragController.canvasRoot.activeNodeDragController
+                    === dragController) {
+                dragController.canvasRoot.activeNodeDragController = null
+            }
         }
-        dragController.dragNodes = []
+    }
+
+    Component.onDestruction: {
+        if (dragController.canvasRoot
+                && dragController.canvasRoot.activeNodeDragController
+                === dragController) {
+            dragController.canvasRoot.activeNodeDragController = null
+        }
     }
 
     DragHandler {

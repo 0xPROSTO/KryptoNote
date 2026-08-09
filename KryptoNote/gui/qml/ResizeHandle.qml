@@ -17,6 +17,24 @@ Item {
     property bool revealOnHover: true
     property real revealMargin: 8
     readonly property bool _isActive: resizeDrag.active
+    property bool _previewPending: false
+    property real _pendingWidth: 0
+    property real _pendingHeight: 0
+
+    function advanceResizeFrame() {
+        if (!resizeDrag.active || !handle._previewPending) return
+        handle._previewPending = false
+        handle.nodeModel.preview_size(
+            handle.nodeId, handle._pendingWidth, handle._pendingHeight
+        )
+    }
+
+    Component.onDestruction: {
+        if (handle.canvasRoot
+                && handle.canvasRoot.activeNodeResizeController === handle) {
+            handle.canvasRoot.activeNodeResizeController = null
+        }
+    }
 
     ToolButton {
         id: gripIcon
@@ -70,21 +88,30 @@ Item {
             if (active) {
                 _startWidth = delegateRoot ? delegateRoot.width : 0;
                 _startHeight = delegateRoot ? delegateRoot.height : 0;
+                handle._pendingWidth = _startWidth;
+                handle._pendingHeight = _startHeight;
+                handle._previewPending = false;
                 _startContentPos = handle.mapToItem(
                     handle.contentLayer,
                     centroid.position.x,
                     centroid.position.y
                 );
+                handle.canvasRoot.activeNodeResizeController = handle;
             } else {
-                // Commit only on release; live resize uses preview_size.
-                if (delegateRoot) {
-                    var finalW = delegateRoot.width;
-                    var finalH = delegateRoot.height;
-                    if (handle.canvasRoot.snapToGrid) {
-                        finalW = Math.round(finalW / handle.canvasRoot.gridSize) * handle.canvasRoot.gridSize;
-                        finalH = Math.round(finalH / handle.canvasRoot.gridSize) * handle.canvasRoot.gridSize;
+                handle._previewPending = false;
+                try {
+                    if (delegateRoot) {
+                        handle.nodeModel.update_size(
+                            handle.nodeId,
+                            handle._pendingWidth,
+                            handle._pendingHeight
+                        );
                     }
-                    handle.nodeModel.update_size(handle.nodeId, finalW, finalH);
+                } finally {
+                    if (handle.canvasRoot.activeNodeResizeController
+                            === handle) {
+                        handle.canvasRoot.activeNodeResizeController = null;
+                    }
                 }
             }
         }
@@ -106,8 +133,11 @@ Item {
                 newH = Math.round(newH / handle.canvasRoot.gridSize) * handle.canvasRoot.gridSize;
             }
 
-            if (delegateRoot.width !== newW || delegateRoot.height !== newH) {
-                handle.nodeModel.preview_size(handle.nodeId, newW, newH);
+            if (handle._pendingWidth !== newW
+                    || handle._pendingHeight !== newH) {
+                handle._pendingWidth = newW;
+                handle._pendingHeight = newH;
+                handle._previewPending = true;
             }
         }
     }

@@ -1757,6 +1757,19 @@ class NodeRepository:
         self.cursor.execute("UPDATE items SET x=?, y=? WHERE id=?", (x, y, item_id))
         self.conn.commit()
 
+    def update_positions(self, positions):
+        rows = [
+            (float(position["x"]), float(position["y"]), int(position["id"]))
+            for position in positions or ()
+        ]
+        if not rows:
+            return
+        self.cursor.executemany(
+            "UPDATE items SET x=?, y=? WHERE id=?",
+            rows,
+        )
+        self.conn.commit()
+
     def update_size(self, item_id, w, h):
         self.cursor.execute(
             "UPDATE items SET width=?, height=? WHERE id=?", (w, h, item_id)

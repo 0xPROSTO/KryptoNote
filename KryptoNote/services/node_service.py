@@ -224,6 +224,9 @@ class NodeService:
     def update_pos(self, item_id, x, y):
         self.repo.update_pos(item_id, x, y)
 
+    def update_positions(self, positions):
+        self.repo.update_positions(positions)
+
     def update_size(self, item_id, w, h):
         self.repo.update_size(item_id, w, h)
 

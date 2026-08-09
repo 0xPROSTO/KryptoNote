@@ -33,12 +33,21 @@ Rectangle {
     property bool isTagPickerOpen: globalTagPicker.visible
     property bool isSearchPanelOpen: searchPanel.open
     property int hoveredConnectionId: 0
+    property var activeNodeDragController: null
+    property var activeNodeResizeController: null
+    readonly property bool isNodeDragging:
+            root.activeNodeDragController !== null
+    readonly property bool isNodeResizing:
+            root.activeNodeResizeController !== null
+    readonly property bool isNodeTransforming:
+            root.isNodeDragging || root.isNodeResizing
     property point _pendingConnectionHit: Qt.point(0, 0)
     property real _pendingConnectionRadius: 0
     property bool _connectionHitPending: false
     property bool _viewportUpdatePending: false
     readonly property bool frameClockNeeded: _connectionHitPending
             || _viewportUpdatePending
+            || isNodeTransforming
             || viewport.frameClockNeeded
 
     signal textEditorOpenChanged(bool open)
@@ -57,6 +66,12 @@ Rectangle {
     }
     Component.onDestruction: root.frameClock.setActive(false)
     onFrameClockNeededChanged: root.frameClock.setActive(root.frameClockNeeded)
+    onIsNodeTransformingChanged: {
+        if (isNodeTransforming) {
+            root._connectionHitPending = false
+            root.hoveredConnectionId = 0
+        }
+    }
     onWidthChanged: {
         viewport.ensureInitialized()
         root.scheduleViewportUpdate()
@@ -287,9 +302,11 @@ Rectangle {
         onPointChanged: {
             if (!point) return
             var contentPos = root.mapToItem(contentLayer, point.position.x, point.position.y)
-            root._pendingConnectionHit = Qt.point(contentPos.x, contentPos.y)
-            root._pendingConnectionRadius = 10 / Math.max(root.contentScale, 0.12)
-            root._connectionHitPending = true
+            if (!root.isNodeTransforming) {
+                root._pendingConnectionHit = Qt.point(contentPos.x, contentPos.y)
+                root._pendingConnectionRadius = 10 / Math.max(root.contentScale, 0.12)
+                root._connectionHitPending = true
+            }
             if (!coordThrottleTimer.running) {
                 root.canvasController.report_mouse_position(contentPos.x, contentPos.y)
                 coordThrottleTimer.start()
@@ -300,12 +317,18 @@ Rectangle {
     Connections {
         target: root.frameClock
         function onTick(frameTime) {
+            if (root.activeNodeDragController) {
+                root.activeNodeDragController.advanceDragFrame()
+            }
+            if (root.activeNodeResizeController) {
+                root.activeNodeResizeController.advanceResizeFrame()
+            }
             viewport.advanceFrame(frameTime)
             if (root._viewportUpdatePending) {
                 root._viewportUpdatePending = false
                 root.updateViewportModels()
             }
-            if (root._connectionHitPending) {
+            if (root._connectionHitPending && !root.isNodeTransforming) {
                 root._connectionHitPending = false
                 if (globalHover.hovered) {
                     root.hoveredConnectionId = root.connectionModel.hit_test_connection(
@@ -470,8 +493,7 @@ Rectangle {
             return
         }
 
-        root.nodeModel.clear_selection()
-        root.nodeModel.set_selected(nodeId, true)
+        root.nodeModel.set_selection([nodeId])
 
         var targetX = bounds[0] + bounds[2] / 2
         var targetY = bounds[1] + bounds[3] / 2

@@ -1,7 +1,7 @@
 import math
 from enum import IntEnum
 from PySide6.QtCore import (
-    QAbstractListModel, QModelIndex, Qt, Slot, QByteArray,
+    QAbstractListModel, QModelIndex, Qt, Slot, Signal, QByteArray,
 )
 
 from ...core.connection_geometry import (
@@ -31,6 +31,8 @@ class ConnectionRoles(IntEnum):
 
 
 class ConnectionListModel(QAbstractListModel):
+    geometry_batch_changed = Signal(bool)
+
     _HIT_GRID_SIZE = 128.0
     _MAX_SEGMENT_LENGTH = 24.0
     _MAX_CURVE_SEGMENTS = 64
@@ -49,10 +51,30 @@ class ConnectionListModel(QAbstractListModel):
         self._connection_curve_formula = DEFAULT_CONNECTION_CURVE_FORMULA
         self._connection_corner_style = DEFAULT_CONNECTION_CORNER_STYLE
         self._connection_anchor_mode = DEFAULT_CONNECTION_ANCHOR_MODE
+        self._geometry_batch_active = False
         self._node_model.dataChanged.connect(self._on_node_data_changed)
+        self._node_model.positions_batch_changed.connect(
+            self._on_node_geometry_batch_changed
+        )
+        self._node_model.sizes_batch_changed.connect(
+            self._on_node_geometry_batch_changed
+        )
+        self._node_model.selection_batch_changed.connect(
+            self._on_node_selection_batch_changed
+        )
 
     def rowCount(self, parent=QModelIndex()):
         return len(self._connections)
+
+    @property
+    def geometry_batch_active(self):
+        return self._geometry_batch_active
+
+    def get_connection_data_at_row(self, row):
+        """Return raw row data for internal proxy models."""
+        if 0 <= row < len(self._connections):
+            return self._connections[row]
+        return None
 
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if not index.isValid() or index.row() >= len(self._connections):
@@ -335,16 +357,21 @@ class ConnectionListModel(QAbstractListModel):
             ) = edge
             self._index_connection(connection)
         if self._connections:
-            self.dataChanged.emit(
-                self.index(0, 0),
-                self.index(len(self._connections) - 1, 0),
-                [
-                    ConnectionRoles.StartEdgeXRole,
-                    ConnectionRoles.StartEdgeYRole,
-                    ConnectionRoles.EndEdgeXRole,
-                    ConnectionRoles.EndEdgeYRole,
-                ],
-            )
+            self._geometry_batch_active = True
+            try:
+                self.dataChanged.emit(
+                    self.index(0, 0),
+                    self.index(len(self._connections) - 1, 0),
+                    [
+                        ConnectionRoles.StartEdgeXRole,
+                        ConnectionRoles.StartEdgeYRole,
+                        ConnectionRoles.EndEdgeXRole,
+                        ConnectionRoles.EndEdgeYRole,
+                    ],
+                )
+            finally:
+                self._geometry_batch_active = False
+        self.geometry_batch_changed.emit(True)
 
     def _clear_hit_index(self):
         self._hit_grid.clear()
@@ -477,6 +504,97 @@ class ConnectionListModel(QAbstractListModel):
 
     # Reactive Updates
 
+    def _emit_rows_changed(self, rows, roles):
+        rows = sorted(set(rows))
+        if not rows:
+            return
+        range_start = previous = rows[0]
+        for row in rows[1:]:
+            if row == previous + 1:
+                previous = row
+                continue
+            self.dataChanged.emit(
+                self.index(range_start, 0), self.index(previous, 0), roles
+            )
+            range_start = previous = row
+        self.dataChanged.emit(
+            self.index(range_start, 0), self.index(previous, 0), roles
+        )
+
+    def _emit_geometry_rows_changed(self, rows):
+        self._geometry_batch_active = True
+        try:
+            self._emit_rows_changed(rows, [
+                ConnectionRoles.StartEdgeXRole,
+                ConnectionRoles.StartEdgeYRole,
+                ConnectionRoles.EndEdgeXRole,
+                ConnectionRoles.EndEdgeYRole,
+            ])
+        finally:
+            self._geometry_batch_active = False
+
+    def _affected_connection_ids(self, node_ids):
+        affected_conn_ids = set()
+        for node_id in node_ids or ():
+            try:
+                node_id = int(node_id)
+            except (TypeError, ValueError):
+                continue
+            affected_conn_ids.update(self._node_to_conns.get(node_id, ()))
+        return affected_conn_ids
+
+    def _on_node_geometry_batch_changed(self, node_ids, rebuild_hit_index):
+        changed_rows = []
+        for conn_id in self._affected_connection_ids(node_ids):
+            row = self._id_to_index.get(conn_id)
+            if row is None:
+                continue
+            conn = self._connections[row]
+            edge = self._compute_edge_points(conn["start_id"], conn["end_id"])
+            previous = (
+                conn["start_edge_x"], conn["start_edge_y"],
+                conn["end_edge_x"], conn["end_edge_y"],
+            )
+            if edge != previous:
+                (
+                    conn["start_edge_x"], conn["start_edge_y"],
+                    conn["end_edge_x"], conn["end_edge_y"],
+                ) = edge
+                changed_rows.append(row)
+            if rebuild_hit_index:
+                self._index_connection(conn)
+
+        self._emit_geometry_rows_changed(changed_rows)
+        self.geometry_batch_changed.emit(bool(rebuild_hit_index))
+
+    def _is_connection_highlighted(self, conn):
+        start_data = self._node_model.get_node_data(conn["start_id"])
+        end_data = self._node_model.get_node_data(conn["end_id"])
+        return bool(
+            (start_data and (
+                start_data.get("is_selected") or start_data.get("is_hovered")
+            ))
+            or (end_data and (
+                end_data.get("is_selected") or end_data.get("is_hovered")
+            ))
+        )
+
+    def _on_node_selection_batch_changed(self, node_ids):
+        changed_rows = []
+        for conn_id in self._affected_connection_ids(node_ids):
+            row = self._id_to_index.get(conn_id)
+            if row is None:
+                continue
+            conn = self._connections[row]
+            highlighted = self._is_connection_highlighted(conn)
+            if highlighted == conn["is_highlighted"]:
+                continue
+            conn["is_highlighted"] = highlighted
+            changed_rows.append(row)
+        self._emit_rows_changed(
+            changed_rows, [ConnectionRoles.IsHighlightedRole]
+        )
+
     def _on_node_data_changed(self, top_left, bottom_right, roles):
         from .node_list_model import NodeRoles
 
@@ -487,6 +605,30 @@ class ConnectionListModel(QAbstractListModel):
         highlight_roles = {NodeRoles.IsSelectedRole, NodeRoles.IsHoveredRole}
         geometry_changed = not roles or any(role in geometry_roles for role in roles)
         highlight_changed = not roles or any(role in highlight_roles for role in roles)
+        if (
+            geometry_changed
+            and self._node_model.position_batch_active
+            and roles
+            and all(role in {NodeRoles.XRole, NodeRoles.YRole} for role in roles)
+        ):
+            geometry_changed = False
+        if (
+            geometry_changed
+            and self._node_model.size_batch_active
+            and roles
+            and all(
+                role in {NodeRoles.WidthRole, NodeRoles.HeightRole}
+                for role in roles
+            )
+        ):
+            geometry_changed = False
+        if (
+            highlight_changed
+            and self._node_model.selection_batch_active
+            and roles
+            and all(role == NodeRoles.IsSelectedRole for role in roles)
+        ):
+            highlight_changed = False
         if not geometry_changed and not highlight_changed:
             return
 
@@ -526,16 +668,7 @@ class ConnectionListModel(QAbstractListModel):
                     ))
 
             if highlight_changed:
-                start_data = self._node_model.get_node_data(conn["start_id"])
-                end_data = self._node_model.get_node_data(conn["end_id"])
-                highlighted = bool(
-                    (start_data and (
-                        start_data.get("is_selected") or start_data.get("is_hovered")
-                    ))
-                    or (end_data and (
-                        end_data.get("is_selected") or end_data.get("is_hovered")
-                    ))
-                )
+                highlighted = self._is_connection_highlighted(conn)
                 if highlighted != conn["is_highlighted"]:
                     conn["is_highlighted"] = highlighted
                     changed_roles.append(ConnectionRoles.IsHighlightedRole)

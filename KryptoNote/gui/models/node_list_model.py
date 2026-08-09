@@ -43,6 +43,10 @@ class NodeRoles(IntEnum):
 class NodeListModel(QAbstractListModel):
 
     node_position_changed = Signal(int, float, float)  # node_id, x, y
+    node_positions_changed = Signal(object)            # [{id, x, y}, ...]
+    positions_batch_changed = Signal(object, bool)     # node_ids, rebuild hit index
+    sizes_batch_changed = Signal(object, bool)         # node_ids, rebuild hit index
+    selection_batch_changed = Signal(object)           # changed node_ids
     node_size_changed = Signal(int, float, float)      # node_id, w, h
 
     def __init__(self, parent=None):
@@ -50,6 +54,10 @@ class NodeListModel(QAbstractListModel):
         self._nodes = []
         self._id_to_index = {}
         self._selected_ids = set()
+        self._hovered_ids = set()
+        self._position_batch_active = False
+        self._size_batch_active = False
+        self._selection_batch_active = False
 
 
     def rowCount(self, parent=QModelIndex()):
@@ -118,6 +126,16 @@ class NodeListModel(QAbstractListModel):
             return False
 
         node[key] = value
+        if key == "is_selected":
+            if value:
+                self._selected_ids.add(node["id"])
+            else:
+                self._selected_ids.discard(node["id"])
+        elif key == "is_hovered":
+            if value:
+                self._hovered_ids.add(node["id"])
+            else:
+                self._hovered_ids.discard(node["id"])
         if key in ("title", "content"):
             self._refresh_metadata_fields(node)
         self.dataChanged.emit(index, index, [role])
@@ -173,6 +191,7 @@ class NodeListModel(QAbstractListModel):
         self._nodes.clear()
         self._id_to_index.clear()
         self._selected_ids.clear()
+        self._hovered_ids.clear()
         self.endResetModel()
 
     def append_item_batch(self, items, tags_by_item=None):
@@ -289,6 +308,7 @@ class NodeListModel(QAbstractListModel):
             return
 
         self._selected_ids.discard(node_id)
+        self._hovered_ids.discard(node_id)
         self.beginRemoveRows(QModelIndex(), idx, idx)
         self._nodes.pop(idx)
         del self._id_to_index[node_id]
@@ -318,20 +338,110 @@ class NodeListModel(QAbstractListModel):
         if persist:
             self.node_position_changed.emit(node_id, x, y)
 
+    @property
+    def position_batch_active(self):
+        return self._position_batch_active
+
+    def _normalize_position_updates(self, updates):
+        normalized = {}
+        for update in updates or ():
+            if not isinstance(update, dict):
+                continue
+            try:
+                node_id = int(update["id"])
+                x = float(update["x"])
+                y = float(update["y"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if node_id in self._id_to_index:
+                normalized[node_id] = {"id": node_id, "x": x, "y": y}
+        return list(normalized.values())
+
+    def _emit_rows_changed(self, rows, roles):
+        rows = sorted(set(rows))
+        if not rows:
+            return
+
+        range_start = previous = rows[0]
+        for row in rows[1:]:
+            if row == previous + 1:
+                previous = row
+                continue
+            self.dataChanged.emit(
+                self.index(range_start, 0), self.index(previous, 0), roles
+            )
+            range_start = previous = row
+        self.dataChanged.emit(
+            self.index(range_start, 0), self.index(previous, 0), roles
+        )
+
+    def _emit_position_rows_changed(self, rows):
+        self._position_batch_active = True
+        try:
+            self._emit_rows_changed(
+                rows, [NodeRoles.XRole, NodeRoles.YRole]
+            )
+        finally:
+            self._position_batch_active = False
+
+    def _set_positions(self, updates, persist):
+        normalized = self._normalize_position_updates(updates)
+        if not normalized:
+            return
+
+        changed_rows = []
+        changed_ids = []
+        for update in normalized:
+            node_id = update["id"]
+            idx = self._id_to_index[node_id]
+            node = self._nodes[idx]
+            x = update["x"]
+            y = update["y"]
+            if node["x"] == x and node["y"] == y:
+                continue
+            node["x"] = x
+            node["y"] = y
+            changed_rows.append(idx)
+            changed_ids.append(node_id)
+
+        self._emit_position_rows_changed(changed_rows)
+        affected_ids = [update["id"] for update in normalized]
+        batch_ids = affected_ids if persist else changed_ids
+        if batch_ids:
+            self.positions_batch_changed.emit(batch_ids, bool(persist))
+        if persist:
+            self.node_positions_changed.emit(normalized)
+
     @Slot(int, float, float)
     def preview_position(self, node_id, x, y):
         """Update QML geometry during drag without writing to the database."""
         self._set_position(node_id, x, y, persist=False)
+
+    @Slot(list)
+    def preview_positions(self, updates):
+        """Preview a grouped drag with one model/connection update."""
+        self._set_positions(updates, persist=False)
 
     @Slot(int, float, float)
     def update_position(self, node_id, x, y):
         """Persist final node position after drag release."""
         self._set_position(node_id, x, y, persist=True)
 
+    @Slot(list)
+    def update_positions(self, updates):
+        """Finish a grouped drag and persist it as one batch."""
+        self._set_positions(updates, persist=True)
+
     def get_node_id_at_row(self, row):
         """Return the node ID at the given model row, or None."""
         if 0 <= row < len(self._nodes):
             return self._nodes[row]["id"]
+        return None
+
+    def get_node_data_at_row(self, row):
+        """Return raw row data for internal proxy models."""
+        if 0 <= row < len(self._nodes):
+            return self._nodes[row]
         return None
 
     def _set_size(self, node_id, w, h, persist=False):
@@ -348,13 +458,22 @@ class NodeListModel(QAbstractListModel):
             node["width"] = w
             node["height"] = h
 
-            model_idx = self.index(idx, 0)
-            self.dataChanged.emit(
-                model_idx, model_idx, [NodeRoles.WidthRole, NodeRoles.HeightRole]
-            )
+            self._size_batch_active = True
+            try:
+                self._emit_rows_changed(
+                    [idx], [NodeRoles.WidthRole, NodeRoles.HeightRole]
+                )
+            finally:
+                self._size_batch_active = False
 
+        if changed or persist:
+            self.sizes_batch_changed.emit([node_id], bool(persist))
         if persist:
             self.node_size_changed.emit(node_id, w, h)
+
+    @property
+    def size_batch_active(self):
+        return self._size_batch_active
 
     @Slot(int, float, float)
     def preview_size(self, node_id, w, h):
@@ -495,6 +614,53 @@ class NodeListModel(QAbstractListModel):
 
     # ── Selection Management ────────────────────────────────────────
 
+    @property
+    def selection_batch_active(self):
+        return self._selection_batch_active
+
+    def _normalize_node_ids(self, node_ids):
+        normalized = set()
+        for node_id in node_ids or ():
+            try:
+                node_id = int(node_id)
+            except (TypeError, ValueError):
+                continue
+            if node_id in self._id_to_index:
+                normalized.add(node_id)
+        return normalized
+
+    def _apply_selection(self, selected_ids):
+        selected_ids = self._normalize_node_ids(selected_ids)
+        changed_ids = self._selected_ids.symmetric_difference(selected_ids)
+        if not changed_ids:
+            return
+
+        changed_rows = []
+        for node_id in changed_ids:
+            idx = self._id_to_index[node_id]
+            self._nodes[idx]["is_selected"] = node_id in selected_ids
+            changed_rows.append(idx)
+        self._selected_ids = selected_ids
+
+        self._selection_batch_active = True
+        try:
+            self._emit_rows_changed(
+                changed_rows, [NodeRoles.IsSelectedRole]
+            )
+        finally:
+            self._selection_batch_active = False
+        self.selection_batch_changed.emit(list(changed_ids))
+
+    @Slot(list)
+    def set_selection(self, node_ids):
+        self._apply_selection(node_ids)
+
+    @Slot(list)
+    def add_selection(self, node_ids):
+        self._apply_selection(
+            self._selected_ids.union(self._normalize_node_ids(node_ids))
+        )
+
     @Slot(int, bool)
     def set_selected(self, node_id, selected):
         idx = self._id_to_index.get(node_id)
@@ -533,40 +699,25 @@ class NodeListModel(QAbstractListModel):
     @Slot()
     def clear_selection(self):
         """Deselect all nodes."""
-        if not self._selected_ids:
-            return
-
-        for node_id in list(self._selected_ids):
-            idx = self._id_to_index.get(node_id)
-            if idx is not None:
-                self._nodes[idx]["is_selected"] = False
-                model_idx = self.index(idx, 0)
-                self.dataChanged.emit(model_idx, model_idx, [NodeRoles.IsSelectedRole])
-        self._selected_ids.clear()
+        self._apply_selection(())
 
     @Slot()
     def select_all(self):
         """Select every node on the canvas."""
-        if len(self._selected_ids) == len(self._nodes):
-            return
-
-        for idx, node in enumerate(self._nodes):
-            if node["is_selected"]:
-                continue
-            node["is_selected"] = True
-            self._selected_ids.add(node["id"])
-            model_idx = self.index(idx, 0)
-            self.dataChanged.emit(model_idx, model_idx, [NodeRoles.IsSelectedRole])
+        self._apply_selection(node["id"] for node in self._nodes)
 
     @Slot()
     def clear_hovered(self):
         """Clear hover state for all nodes after canvas-level interactions."""
-        for idx, node in enumerate(self._nodes):
-            if not node["is_hovered"]:
+        for node_id in list(self._hovered_ids):
+            idx = self._id_to_index.get(node_id)
+            if idx is None:
                 continue
+            node = self._nodes[idx]
             node["is_hovered"] = False
             model_idx = self.index(idx, 0)
             self.dataChanged.emit(model_idx, model_idx, [NodeRoles.IsHoveredRole])
+        self._hovered_ids.clear()
 
     @Slot(int, bool)
     def set_hovered(self, node_id, hovered):
@@ -579,6 +730,10 @@ class NodeListModel(QAbstractListModel):
             return
 
         node["is_hovered"] = hovered
+        if hovered:
+            self._hovered_ids.add(node_id)
+        else:
+            self._hovered_ids.discard(node_id)
         model_idx = self.index(idx, 0)
         self.dataChanged.emit(model_idx, model_idx, [NodeRoles.IsHoveredRole])
 
@@ -666,8 +821,7 @@ class NodeListModel(QAbstractListModel):
         if not frame or frame["type"] != "frame":
             return 0
 
-        self.clear_selection()
-        self.set_selected(frame_id, True)
+        selected_ids = [frame_id]
         count = 0
         for node in self._nodes:
             if (
@@ -675,8 +829,9 @@ class NodeListModel(QAbstractListModel):
                 and not node.get("is_deleting")
                 and self._node_center_inside_frame(node, frame)
             ):
-                self.set_selected(node["id"], True)
+                selected_ids.append(node["id"])
                 count += 1
+        self.set_selection(selected_ids)
         return count
 
     @staticmethod
