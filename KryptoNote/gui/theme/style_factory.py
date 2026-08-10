@@ -819,6 +819,7 @@ class StyleFactory:
 
     @staticmethod
     def get_player_qss():
+        """Compatibility style for the legacy widget video player."""
         return f"""
             QDialog {{ background-color: {Palette.BG_CANVAS}; }}
             QWidget {{ color: {Palette.TEXT_MAIN}; }}
@@ -826,6 +827,7 @@ class StyleFactory:
 
     @staticmethod
     def get_player_controls_qss():
+        """Compatibility style for the legacy widget player controls."""
         return f"""
             #ControlsContainer {{
                 background-color: {Palette.BG_CANVAS};

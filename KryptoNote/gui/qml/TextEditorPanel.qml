@@ -26,6 +26,12 @@ Item {
     property real maxPanelWidth: parent ? parent.width * 0.5 : 560
     property real slideOffset: open ? 0 : width
     property bool hasContent: titleInput.text.trim().length > 0 || bodyInput.text.trim().length > 0
+    readonly property bool dirty: loaded && (
+        titleInput.text !== originalTitle
+        || bodyInput.text !== originalContent
+        || _selectedTitleSize() !== originalTitleSize
+        || _selectedTextSize() !== originalTextSize
+    )
     property var fontSizes: [8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 32, 36, 48, 64]
 
     signal requestedClose()

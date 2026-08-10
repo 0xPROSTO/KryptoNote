@@ -8,6 +8,7 @@ Rectangle {
     required property var nodeViewportModel
     required property var connectionViewportModel
     required property var canvasController
+    required property var viewerController
     required property var frameClock
     color: root.appTheme ? root.appTheme.bgCanvas : "#1a1a2e"
     clip: true
@@ -23,15 +24,21 @@ Rectangle {
     property alias isCtrlHeld: inputLayer.isCtrlHeld
     property alias isShiftHeld: inputLayer.isShiftHeld
     property alias isPanning: inputLayer.isPanning
-    property alias isEditorResizing: textEditorPanel.resizing
+    property bool isEditorResizing: textEditorPanel.resizing || mediaViewerPanel.resizing
     property alias isSearchResizing: searchPanel.resizing
     property bool isTextEditorOpen: textEditorPanel.open
     property bool isFrameEditorOpen: frameEditor.visible
     property bool isNodePropertiesOpen: nodeProperties.visible
     readonly property int propertiesFocusNodeId:
             nodeProperties.visible ? nodeProperties.nodeId : 0
-    property bool isTagPickerOpen: globalTagPicker.visible
+    property bool isTagPickerOpen: globalTagPicker.visible || mediaViewerPanel.tagPickerOpen
     property bool isSearchPanelOpen: searchPanel.open
+    property bool isMediaViewerOpen: viewerController.active && !viewerController.detached
+    property bool isMediaViewerExpanded: mediaViewerPanel.expanded
+    property bool isMediaRenameEditing: mediaViewerPanel.renameEditing
+    readonly property bool hasUnsavedEditorChanges:
+            (textEditorPanel.open && textEditorPanel.dirty)
+            || (frameEditor.visible && frameEditor.dirty)
     property int hoveredConnectionId: 0
     property var activeNodeDragController: null
     property var activeNodeResizeController: null
@@ -51,12 +58,18 @@ Rectangle {
             || viewport.frameClockNeeded
 
     signal textEditorOpenChanged(bool open)
+    signal mediaViewerOpenChanged(bool open)
 
     property alias _contentLayerX: contentLayer.x
     property alias _contentLayerY: contentLayer.y
     property real _editorReturnX: 0
     property real _editorReturnY: 0
     property bool _hasEditorReturn: false
+    property real _mediaReturnX: 0
+    property real _mediaReturnY: 0
+    property bool _hasMediaReturn: false
+    property bool _suppressEditorCameraReturn: false
+    property bool _suppressMediaCameraReturn: false
     property bool _searchCameraOffsetActive: false
 
     Component.onCompleted: {
@@ -85,6 +98,9 @@ Rectangle {
         if (!isTextEditorOpen && globalTagPicker.visible) {
             globalTagPicker.close()
         }
+    }
+    onIsMediaViewerOpenChanged: {
+        mediaViewerOpenChanged(isMediaViewerOpen)
     }
 
     GridLayer {
@@ -178,6 +194,10 @@ Rectangle {
                 root._editorReturnX += deltaX
                 root._editorReturnY += deltaY
             }
+            if (root._hasMediaReturn) {
+                root._mediaReturnX += deltaX
+                root._mediaReturnY += deltaY
+            }
         }
     }
 
@@ -241,6 +261,24 @@ Rectangle {
         }
     }
 
+    MediaViewerPanel {
+        id: mediaViewerPanel
+        z: 30
+        appTheme: root.appTheme
+        canvasController: root.canvasController
+        viewerController: root.viewerController
+        open: root.isMediaViewerOpen
+
+        onRequestedClose: root.viewerController.close_viewer()
+        onRequestedCenter: function(nodeId) {
+            root.centerOnNodeForMedia(nodeId)
+        }
+        onExpandedChangedByUser: function(nextExpanded) {
+            if (!nextExpanded && root.viewerController.active)
+                root.centerOnNodeForMedia(root.viewerController.nodeId)
+        }
+    }
+
     NodePropertiesOverlay {
         id: nodeProperties
         appTheme: root.appTheme
@@ -274,6 +312,37 @@ Rectangle {
                     && frameEditor.nodeId === globalTagPicker.nodeId) {
                 frameEditor.refreshTags()
             }
+            if (root.viewerController.active
+                    && root.viewerController.nodeId === globalTagPicker.nodeId) {
+                root.viewerController.notify_tags_changed()
+            }
+            searchPanel.syncTagsAndRefresh()
+        }
+    }
+
+    Connections {
+        target: root.viewerController
+
+        function onSessionOpened(nodeId) {
+            if (!root.viewerController.detached)
+                root.beginMediaViewer(nodeId)
+        }
+
+        function onSessionClosed() {
+            root.returnFromMediaViewer()
+        }
+
+        function onDetachedChanged() {
+            if (root.viewerController.detached) {
+                root.returnFromMediaViewer()
+            } else if (root.viewerController.active) {
+                root.beginMediaViewer(root.viewerController.nodeId)
+            }
+        }
+
+        function onTagsEdited(nodeId) {
+            if (globalTagPicker.visible && globalTagPicker.nodeId === nodeId)
+                globalTagPicker.refresh()
             searchPanel.syncTagsAndRefresh()
         }
     }
@@ -400,6 +469,7 @@ Rectangle {
 
     function closeTagPicker() {
         globalTagPicker.close()
+        mediaViewerPanel.closeTagPicker()
     }
 
     function syncModifiers(ctrlHeld, shiftHeld) {
@@ -430,6 +500,23 @@ Rectangle {
         nodeProperties.closeOverlay()
     }
 
+    function cancelMediaRename() {
+        mediaViewerPanel.cancelRename()
+    }
+
+    function commitPendingMediaEdits() {
+        return mediaViewerPanel.commitPendingEdits()
+    }
+
+    function collapseOrCloseMediaViewer() {
+        mediaViewerPanel.collapseOrClose()
+    }
+
+    function closeMediaViewer() {
+        if (mediaViewerPanel.commitPendingEdits())
+            root.viewerController.close_viewer()
+    }
+
     function openSearchPanel() {
         root.forceActiveFocus()
         searchPanel.openPanel()
@@ -456,6 +543,17 @@ Rectangle {
     }
 
     function openEditorForNode(nodeId) {
+        if (root.viewerController.active && !root.viewerController.detached) {
+            if (!mediaViewerPanel.commitPendingEdits()) return
+            if (root._hasMediaReturn && !root._hasEditorReturn) {
+                root._editorReturnX = root._mediaReturnX
+                root._editorReturnY = root._mediaReturnY
+                root._hasEditorReturn = true
+            }
+            root._suppressMediaCameraReturn = true
+            root.viewerController.close_viewer()
+            root._suppressMediaCameraReturn = false
+        }
         if (!_hasEditorReturn) {
             _editorReturnX = contentLayer.x
             _editorReturnY = contentLayer.y
@@ -465,7 +563,39 @@ Rectangle {
     }
 
     function openFrameEditorForNode(nodeId) {
+        if (root.viewerController.active && !root.viewerController.detached) {
+            if (!mediaViewerPanel.commitPendingEdits()) return
+            root.viewerController.close_viewer()
+        }
         frameEditor.openForFrame(nodeId)
+    }
+
+    function closeEditorsForMedia() {
+        if (textEditorPanel.open) {
+            if (root._hasEditorReturn && !root._hasMediaReturn) {
+                root._mediaReturnX = root._editorReturnX
+                root._mediaReturnY = root._editorReturnY
+                root._hasMediaReturn = true
+            }
+            root._suppressEditorCameraReturn = true
+            textEditorPanel.cancelOrDelete()
+            root._suppressEditorCameraReturn = false
+        }
+        if (frameEditor.visible)
+            frameEditor.close()
+        if (nodeProperties.visible)
+            nodeProperties.closeOverlay()
+    }
+
+    function beginMediaViewer(nodeId) {
+        var firstOpen = !root._hasMediaReturn
+        if (firstOpen) {
+            root._mediaReturnX = contentLayer.x
+            root._mediaReturnY = contentLayer.y
+            root._hasMediaReturn = true
+            mediaViewerPanel.resetExpanded()
+        }
+        root.centerOnNodeForMedia(nodeId)
     }
 
     function centerOnNodeForEditor(nodeId) {
@@ -479,12 +609,40 @@ Rectangle {
         viewport.smoothCenterOnScreen(targetX, targetY, _availableScreenCenterX(), root.height / 2)
     }
 
+    function centerOnNodeForMedia(nodeId) {
+        if (mediaViewerPanel.expanded) return
+        var bounds = root.nodeModel.get_node_bounds(nodeId)
+        if (!bounds || bounds.length < 4) return
+        var targetX = bounds[0] + bounds[2] / 2
+        var targetY = bounds[1] + bounds[3] / 2
+        viewport.smoothCenterOnScreen(
+            targetX,
+            targetY,
+            _availableScreenCenterX(),
+            root.height / 2
+        )
+    }
+
     function returnFromEditor() {
         if (!_hasEditorReturn) {
             return
         }
+        if (root._suppressEditorCameraReturn) {
+            root._hasEditorReturn = false
+            return
+        }
         viewport.smoothMoveTo(_editorReturnX, _editorReturnY)
         _hasEditorReturn = false
+    }
+
+    function returnFromMediaViewer() {
+        if (!root._hasMediaReturn) return
+        if (root._suppressMediaCameraReturn) {
+            root._hasMediaReturn = false
+            return
+        }
+        viewport.smoothMoveTo(root._mediaReturnX, root._mediaReturnY)
+        root._hasMediaReturn = false
     }
 
     function centerOnNodeFromSearch(nodeId) {
@@ -511,7 +669,10 @@ Rectangle {
 
     function _availableScreenCenterX() {
         var leftInset = searchPanel.open ? searchPanel.width : 0
-        var rightInset = textEditorPanel.open ? textEditorPanel.width : 0
+        var rightInset = textEditorPanel.open
+                         ? textEditorPanel.width
+                         : root.isMediaViewerOpen && !mediaViewerPanel.expanded
+                           ? mediaViewerPanel.width : 0
         var usableWidth = Math.max(160, root.width - leftInset - rightInset)
         return leftInset + usableWidth / 2
     }

@@ -22,6 +22,11 @@ Popup {
     readonly property color effectiveColor: selectedColor.length > 0
                                             ? selectedColor
                                             : editor.appTheme.bgPanel
+    readonly property bool dirty: loaded && (
+        titleInput.text !== originalTitle
+        || selectedColor !== originalColor
+        || Math.abs(opacitySlider.value - originalOpacity) > 0.0001
+    )
 
     signal requestedTagPicker(int nodeId, var anchorItem)
     signal requestedClose()

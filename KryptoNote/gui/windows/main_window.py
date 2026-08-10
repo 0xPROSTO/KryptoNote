@@ -12,6 +12,7 @@ from PySide6.QtCore import (
     QPropertyAnimation,
     QEvent,
     QPoint,
+    QSize,
     QTimer,
     QUrl,
     Qt,
@@ -33,6 +34,7 @@ from PySide6.QtWidgets import (
     QApplication,
 )
 from PySide6.QtQuickWidgets import QQuickWidget
+from PySide6.QtQuick import QQuickView
 
 from .native_window import NativeWindowMixin
 from ..controllers.canvas_controller_qml import QmlCanvasController
@@ -43,6 +45,7 @@ from ..services.window_state_service import WindowStateService
 from ..services.operation_coordinator import OperationCoordinator
 from ..models.node_list_model import NodeListModel, NodeRoles
 from ..models.connection_list_model import ConnectionListModel
+from ..models.media_preview_provider import MediaPreviewProvider
 from ..models.thumbnail_provider import ThumbnailProvider
 from ..models.viewport_proxy_model import (
     ConnectionViewportProxyModel,
@@ -83,6 +86,20 @@ def resolve_canvas_qml_source():
     )
     if not os.path.isfile(qml_path):
         raise FileNotFoundError(f"Canvas QML is missing: {qml_path}")
+    return QUrl.fromLocalFile(qml_path)
+
+
+def resolve_media_viewer_qml_source():
+    """Return the reusable detached media-view source."""
+    if QFile.exists(":/qml/MediaViewerWindow.qml"):
+        return QUrl("qrc:/qml/MediaViewerWindow.qml")
+    qml_path = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)),
+        "qml",
+        "MediaViewerWindow.qml",
+    )
+    if not os.path.isfile(qml_path):
+        raise FileNotFoundError(f"Media viewer QML is missing: {qml_path}")
     return QUrl.fromLocalFile(qml_path)
 
 
@@ -225,12 +242,23 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             self._on_initial_load_failed
         )
 
+        self.media_preview_provider = MediaPreviewProvider()
         self.viewer_controller = ViewerController(
-            self.node_model, self.canvas_controller, self.service, self
+            self.node_model,
+            self.canvas_controller,
+            self.service,
+            self.media_preview_provider,
+            self,
         )
         self.canvas_controller.open_media_viewer_requested.connect(
-            self.viewer_controller.open_media_viewer
+            self._request_open_media
         )
+        self.viewer_controller.detachRequested.connect(self._detach_media_viewer)
+        self.viewer_controller.attachRequested.connect(self._attach_media_viewer)
+        self.viewer_controller.sessionClosed.connect(self._dispose_detached_view)
+        self.viewer_controller.titleChanged.connect(self._sync_detached_view_title)
+        self._detached_view = None
+        self._closing_detached_view = False
 
         from PySide6.QtGui import QSurfaceFormat
         format = QSurfaceFormat()
@@ -262,6 +290,9 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             self.node_model, self.service, max_cache_bytes=64 * 1024 * 1024
         )
         self.view.engine().addImageProvider("thumbnails", self.thumb_provider)
+        self.view.engine().addImageProvider(
+            "media-preview", self.media_preview_provider
+        )
 
         self._theme_bridge = ThemeBridge(self, manager=self._theme_manager)
 
@@ -272,6 +303,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             "nodeViewportModel": self.node_viewport_model,
             "connectionViewportModel": self.connection_viewport_model,
             "canvasController": self.canvas_controller,
+            "viewerController": self.viewer_controller,
             "frameClock": self.frame_clock,
         })
 
@@ -297,6 +329,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             QMessageBox.critical(self, "QML Error", error_text)
             raise RuntimeError(error_text)
         root.textEditorOpenChanged.connect(self._on_text_editor_open_changed)
+        root.mediaViewerOpenChanged.connect(self._on_media_viewer_open_changed)
 
         self.overlay = ArrayListOverlay(self)
         self.overlay.set_snap_status(Config.SNAP_TO_GRID)
@@ -386,7 +419,180 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
 
     @Slot(bool)
     def _on_text_editor_open_changed(self, opened):
-        self._set_arraylist_hidden(bool(opened), animate=True)
+        self._sync_arraylist_visibility()
+
+    @Slot(bool)
+    def _on_media_viewer_open_changed(self, opened):
+        self._sync_arraylist_visibility()
+
+    def _sync_arraylist_visibility(self):
+        root = self.view.rootObject() if hasattr(self, "view") else None
+        hidden = bool(
+            root
+            and (
+                root.property("isTextEditorOpen")
+                or root.property("isMediaViewerOpen")
+            )
+        )
+        self._set_arraylist_hidden(hidden, animate=True)
+
+    def _commit_pending_media_edits(self):
+        if not self.viewer_controller.active:
+            return True
+        root = None
+        if self.viewer_controller.detached and self._detached_view is not None:
+            root = self._detached_view.rootObject()
+        if root is None and hasattr(self, "view"):
+            root = self.view.rootObject()
+        commit = getattr(root, "commitPendingMediaEdits", None) if root else None
+        if not callable(commit):
+            return True
+        try:
+            result = commit()
+            return result is None or bool(result)
+        except Exception as exc:
+            self._handle_status_update(
+                f"Unable to save the media title: {exc}", "error"
+            )
+            return False
+
+    @Slot(int)
+    def _request_open_media(self, node_id):
+        if not self._commit_pending_media_edits():
+            return
+        root = self.view.rootObject() if hasattr(self, "view") else None
+        if root is not None and not self.viewer_controller.detached:
+            if bool(root.property("hasUnsavedEditorChanges")):
+                self._handle_status_update(
+                    "Save or cancel the current editor before opening media.",
+                    "warning",
+                )
+                return
+            close_editors = getattr(root, "closeEditorsForMedia", None)
+            if callable(close_editors):
+                close_editors()
+        self.viewer_controller.open_media_viewer(int(node_id))
+
+    @Slot()
+    def _detach_media_viewer(self):
+        if not self.viewer_controller.active:
+            return
+        if not self._commit_pending_media_edits():
+            return
+        if self._detached_view is not None:
+            self._detached_view.show()
+            self._detached_view.raise_()
+            self._detached_view.requestActivate()
+            return
+
+        self.viewer_controller.set_detached(True)
+        detached = None
+        try:
+            detached = QQuickView(self.view.engine(), None)
+            detached.setResizeMode(QQuickView.ResizeMode.SizeRootObjectToView)
+            detached.setColor(QColor(Theme.Palette.BG_CANVAS))
+            detached.setFlags(
+                Qt.WindowType.Window
+                | Qt.WindowType.WindowTitleHint
+                | Qt.WindowType.WindowSystemMenuHint
+                | Qt.WindowType.WindowMinMaxButtonsHint
+                | Qt.WindowType.WindowCloseButtonHint
+            )
+            detached.setIcon(self.windowIcon())
+            detached.setTitle(self._detached_media_title())
+            detached.setInitialProperties(
+                {
+                    "appTheme": self._theme_bridge,
+                    "canvasController": self.canvas_controller,
+                    "viewerController": self.viewer_controller,
+                }
+            )
+            detached.setSource(resolve_media_viewer_qml_source())
+            if detached.status() == QQuickView.Status.Error:
+                errors = "\n".join(error.toString() for error in detached.errors())
+                raise RuntimeError(errors or "Unable to load media viewer window")
+
+            screen = self.screen()
+            available = screen.availableGeometry()
+            width = max(420, min(960, int(available.width() * 0.80)))
+            height = max(340, min(720, int(available.height() * 0.80)))
+            detached.setMinimumSize(QSize(min(520, width), min(360, height)))
+            detached.resize(QSize(width, height))
+            detached.setPosition(
+                QPoint(
+                    available.x() + (available.width() - width) // 2,
+                    available.y() + (available.height() - height) // 2,
+                )
+            )
+            detached.closing.connect(self._on_detached_view_closing)
+            self._detached_view = detached
+            detached.show()
+            detached.requestActivate()
+        except Exception as exc:
+            if detached is not None:
+                detached.hide()
+                detached.setSource(QUrl())
+                detached.deleteLater()
+            self.viewer_controller.set_detached(False)
+            self._handle_status_update(
+                f"Unable to detach media viewer: {exc}", "error"
+            )
+
+    @Slot()
+    def _attach_media_viewer(self):
+        if not self.viewer_controller.active:
+            self._dispose_detached_view()
+            return
+        if not self._commit_pending_media_edits():
+            return
+        root = self.view.rootObject() if hasattr(self, "view") else None
+        if root is not None:
+            if bool(root.property("hasUnsavedEditorChanges")):
+                self._handle_status_update(
+                    "Save or cancel the current editor before attaching media.",
+                    "warning",
+                )
+                return
+            close_editors = getattr(root, "closeEditorsForMedia", None)
+            if callable(close_editors):
+                close_editors()
+        self.viewer_controller.set_detached(False)
+        self._dispose_detached_view()
+        self.view.setFocus()
+
+    @Slot(object)
+    def _on_detached_view_closing(self, close_event=None):
+        if self._closing_detached_view:
+            return
+        if not self._commit_pending_media_edits():
+            if close_event is not None and hasattr(close_event, "setAccepted"):
+                close_event.setAccepted(False)
+            return
+        if self.viewer_controller.active and self.viewer_controller.detached:
+            self.viewer_controller.close_viewer()
+
+    @Slot()
+    def _dispose_detached_view(self):
+        detached, self._detached_view = self._detached_view, None
+        if detached is None:
+            return
+        self._closing_detached_view = True
+        try:
+            detached.hide()
+            detached.setSource(QUrl())
+            detached.close()
+            detached.deleteLater()
+        finally:
+            self._closing_detached_view = False
+
+    def _detached_media_title(self):
+        title = self.viewer_controller.title.strip() or "Media viewer"
+        return f"{title} — {Config.APP_NAME}"
+
+    @Slot()
+    def _sync_detached_view_title(self):
+        if self._detached_view is not None:
+            self._detached_view.setTitle(self._detached_media_title())
 
     def _arraylist_visible_pos(self):
         sb_y = self.statusBar().y()
@@ -1245,6 +1451,8 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             return True
         if key == Qt.Key.Key_Escape and self._is_qml_tag_picker_open():
             return True
+        if self._is_qml_media_viewer_open():
+            return key == Qt.Key.Key_Escape
         editor_open = (
             self._is_qml_text_editor_open()
             or self._is_qml_frame_editor_open()
@@ -1289,6 +1497,15 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         if key == Qt.Key.Key_Escape and self._is_qml_tag_picker_open():
             self._invoke_qml_root("closeTagPicker")
             return True
+
+        if self._is_qml_media_viewer_open():
+            if key == Qt.Key.Key_Escape:
+                if self._is_qml_media_rename_editing():
+                    self._invoke_qml_root("cancelMediaRename")
+                else:
+                    self._invoke_qml_root("collapseOrCloseMediaViewer")
+                return True
+            return False
 
         if self._is_qml_frame_editor_open():
             if key == Qt.Key.Key_Escape:
@@ -1445,6 +1662,8 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         return None
 
     def _handle_global_key_release(self, event):
+        if self._is_qml_media_viewer_open():
+            return False
         if self._keyboard_pan_key_name(event.key()) is None:
             return False
         if self._is_auto_repeat_event(event):
@@ -1548,6 +1767,18 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         root = self.view.rootObject()
         return bool(root and root.property("isSearchPanelOpen"))
 
+    def _is_qml_media_viewer_open(self):
+        if not hasattr(self, "view"):
+            return False
+        root = self.view.rootObject()
+        return bool(root and root.property("isMediaViewerOpen"))
+
+    def _is_qml_media_rename_editing(self):
+        if not hasattr(self, "view"):
+            return False
+        root = self.view.rootObject()
+        return bool(root and root.property("isMediaRenameEditing"))
+
     def _invoke_qml_root(self, method_name, *args):
         if not hasattr(self, "view"):
             return
@@ -1583,6 +1814,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             self._is_qml_text_editor_open()
             or self._is_qml_frame_editor_open()
             or self._is_qml_node_properties_open()
+            or self._is_qml_media_viewer_open()
         ):
             return
         key = event.key()
@@ -1599,6 +1831,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             self._is_qml_text_editor_open()
             or self._is_qml_frame_editor_open()
             or self._is_qml_node_properties_open()
+            or self._is_qml_media_viewer_open()
         ):
             return
         key = event.key()
@@ -1810,6 +2043,14 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
                     "Wait a moment and close the application again.",
                 )
                 return
+
+        viewer_controller = getattr(self, "viewer_controller", None)
+        if viewer_controller is not None and not self._commit_pending_media_edits():
+            event.ignore()
+            return
+        self._dispose_detached_view()
+        if viewer_controller is not None:
+            viewer_controller.shutdown()
 
         self.write_settings()
         if hasattr(self, "service"):
