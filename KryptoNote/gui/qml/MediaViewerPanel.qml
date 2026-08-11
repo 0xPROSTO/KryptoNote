@@ -16,11 +16,19 @@ Item {
     property bool expansionTransition: false
     property string pendingAction: ""
     property real preferredWidth: 520
-    readonly property real minPanelWidth: 320
-    readonly property real maxPanelWidth: parent
-                                          ? Math.min(760, parent.width * 0.70)
-                                          : 760
-    readonly property real automaticWidth: parent ? parent.width * 0.42 : 520
+    readonly property real minPanelWidth: parent ? parent.width * 0.25 : 320
+    readonly property real maxPanelWidth: parent ? parent.width * 0.75 : 960
+    readonly property real mediaAspectRatio: Math.max(
+        1.0,
+        Number(viewerController.mediaAspectRatio) || 1.0
+    )
+    readonly property real automaticWidthRatio: 0.40 + 0.15 * Math.min(
+        1.0,
+        (mediaAspectRatio - 1.0) / (16.0 / 9.0 - 1.0)
+    )
+    readonly property real automaticWidth: parent
+                                           ? parent.width * automaticWidthRatio
+                                           : 520
     readonly property real collapsedWidth: Math.max(
         minPanelWidth,
         Math.min(maxPanelWidth, userResized ? preferredWidth : automaticWidth)
@@ -145,6 +153,11 @@ Item {
                 panel.expandedChangedByUser(panel.expanded)
             }
         }
+    }
+
+    Connections {
+        target: panel.viewerController
+        function onSessionOpened() { panel.userResized = false }
     }
 
     Behavior on slideOffset {

@@ -255,10 +255,19 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         )
         self.viewer_controller.detachRequested.connect(self._detach_media_viewer)
         self.viewer_controller.attachRequested.connect(self._attach_media_viewer)
-        self.viewer_controller.sessionClosed.connect(self._dispose_detached_view)
+        self.viewer_controller.sessionClosed.connect(
+            self._schedule_detached_view_disposal
+        )
+        self.viewer_controller.activeChanged.connect(
+            self._sync_arraylist_visibility
+        )
+        self.viewer_controller.detachedChanged.connect(
+            self._sync_arraylist_visibility
+        )
         self.viewer_controller.titleChanged.connect(self._sync_detached_view_title)
         self._detached_view = None
         self._closing_detached_view = False
+        self._detached_dispose_scheduled = False
 
         from PySide6.QtGui import QSurfaceFormat
         format = QSurfaceFormat()
@@ -427,12 +436,10 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
 
     def _sync_arraylist_visibility(self):
         root = self.view.rootObject() if hasattr(self, "view") else None
+        viewer = getattr(self, "viewer_controller", None)
         hidden = bool(
-            root
-            and (
-                root.property("isTextEditorOpen")
-                or root.property("isMediaViewerOpen")
-            )
+            (root and root.property("isTextEditorOpen"))
+            or (viewer and viewer.active and not viewer.detached)
         )
         self._set_arraylist_hidden(hidden, animate=True)
 
@@ -524,7 +531,6 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
                     available.y() + (available.height() - height) // 2,
                 )
             )
-            detached.closing.connect(self._on_detached_view_closing)
             self._detached_view = detached
             detached.show()
             detached.requestActivate()
@@ -557,33 +563,57 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             if callable(close_editors):
                 close_editors()
         self.viewer_controller.set_detached(False)
+        # The request originates in the detached QML tree. Destroying that
+        # tree before its button handler returns can crash inside Qt Quick.
+        QTimer.singleShot(0, self._finish_media_viewer_attach)
+
+    @Slot()
+    def _finish_media_viewer_attach(self):
         self._dispose_detached_view()
         self.view.setFocus()
 
-    @Slot(object)
     def _on_detached_view_closing(self, close_event=None):
         if self._closing_detached_view:
-            return
+            return False
         if not self._commit_pending_media_edits():
-            if close_event is not None and hasattr(close_event, "setAccepted"):
-                close_event.setAccepted(False)
+            if close_event is not None:
+                close_event.ignore()
+            return True
+
+        self._closing_detached_view = True
+        try:
+            if self.viewer_controller.active and self.viewer_controller.detached:
+                self.viewer_controller.close_viewer()
+            else:
+                self._schedule_detached_view_disposal()
+        finally:
+            self._closing_detached_view = False
+        return False
+
+    @Slot()
+    def _schedule_detached_view_disposal(self):
+        if self._detached_dispose_scheduled:
             return
-        if self.viewer_controller.active and self.viewer_controller.detached:
-            self.viewer_controller.close_viewer()
+        self._detached_dispose_scheduled = True
+        # Let any QML signal handler using the detached root unwind first.
+        QTimer.singleShot(0, self._dispose_detached_view)
 
     @Slot()
     def _dispose_detached_view(self):
+        self._detached_dispose_scheduled = False
         detached, self._detached_view = self._detached_view, None
         if detached is None:
             return
+        already_closing = self._closing_detached_view
         self._closing_detached_view = True
         try:
             detached.hide()
             detached.setSource(QUrl())
-            detached.close()
+            if not already_closing:
+                detached.close()
             detached.deleteLater()
         finally:
-            self._closing_detached_view = False
+            self._closing_detached_view = already_closing
 
     def _detached_media_title(self):
         title = self.viewer_controller.title.strip() or "Media viewer"
@@ -1427,6 +1457,11 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
     # ── Key Events ──────────────────────────────────────────────────
 
     def eventFilter(self, watched, event):
+        if (
+            watched is getattr(self, "_detached_view", None)
+            and event.type() == QEvent.Type.Close
+        ):
+            return self._on_detached_view_closing(event)
         if self._should_suppress_canvas_mouse_event(event):
             return True
         if event.type() == QEvent.Type.ShortcutOverride:

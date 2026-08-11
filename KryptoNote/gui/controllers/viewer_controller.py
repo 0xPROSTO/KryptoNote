@@ -75,6 +75,7 @@ class ViewerController(QObject):
         self._title = ""
         self._tags = []
         self._metadata = {}
+        self._media_aspect_ratio = 1.0
         self._loading = False
         self._error_text = ""
         self._image_revision = preview_provider.revision
@@ -170,6 +171,11 @@ class ViewerController(QObject):
     detached = Property(bool, lambda self: self._detached, notify=detachedChanged)
     nodeId = Property(int, lambda self: self._node_id, notify=sessionChanged)
     mediaType = Property(str, lambda self: self._media_type, notify=sessionChanged)
+    mediaAspectRatio = Property(
+        float,
+        lambda self: self._media_aspect_ratio,
+        notify=sessionChanged,
+    )
     title = Property(str, lambda self: self._title, notify=titleChanged)
     tags = Property(object, lambda self: list(self._tags), notify=tagsChanged)
     metadata = Property(object, lambda self: dict(self._metadata), notify=sessionChanged)
@@ -296,6 +302,8 @@ class ViewerController(QObject):
         self._loading = False
         self._error_text = error.strip()
         if not self._error_text and image is not None and not image.isNull():
+            if image.width() > 0 and image.height() > 0:
+                self._media_aspect_ratio = image.width() / image.height()
             self._image_revision = self._preview_provider.set_image(image)
         elif not self._error_text:
             self._error_text = "Unable to decode this image."
@@ -524,12 +532,19 @@ class ViewerController(QObject):
             return
         title = node.get("title", "") or ""
         tags = [dict(tag) for tag in node.get("tags", [])]
+        media_width = int(node.get("media_width") or 0)
+        media_height = int(node.get("media_height") or 0)
+        self._media_aspect_ratio = (
+            media_width / media_height
+            if media_width > 0 and media_height > 0
+            else (16.0 / 9.0 if node.get("type") == "video" else 1.0)
+        )
         metadata = {
             "type": str(node.get("type", "")).upper(),
             "size": self._format_size(node.get("total_size", 0)),
             "resolution": (
-                f"{node['media_width']} × {node['media_height']}"
-                if node.get("media_width") and node.get("media_height")
+                f"{media_width} × {media_height}"
+                if media_width > 0 and media_height > 0
                 else ""
             ),
             "duration": self._format_duration(node.get("media_duration", 0)),
