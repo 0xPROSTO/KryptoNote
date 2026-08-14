@@ -314,8 +314,12 @@ class QmlCanvasController(QObject):
     @Slot()
     def add_text_node(self):
         center = self.get_viewport_center()
-        x = center[0] - Config.NODE_DEFAULT_WIDTH / 2
-        y = center[1] - Config.NODE_DEFAULT_HEIGHT / 2
+        self.add_text_node_at(center[0], center[1])
+
+    @Slot(float, float)
+    def add_text_node_at(self, center_x, center_y):
+        x = float(center_x) - Config.NODE_DEFAULT_WIDTH / 2
+        y = float(center_y) - Config.NODE_DEFAULT_HEIGHT / 2
         node_id = self.create_text_node_at(
             x, y, "", "", 14, 10,
             auto_fit_pending=True,
@@ -352,10 +356,14 @@ class QmlCanvasController(QObject):
     @Slot()
     def add_frame(self):
         center = self.get_viewport_center()
+        self.add_frame_at(center[0], center[1])
+
+    @Slot(float, float)
+    def add_frame_at(self, center_x, center_y):
         width = Config.FRAME_DEFAULT_WIDTH
         height = Config.FRAME_DEFAULT_HEIGHT
-        x = center[0] - width / 2
-        y = center[1] - height / 2
+        x = float(center_x) - width / 2
+        y = float(center_y) - height / 2
         frame_id = self._service.add_item(
             "frame", x, y, width, height, title="New Frame",
             frame_locked=False,
@@ -379,6 +387,13 @@ class QmlCanvasController(QObject):
     def add_media_node(self, mtype):
         center = self.get_viewport_center()
         self._import_export_ctrl.add_media_node(mtype, viewport_center=center)
+
+    @Slot(str, float, float)
+    def add_media_node_at(self, mtype, center_x, center_y):
+        self._import_export_ctrl.add_media_node(
+            mtype,
+            viewport_center=[float(center_x), float(center_y)],
+        )
 
     @Slot(list, float, float)
     def handle_dropped_files(self, file_urls, drop_x, drop_y):
@@ -499,10 +514,22 @@ class QmlCanvasController(QObject):
 
     def _paste_offset_for_bounds(self, width, height, cascade=0):
         center_x, center_y = self.get_viewport_center()
+        return self._paste_offset_for_bounds_at(
+            center_x,
+            center_y,
+            width,
+            height,
+            cascade,
+        )
+
+    @staticmethod
+    def _paste_offset_for_bounds_at(
+        center_x, center_y, width, height, cascade=0
+    ):
         shift = max(0, int(cascade)) * 32.0
         return (
-            center_x - float(width) / 2.0 + shift,
-            center_y - float(height) / 2.0 + shift,
+            float(center_x) - float(width) / 2.0 + shift,
+            float(center_y) - float(height) / 2.0 + shift,
         )
 
     @Slot(int, result=bool)
@@ -526,6 +553,13 @@ class QmlCanvasController(QObject):
 
     @Slot(result=bool)
     def paste_nodes(self):
+        return self._paste_nodes_at()
+
+    @Slot(float, float, result=bool)
+    def paste_nodes_at(self, center_x, center_y):
+        return self._paste_nodes_at((float(center_x), float(center_y)))
+
+    def _paste_nodes_at(self, center=None):
         if not self._service.has_clipboard():
             self.status_message.emit("Internal clipboard is empty.", "warning")
             return False
@@ -536,11 +570,20 @@ class QmlCanvasController(QObject):
             return False
         summary = self._last_graph_copy_summary or {}
         bounds = summary.get("bounds") or {}
-        offset = self._paste_offset_for_bounds(
-            bounds.get("width", 0.0),
-            bounds.get("height", 0.0),
-            self._graph_paste_count,
-        )
+        if center is None:
+            offset = self._paste_offset_for_bounds(
+                bounds.get("width", 0.0),
+                bounds.get("height", 0.0),
+                self._graph_paste_count,
+            )
+        else:
+            offset = self._paste_offset_for_bounds_at(
+                center[0],
+                center[1],
+                bounds.get("width", 0.0),
+                bounds.get("height", 0.0),
+                self._graph_paste_count,
+            )
         try:
             preparation = self._service.prepare_paste_graph(offset=offset)
         except Exception as exc:
@@ -1159,12 +1202,21 @@ class QmlCanvasController(QObject):
 
     @Slot(result=bool)
     def paste_from_system_clipboard(self):
+        center_x, center_y = self.get_viewport_center()
+        return self._paste_from_system_clipboard_at(center_x, center_y)
+
+    @Slot(float, float, result=bool)
+    def paste_from_system_clipboard_at(self, center_x, center_y):
+        return self._paste_from_system_clipboard_at(
+            float(center_x), float(center_y)
+        )
+
+    def _paste_from_system_clipboard_at(self, center_x, center_y):
         clipboard = QGuiApplication.clipboard()
         mime = clipboard.mimeData() if clipboard is not None else None
         if mime is None:
             self.status_message.emit("System clipboard is unavailable.", "warning")
             return False
-        center_x, center_y = self.get_viewport_center()
         image = self._clipboard_qimage(mime)
         text = mime.text() if mime.hasText() else ""
         paste_mixed = bool(mime.data(self._SYSTEM_MIXED_MIME))

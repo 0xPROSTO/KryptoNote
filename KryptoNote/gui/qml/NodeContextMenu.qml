@@ -22,7 +22,11 @@ Popup {
     property int connId: 0
     property string nodeType: "text"
     property bool frameLocked: false
+    property real canvasX: 0
+    property real canvasY: 0
+    property bool snapToGrid: false
     signal requestedTags(int nodeId, var anchorItem)
+    signal requestedSearch()
 
     function openAt(sourceItem, localX, localY) {
         var point = sourceItem.mapToItem(contextPopup.parent, localX, localY)
@@ -51,6 +55,20 @@ Popup {
         contextPopup.openAt(sourceItem, localX, localY)
     }
 
+    function openForCanvas(
+        sourceItem, localX, localY, contentX, contentY
+    ) {
+        contextPopup.targetKind = "canvas"
+        contextPopup.nodeId = 0
+        contextPopup.nodeType = ""
+        contextPopup.frameLocked = false
+        contextPopup.connId = 0
+        contextPopup.canvasX = contentX
+        contextPopup.canvasY = contentY
+        contextPopup.snapToGrid = contextPopup.canvasController.snap_to_grid
+        contextPopup.openAt(sourceItem, localX, localY)
+    }
+
     enter: Transition {
         NumberAnimation { property: "opacity"; from: 0.0; to: 1.0; duration: 140; easing.type: Easing.OutQuad }
     }
@@ -69,6 +87,145 @@ Popup {
     contentItem: Column {
         spacing: 2
         width: parent ? parent.width : 236
+
+        Loader {
+            width: parent.width
+            active: contextPopup.targetKind === "canvas"
+            visible: active
+            height: active && item ? (item as Column).implicitHeight : 0
+            sourceComponent: Component {
+                Column {
+                    spacing: 2
+
+                    SectionLabel { text: "Create" }
+
+                    MenuButton {
+                        text: "New Note"
+                        rightText: "Ctrl+N"
+                        iconSource: "../assets/icons/note.svg"
+                        onClicked: {
+                            contextPopup.close()
+                            contextPopup.canvasController.add_text_node_at(
+                                contextPopup.canvasX,
+                                contextPopup.canvasY
+                            )
+                        }
+                    }
+
+                    MenuButton {
+                        text: "Image…"
+                        rightText: "Ctrl+M"
+                        iconSource: "../assets/icons/image.svg"
+                        onClicked: {
+                            contextPopup.close()
+                            contextPopup.canvasController.add_media_node_at(
+                                "image",
+                                contextPopup.canvasX,
+                                contextPopup.canvasY
+                            )
+                        }
+                    }
+
+                    MenuButton {
+                        text: "Video…"
+                        rightText: "Ctrl+Shift+M"
+                        iconSource: "../assets/icons/video.svg"
+                        onClicked: {
+                            contextPopup.close()
+                            contextPopup.canvasController.add_media_node_at(
+                                "video",
+                                contextPopup.canvasX,
+                                contextPopup.canvasY
+                            )
+                        }
+                    }
+
+                    MenuButton {
+                        text: "Frame"
+                        iconSource: "../assets/icons/frame.svg"
+                        onClicked: {
+                            contextPopup.close()
+                            contextPopup.canvasController.add_frame_at(
+                                contextPopup.canvasX,
+                                contextPopup.canvasY
+                            )
+                        }
+                    }
+
+                    MenuSeparator {}
+
+                    MenuButton {
+                        text: "Paste"
+                        rightText: "Ctrl+V"
+                        iconSource: "../assets/icons/open.svg"
+                        onClicked: {
+                            contextPopup.close()
+                            contextPopup.canvasController.paste_nodes_at(
+                                contextPopup.canvasX,
+                                contextPopup.canvasY
+                            )
+                        }
+                    }
+
+                    MenuButton {
+                        text: "Paste from System"
+                        rightText: "Ctrl+Shift+V"
+                        iconSource: "../assets/icons/database.svg"
+                        onClicked: {
+                            contextPopup.close()
+                            contextPopup.canvasController
+                                .paste_from_system_clipboard_at(
+                                    contextPopup.canvasX,
+                                    contextPopup.canvasY
+                                )
+                        }
+                    }
+
+                    MenuSeparator {}
+                    SectionLabel { text: "Canvas" }
+
+                    MenuButton {
+                        text: "Select All"
+                        rightText: "Ctrl+A"
+                        iconSource: "../assets/icons/select-all.svg"
+                        onClicked: {
+                            contextPopup.canvasController.select_all_nodes()
+                            contextPopup.close()
+                        }
+                    }
+
+                    MenuButton {
+                        text: "Find Node…"
+                        rightText: "Ctrl+F"
+                        iconSource: "../assets/icons/search.svg"
+                        onClicked: {
+                            contextPopup.close()
+                            contextPopup.requestedSearch()
+                        }
+                    }
+
+                    MenuButton {
+                        text: "Clear Selection"
+                        rightText: "Esc"
+                        iconSource: "../assets/icons/remove.svg"
+                        onClicked: {
+                            contextPopup.canvasController.clear_selection()
+                            contextPopup.close()
+                        }
+                    }
+
+                    MenuButton {
+                        text: "Snap to Grid"
+                        rightText: contextPopup.snapToGrid ? "On · G" : "Off · G"
+                        iconSource: "../assets/icons/grid.svg"
+                        onClicked: {
+                            contextPopup.canvasController.toggle_snap_to_grid()
+                            contextPopup.close()
+                        }
+                    }
+                }
+            }
+        }
 
         MenuButton {
             visible: contextPopup.targetKind === "connection"
@@ -364,6 +521,30 @@ Popup {
         }
     }
 
+    component SectionLabel: Text {
+        width: parent ? parent.width : 228
+        height: 22
+        leftPadding: 10
+        verticalAlignment: Text.AlignVCenter
+        color: contextPopup.appTheme.textMuted
+        font.family: "Segoe UI"
+        font.pointSize: 8
+        font.weight: Font.DemiBold
+        Accessible.ignored: true
+    }
+
+    component MenuSeparator: Item {
+        width: parent ? parent.width : 228
+        height: 7
+
+        Rectangle {
+            width: parent.width - 8
+            height: 1
+            anchors.centerIn: parent
+            color: contextPopup.appTheme.borderDefault
+        }
+    }
+
     component MenuButton: Rectangle {
         id: menuButton
         width: parent ? parent.width : 228
@@ -376,6 +557,7 @@ Popup {
         border.color: contextPopup.appTheme.accentMain
 
         property alias text: label.text
+        property alias rightText: shortcutLabel.text
         property color textColor: contextPopup.appTheme.textMain
         property url iconSource: ""
         signal clicked()
@@ -403,13 +585,27 @@ Popup {
             id: label
             anchors.left: menuIcon.visible ? menuIcon.right : parent.left
             anchors.leftMargin: menuIcon.visible ? 2 : 10
-            anchors.right: parent.right
-            anchors.rightMargin: 8
+            anchors.right: shortcutLabel.visible
+                           ? shortcutLabel.left
+                           : parent.right
+            anchors.rightMargin: shortcutLabel.visible ? 10 : 8
             anchors.verticalCenter: parent.verticalCenter
             color: menuButton.textColor
             font.family: "Segoe UI"
             font.pointSize: 9
             elide: Text.ElideRight
+        }
+
+        Text {
+            id: shortcutLabel
+            visible: text.length > 0
+            anchors.right: parent.right
+            anchors.rightMargin: 9
+            anchors.verticalCenter: parent.verticalCenter
+            color: contextPopup.appTheme.textMuted
+            font.family: "Segoe UI"
+            font.pointSize: 8
+            horizontalAlignment: Text.AlignRight
         }
 
         Keys.onPressed: function(event) {

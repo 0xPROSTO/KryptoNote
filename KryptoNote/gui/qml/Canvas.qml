@@ -171,6 +171,7 @@ Rectangle {
         onRequestedTags: function(nodeId, anchorItem) {
             root.openTagPickerForNode(nodeId, anchorItem)
         }
+        onRequestedSearch: root.openSearchPanel()
     }
 
     RubberBandSelection {
@@ -215,6 +216,17 @@ Rectangle {
         contentScale: root.contentScale
         gridSize: root.gridSize
         snapToGrid: root.snapToGrid
+        onContextMenuRequested: function(
+            sourceItem, localX, localY, contentX, contentY
+        ) {
+            canvasContextMenu.openForCanvas(
+                sourceItem,
+                localX,
+                localY,
+                contentX,
+                contentY
+            )
+        }
     }
 
     SearchPanel {

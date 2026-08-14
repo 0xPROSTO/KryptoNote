@@ -18,6 +18,13 @@ Item {
     property bool isPanning: false
     property bool suppressingNextPress: false
     property bool suppressingMouseSequence: false
+    signal contextMenuRequested(
+        var sourceItem,
+        real localX,
+        real localY,
+        real contentX,
+        real contentY
+    )
 
     MouseArea {
         id: canvasMouseArea
@@ -125,7 +132,21 @@ Item {
             }
 
             if (Math.abs(mouse.x - pressPos.x) < 3 && Math.abs(mouse.y - pressPos.y) < 3) {
-                if (mouse.button === Qt.LeftButton && !input.isShiftHeld) {
+                if (mouse.button === Qt.RightButton) {
+                    var contentPos = canvasMouseArea.mapToItem(
+                        input.contentLayer,
+                        mouse.x,
+                        mouse.y
+                    )
+                    input.contextMenuRequested(
+                        canvasMouseArea,
+                        mouse.x,
+                        mouse.y,
+                        contentPos.x,
+                        contentPos.y
+                    )
+                    mouse.accepted = true
+                } else if (mouse.button === Qt.LeftButton && !input.isShiftHeld) {
                     input.nodeModel.clear_selection()
                     input.nodeModel.clear_hovered()
                 }
