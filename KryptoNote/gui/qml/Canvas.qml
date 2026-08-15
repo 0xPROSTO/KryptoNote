@@ -127,6 +127,7 @@ Rectangle {
             canvasRoot: root
             nodeModel: root.nodeModel
             canvasController: root.canvasController
+            viewerController: root.viewerController
             contentLayer: contentLayer
             appTheme: root.appTheme
             framesOnly: true
@@ -154,6 +155,7 @@ Rectangle {
             canvasRoot: root
             nodeModel: root.nodeModel
             canvasController: root.canvasController
+            viewerController: root.viewerController
             contentLayer: contentLayer
             appTheme: root.appTheme
             framesOnly: false
@@ -520,13 +522,16 @@ Rectangle {
         return mediaViewerPanel.commitPendingEdits()
     }
 
+    function promptDescriptionGuard(action) {
+        return mediaViewerPanel.promptDescriptionGuard(action)
+    }
+
     function collapseOrCloseMediaViewer() {
         mediaViewerPanel.collapseOrClose()
     }
 
     function closeMediaViewer() {
-        if (mediaViewerPanel.commitPendingEdits())
-            root.viewerController.close_viewer()
+        mediaViewerPanel.requestCloseGuarded()
     }
 
     function openSearchPanel() {
@@ -556,7 +561,11 @@ Rectangle {
 
     function openEditorForNode(nodeId) {
         if (root.viewerController.active && !root.viewerController.detached) {
-            if (!mediaViewerPanel.commitPendingEdits()) return
+            if (!mediaViewerPanel.commitPendingEdits()) {
+                if (root.viewerController.descriptionDirty)
+                    mediaViewerPanel.promptDescriptionGuard("close")
+                return
+            }
             if (root._hasMediaReturn && !root._hasEditorReturn) {
                 root._editorReturnX = root._mediaReturnX
                 root._editorReturnY = root._mediaReturnY
@@ -576,7 +585,11 @@ Rectangle {
 
     function openFrameEditorForNode(nodeId) {
         if (root.viewerController.active && !root.viewerController.detached) {
-            if (!mediaViewerPanel.commitPendingEdits()) return
+            if (!mediaViewerPanel.commitPendingEdits()) {
+                if (root.viewerController.descriptionDirty)
+                    mediaViewerPanel.promptDescriptionGuard("close")
+                return
+            }
             root.viewerController.close_viewer()
         }
         frameEditor.openForFrame(nodeId)

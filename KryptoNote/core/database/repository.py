@@ -18,7 +18,7 @@ from .connection import (
 )
 from .operations import MaintenanceResult, read_database_space_stats
 from ..crypto import CryptoManager
-from ..constants import MEDIA_CHUNK_SIZE
+from ..constants import MEDIA_CHUNK_SIZE, MEDIA_NODE_TYPES, PLAYABLE_NODE_TYPES
 from ..exceptions import InsufficientDiskSpaceError, OperationCancelledError
 
 
@@ -436,12 +436,17 @@ class NodeRepository:
                 ).decode()
                 if encrypted_text else ""
             )
+            # Initial canvas loading skips decoded image/video thumbnails to
+            # keep startup bounded, but audio thumbnails are the compact
+            # waveform payload that the viewer needs for its first render.
+            keep_audio_waveform = item_type == "audio"
             thumbnail = (
                 self.crypto.decrypt(
                     encrypted_thumbnail,
                     aad=self.crypto.item_aad(item_id, "thumbnail"),
                 )
-                if include_thumbnail and encrypted_thumbnail else None
+                if (include_thumbnail or keep_audio_waveform)
+                and encrypted_thumbnail else None
             )
             original_filename = (
                 self.crypto.decrypt(
@@ -635,15 +640,23 @@ class NodeRepository:
 
     def get_item_info(self, item_id):
         self.cursor.execute(
-            "SELECT id, type, is_chunked, total_size FROM items "
+            "SELECT id, type, is_chunked, total_size, original_filename "
+            "FROM items "
             "WHERE id=? AND storage_state='ready'",
             (item_id,),
         )
         row = self.cursor.fetchone()
         if row:
+            original_filename = ""
+            if row[4] and self.crypto:
+                original_filename = self.crypto.decrypt(
+                    row[4],
+                    aad=self.crypto.item_aad(row[0], "original_filename"),
+                ).decode()
             return NodeItemDTO(
                 id=row[0], type=row[1], title="", x=0, y=0, width=0, height=0,
-                is_chunked=bool(row[2]), total_size=row[3]
+                is_chunked=bool(row[2]), total_size=row[3],
+                original_filename=original_filename,
             )
         return None
 
@@ -1884,6 +1897,55 @@ class NodeRepository:
     def commit_changes(self):
         self.conn.commit()
 
+    def update_media_description(self, item_id, new_text, text_size=10):
+        """Update only the encrypted Markdown description of a media node.
+
+        Media descriptions intentionally do not rename the node.  ``NULL``
+        legacy descriptions are exposed as an empty string by
+        ``_decode_item_row``; an empty new description is stored as ``NULL``
+        to keep old and new empty nodes equivalent without a schema change.
+        """
+
+        try:
+            item_id = int(item_id)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Invalid media item id") from exc
+        if not isinstance(new_text, str):
+            raise TypeError("Media description must be text")
+        self.cursor.execute("SELECT type FROM items WHERE id=?", (item_id,))
+        row = self.cursor.fetchone()
+        if row is None:
+            raise ValueError("Media item not found")
+        if row[0] not in MEDIA_NODE_TYPES:
+            raise ValueError("Descriptions are supported only for media nodes")
+        try:
+            normalized_size = max(1, int(text_size))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Invalid media text size") from exc
+        enc_text = (
+            self.crypto.encrypt(
+                new_text.encode("utf-8"),
+                aad=self.crypto.item_aad(item_id, "text_content"),
+            )
+            if new_text
+            else None
+        )
+        now = datetime.now().isoformat(timespec="seconds")
+        self.cursor.execute(
+            "UPDATE items SET text_content=?, text_size=?, updated_at=? "
+            "WHERE id=? AND type IN (?, ?, ?)",
+            (
+                enc_text,
+                normalized_size,
+                now,
+                item_id,
+                *sorted(MEDIA_NODE_TYPES),
+            ),
+        )
+        if self.cursor.rowcount != 1:
+            raise ValueError("Media item not found")
+        self.conn.commit()
+
     def rollback_changes(self):
         self.conn.rollback()
 
@@ -2043,7 +2105,7 @@ class NodeRepository:
 
         if row:
             item_type, total_size = row
-            if item_type == "video":
+            if item_type in PLAYABLE_NODE_TYPES:
                 try:
                     from ..io.stream import close_streams_for_item
                     close_streams_for_item(item_id)
@@ -2145,7 +2207,7 @@ class NodeRepository:
             close_streams_for_item = None
 
         for item_id, item_type, total_size in rows:
-            if item_type == "video" and close_streams_for_item:
+            if item_type in PLAYABLE_NODE_TYPES and close_streams_for_item:
                 close_streams_for_item(item_id)
 
         def do_delete(cursor, conn):

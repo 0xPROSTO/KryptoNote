@@ -186,7 +186,10 @@ dialog::backdrop { background:rgba(0,0,0,.72); }
 }
 .detail-title { min-width:0; margin:0 auto 0 0; font-size:18px; line-height:1.25; text-wrap:balance; }
 .detail-content { padding:18px 20px 24px; }
-.detail-content img,.detail-content video { display:block; max-width:100%; max-height:65vh; margin:0 auto; background:var(--bg-input); }
+.detail-content img,.detail-content video,.detail-content audio { display:block; max-width:100%; max-height:65vh; margin:0 auto; background:var(--bg-input); }
+.detail-content audio { width:min(680px,100%); }
+.waveform { display:flex; align-items:center; gap:2px; width:min(680px,100%); height:64px; margin:14px auto 0; padding:8px; border:1px solid var(--border); border-radius:4px; background:var(--bg-input); }
+.waveform-bar { flex:1 1 0; min-width:1px; border-radius:2px; background:var(--accent); opacity:.8; }
 .detail-copy { max-width:72ch; line-height:1.55; overflow-wrap:anywhere; }
 .detail-copy h1,.detail-copy h2,.detail-copy h3 { color:var(--accent); line-height:1.25; text-wrap:balance; }
 .detail-copy pre { overflow:auto; padding:12px; border:1px solid var(--border); background:var(--bg-input); }
@@ -561,7 +564,7 @@ dialog::backdrop { background:rgba(0,0,0,.72); }
         const tags=renderTagStrip(node.tags,"media",node.size.width); if (tags) frame.appendChild(tags);
         inner.appendChild(frame); const footer=document.createElement("div"); footer.className="node-footer";
         const parts=[formatTimestamp(node.created_at)];
-        if (node.type==="video" && node.media.duration) parts.push(duration(node.media.duration));
+        if ((node.type==="video" || node.type==="audio") && node.media.duration) parts.push(duration(node.media.duration));
         if (node.media.size) parts.push(formatAppBytes(node.media.size));
         if (node.media.width && node.media.height) parts.push(`${node.media.width}x${node.media.height}`);
         footer.textContent=parts.filter(Boolean).join(" | ") || `[${safeText(node.type).toUpperCase()}]`; inner.appendChild(footer);
@@ -576,7 +579,15 @@ dialog::backdrop { background:rgba(0,0,0,.72); }
     if (node.type==="text") { const copy=document.createElement("div"); copy.className="detail-copy"; copy.innerHTML=renderMarkdown(node.content||""); detailContent.appendChild(copy); }
     else if (node.type==="frame") { const copy=document.createElement("p"); copy.textContent=node.locked ? "Locked frame · contained nodes move with it." : "Unlocked frame · moves independently."; detailContent.appendChild(copy); }
     else if (node.type==="image") { const image=document.createElement("img"); image.alt=node.title||"Exported image"; image.src=fileSource(node,false)||fileSource(node,true); detailContent.appendChild(image); }
+    else if (node.type==="audio") {
+      const audio=document.createElement("audio"); audio.controls=true; audio.setAttribute("controls",""); audio.preload="metadata"; audio.src=fileSource(node,false); detailContent.appendChild(audio);
+      const waveform=document.createElement("div"); waveform.className="waveform"; waveform.setAttribute("role","img"); waveform.setAttribute("aria-label","Audio waveform");
+      (node.media.waveform||[]).forEach(value => { const bar=document.createElement("span"); bar.className="waveform-bar"; bar.style.height=`${Math.max(4,Math.min(100,Number(value||0)*100))}%`; waveform.appendChild(bar); });
+      if (waveform.childElementCount) detailContent.appendChild(waveform);
+      const fallback=document.createElement("p"); fallback.className="media-fallback"; fallback.textContent="If this format is not supported by your browser, "; const link=document.createElement("a"); link.href=fileSource(node,false); link.textContent="open the original audio"; link.target="_blank"; fallback.appendChild(link); fallback.append(" in a desktop player."); detailContent.appendChild(fallback);
+    }
     else { const video=document.createElement("video"); video.controls=true; video.preload="metadata"; video.poster=fileSource(node,true); video.src=fileSource(node,false); detailContent.appendChild(video); const fallback=document.createElement("p"); fallback.className="media-fallback"; fallback.textContent="If this format is not supported by your browser, "; const link=document.createElement("a"); link.href=fileSource(node,false); link.textContent="open the original video"; link.target="_blank"; fallback.appendChild(link); fallback.append(" in a desktop player."); detailContent.appendChild(fallback); }
+    if ((node.type==="image" || node.type==="video" || node.type==="audio") && node.content) { const copy=document.createElement("div"); copy.className="detail-copy"; copy.innerHTML=renderMarkdown(node.content); detailContent.appendChild(copy); }
     const meta=document.createElement("div"); meta.className="meta"; const values=[`Type: ${node.type}`,`Node ID: ${node.id}`];
     if (node.type==="frame") values.push(`Lock: ${node.locked ? "locked" : "unlocked"}`);
     if (node.media) { values.push(`Size: ${formatBytes(node.media.size)}`); if (node.media.width || node.media.height) values.push(`Dimensions: ${node.media.width||0}×${node.media.height||0}`); if (node.media.duration) values.push(`Duration: ${duration(node.media.duration)}`); if (node.media.original_filename) values.push(`Original: ${node.media.original_filename}`); }

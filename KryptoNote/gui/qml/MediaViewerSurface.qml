@@ -29,6 +29,33 @@ FocusScope {
     property real imagePanX: 0.0
     property real imagePanY: 0.0
     property bool imageFit: true
+    property bool _syncingDescription: false
+    property string _pendingMediaAction: ""
+    // Keep media descriptions on the same size scale as the text editor.
+    // In particular, 11pt must remain selectable after a save/reload.
+    property var descriptionFontSizes: [
+        8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 32, 36, 48, 64
+    ]
+    readonly property bool descriptionVisible: viewerController.active
+                                               && (viewerController.mediaType === "image"
+                                                   || viewerController.mediaType === "video"
+                                                   || viewerController.mediaType === "audio")
+    readonly property real descriptionSplitRatio: Math.max(
+        0.10,
+        Math.min(0.90, Number(viewerController.descriptionSplitRatio) || 0.20)
+    )
+    readonly property real splitAvailableHeight: Math.max(
+        0,
+        surfaceColumn.height
+        - header.height
+        - mediaControls.height
+        - tagBar.height
+        - metadataBlock.height
+        - surfaceColumn.spacing * 5
+    )
+    readonly property bool playbackForCurrentNode: viewerController.active
+                                                   && viewerController.playbackNodeId
+                                                      === viewerController.nodeId
 
     signal closeRequested()
     signal detachRequested()
@@ -199,6 +226,7 @@ FocusScope {
     function commitPendingEdits() {
         var wasRenaming = titleInput.activeFocus || _renameNodeId > 0
         if (!commitRename()) return false
+        if (viewerController.descriptionDirty) return false
         _renameNodeId = 0
         if (mediaTagPicker.visible) mediaTagPicker.close()
         if (wasRenaming) viewportFocus.forceActiveFocus()
@@ -210,7 +238,11 @@ FocusScope {
     }
 
     function requestDetachOrAttach() {
-        if (!commitPendingEdits()) return
+        if (!commitPendingEdits()) {
+            if (viewerController.descriptionDirty)
+                openDescriptionGuard(viewerController.detached ? "attach" : "detach")
+            return
+        }
         if (viewerController.detached)
             viewerController.request_attach()
         else
@@ -218,8 +250,61 @@ FocusScope {
     }
 
     function requestClose() {
-        if (!commitPendingEdits()) return
+        if (!commitPendingEdits()) {
+            if (viewerController.descriptionDirty)
+                openDescriptionGuard("close")
+            return
+        }
         closeRequested()
+    }
+
+    function syncDescriptionForSession() {
+        if (_syncingDescription || (descriptionEditor.activeFocus
+                                   && viewerController.descriptionDirty)) return
+        _syncingDescription = true
+        descriptionEditor.text = viewerController.descriptionDraft || ""
+        descriptionSizeCombo.currentIndex = descriptionSizeIndex(
+            viewerController.descriptionTextSize
+        )
+        _syncingDescription = false
+    }
+
+    function descriptionSizeIndex(size) {
+        var normalized = Number(size) || 10
+        var index = descriptionFontSizes.indexOf(normalized)
+        if (index >= 0) return index
+        var fallback = descriptionFontSizes.indexOf(10)
+        return fallback >= 0 ? fallback : 0
+    }
+
+    function saveDescriptionAndContinue() {
+        if (!viewerController.save_description()) return false
+        descriptionGuard.close()
+        var action = _pendingMediaAction
+        _pendingMediaAction = ""
+        if (action === "close") closeRequested()
+        else if (action === "detach") detachRequested()
+        else if (action === "attach") viewerController.request_attach()
+        else if (action.indexOf("switch:") === 0)
+            viewerController.open_media_viewer(Number(action.substring(7)))
+        return true
+    }
+
+    function discardDescriptionAndContinue() {
+        viewerController.discard_description()
+        descriptionGuard.close()
+        var action = _pendingMediaAction
+        _pendingMediaAction = ""
+        if (action === "close") closeRequested()
+        else if (action === "detach") detachRequested()
+        else if (action === "attach") viewerController.request_attach()
+        else if (action.indexOf("switch:") === 0)
+            viewerController.open_media_viewer(Number(action.substring(7)))
+    }
+
+    function openDescriptionGuard(action) {
+        _pendingMediaAction = action
+        descriptionGuard.open()
     }
 
     function cancelRename() {
@@ -241,8 +326,19 @@ FocusScope {
     function handleEscape() {
         if (closeTagPicker()) return true
         if (cancelRename()) return true
+        if (descriptionEditor.activeFocus) {
+            if (viewerController.descriptionDirty)
+                openDescriptionGuard("close")
+            else
+                viewportFocus.forceActiveFocus()
+            return true
+        }
         if (showExpand && expanded) {
             expandRequested()
+            return true
+        }
+        if (viewerController.descriptionDirty) {
+            openDescriptionGuard("close")
             return true
         }
         closeRequested()
@@ -252,6 +348,7 @@ FocusScope {
     function syncVideoOutput() {
         if (surfaceActive && viewerController.active
                 && viewerController.mediaType === "video"
+                && viewerController.playbackNodeId === viewerController.nodeId
                 && viewerController.errorText.length === 0) {
             viewerController.attach_video_output(videoOutput)
         } else {
@@ -261,6 +358,7 @@ FocusScope {
 
     Component.onCompleted: {
         syncTitleForSession()
+        syncDescriptionForSession()
         syncImageState()
         syncVideoOutput()
     }
@@ -273,7 +371,9 @@ FocusScope {
             event.accepted = true
             return
         }
-        if (renameEditing || tagPickerOpen || viewerController.mediaType !== "video"
+        if (descriptionEditor.activeFocus || renameEditing || tagPickerOpen
+                || (viewerController.mediaType !== "video"
+                    && viewerController.mediaType !== "audio")
                 || event.modifiers !== Qt.NoModifier) return
         if (event.key === Qt.Key_Space) {
             viewerController.toggle_playback()
@@ -437,9 +537,10 @@ FocusScope {
             objectName: "mediaViewport"
             width: parent.width
             height: Math.max(
-                120,
-                surfaceColumn.height - header.height - mediaControls.height
-                - tagBar.height - metadataBlock.height - surfaceColumn.spacing * 4
+                0,
+                surface.splitAvailableHeight
+                * (surface.descriptionVisible
+                   ? 1 - surface.descriptionSplitRatio : 1)
             )
             radius: 8
             color: surface.appTheme.bgNode
@@ -492,6 +593,42 @@ FocusScope {
                 visible: surface.viewerController.mediaType === "video"
                          && surface.viewerController.errorText.length === 0
                 fillMode: VideoOutput.PreserveAspectFit
+            }
+
+            AudioWaveform {
+                id: viewerAudioWaveform
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: 24
+                anchors.rightMargin: 24
+                height: Math.min(86, Math.max(42, parent.height * 0.28))
+                visible: surface.viewerController.mediaType === "audio"
+                appTheme: surface.appTheme
+                waveform: surface.viewerController.audioWaveform
+                enabled: !surface.viewerController.loading
+                         && surface.viewerController.errorText.length === 0
+                progress: surface.viewerController.playbackNodeId
+                          === surface.viewerController.nodeId
+                          && surface.viewerController.duration > 0
+                          ? surface.viewerController.position
+                            / surface.viewerController.duration : 0
+                onSeekRequested: function(fraction) {
+                    surface.viewerController.seek_for(
+                        surface.viewerController.nodeId,
+                        fraction * Math.max(1, surface.viewerController.duration)
+                    )
+                }
+            }
+
+            Text {
+                anchors.centerIn: viewerAudioWaveform
+                visible: surface.viewerController.audioWaveform.length === 0
+                         || surface.viewerController.duration <= 0
+                text: "Waveform unavailable"
+                color: surface.appTheme.textDim
+                font.family: surface.appTheme.textFontFamily
+                font.pointSize: 9
             }
 
             MouseArea {
@@ -633,6 +770,151 @@ FocusScope {
         }
 
         Item {
+            id: descriptionSplit
+            width: parent.width
+            visible: surface.descriptionVisible
+            height: visible
+                    ? Math.max(0, surface.splitAvailableHeight
+                                  * surface.descriptionSplitRatio)
+                    : 0
+
+            Rectangle {
+                id: descriptionDivider
+                width: parent.width
+                height: 5
+                anchors.top: parent.top
+                color: dividerMouse.pressed || dividerMouse.containsMouse
+                       ? surface.appTheme.accentMain
+                       : surface.appTheme.borderDefault
+                opacity: dividerMouse.pressed || dividerMouse.containsMouse ? 0.8 : 0.45
+
+                MouseArea {
+                    id: dividerMouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.SizeVerCursor
+                    property real pressY: 0
+                    property real startHeight: 0
+                    onPressed: function(mouse) {
+                        pressY = mouse.y
+                        startHeight = descriptionSplit.height
+                        forceActiveFocus()
+                    }
+                    onPositionChanged: function(mouse) {
+                        if (!pressed) return
+                        var availableHeight = surface.splitAvailableHeight
+                        if (availableHeight <= 0) return
+                        var nextHeight = startHeight + (mouse.y - pressY)
+                        var ratio = nextHeight / availableHeight
+                        surface.viewerController.set_description_split_ratio(ratio)
+                    }
+                }
+            }
+
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: descriptionDivider.bottom
+                anchors.bottom: parent.bottom
+                color: surface.appTheme.bgNode
+                border.width: 1
+                border.color: surface.appTheme.borderSubtle
+                radius: 7
+
+                TextArea {
+                    id: descriptionEditor
+                    anchors.left: parent.left
+                    anchors.right: descriptionActions.left
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    anchors.margins: 8
+                    anchors.rightMargin: 4
+                    text: ""
+                    placeholderText: "Markdown description"
+                    color: surface.appTheme.textMain
+                    placeholderTextColor: surface.appTheme.textDim
+                    selectionColor: surface.appTheme.accentMain
+                    selectedTextColor: surface.appTheme.bgPanel
+                    font.family: surface.appTheme.textFontFamily
+                    font.pointSize: Math.max(8, Number(surface.viewerController.descriptionTextSize) || 10)
+                    wrapMode: TextEdit.WrapAtWordBoundaryOrAnywhere
+                    textFormat: TextEdit.PlainText
+                    background: Item {}
+                    selectByMouse: true
+                    focusPolicy: Qt.TabFocus
+                    Accessible.name: "Media Markdown description"
+                    onTextChanged: {
+                        if (!surface._syncingDescription)
+                            surface.viewerController.set_description_draft(
+                                text, surface.viewerController.descriptionTextSize
+                            )
+                    }
+                    Keys.onPressed: function(event) {
+                        if (event.key === Qt.Key_S
+                                && (event.modifiers & Qt.ControlModifier)) {
+                            surface.viewerController.save_description()
+                            event.accepted = true
+                        } else if (event.key === Qt.Key_Escape) {
+                            surface.handleEscape()
+                            event.accepted = true
+                        }
+                    }
+                }
+
+                Column {
+                    id: descriptionActions
+                    width: 86
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    anchors.margins: 8
+                    spacing: 4
+
+                    Button {
+                        width: parent.width
+                        height: 28
+                        text: "Save"
+                        enabled: surface.viewerController.descriptionDirty
+                        focusPolicy: Qt.TabFocus
+                        Accessible.name: "Save description"
+                        onClicked: surface.viewerController.save_description()
+                    }
+                    Button {
+                        width: parent.width
+                        height: 28
+                        text: "Cancel"
+                        enabled: surface.viewerController.descriptionDirty
+                        focusPolicy: Qt.TabFocus
+                        Accessible.name: "Discard description changes"
+                        onClicked: surface.viewerController.discard_description()
+                    }
+                    ComboBox {
+                        id: descriptionSizeCombo
+                        width: parent.width
+                        height: 28
+                        model: surface.descriptionFontSizes
+                        currentIndex: surface.descriptionSizeIndex(
+                            surface.viewerController.descriptionTextSize
+                        )
+                        Accessible.name: "Description text size"
+                        onActivated: surface.viewerController.set_description_draft(
+                            descriptionEditor.text, Number(currentText)
+                        )
+                    }
+                    Text {
+                        width: parent.width
+                        text: surface.viewerController.descriptionDirty ? "Unsaved" : "Saved"
+                        color: surface.viewerController.descriptionDirty
+                               ? surface.appTheme.accentMain : surface.appTheme.textDim
+                        font.family: surface.appTheme.textFontFamily
+                        font.pointSize: 8
+                        horizontalAlignment: Text.AlignHCenter
+                    }
+                }
+            }
+        }
+
+        Item {
             id: mediaControls
             width: parent.width
             height: surface.viewerController.mediaType === "video"
@@ -707,6 +989,80 @@ FocusScope {
                 }
             }
 
+            RowLayout {
+                anchors.fill: parent
+                spacing: 6
+                visible: surface.viewerController.mediaType === "audio"
+
+                MediaIconButton {
+                    appTheme: surface.appTheme
+                    iconSource: surface.playbackForCurrentNode
+                                && surface.viewerController.playing
+                                ? "../assets/icons/pause.svg"
+                                : "../assets/icons/play.svg"
+                    accessibleName: surface.playbackForCurrentNode
+                                    && surface.viewerController.playing
+                                    ? "Pause audio" : "Play audio"
+                    onClicked: surface.viewerController.toggle_playback()
+                }
+
+                Slider {
+                    id: audioSeekSlider
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 30
+                    from: 0
+                    to: Math.max(1, surface.viewerController.duration)
+                    focusPolicy: Qt.TabFocus
+                    Accessible.name: "Audio position"
+                    onMoved: surface.viewerController.seek(value)
+                    background: Rectangle {
+                        x: audioSeekSlider.leftPadding
+                        y: audioSeekSlider.topPadding
+                           + audioSeekSlider.availableHeight / 2 - height / 2
+                        width: audioSeekSlider.availableWidth
+                        height: 4
+                        radius: 2
+                        color: surface.appTheme.sliderTrack
+                        Rectangle {
+                            width: audioSeekSlider.visualPosition * parent.width
+                            height: parent.height
+                            radius: parent.radius
+                            color: surface.appTheme.accentMain
+                        }
+                    }
+                    handle: Rectangle {
+                        x: audioSeekSlider.leftPadding + audioSeekSlider.visualPosition
+                           * (audioSeekSlider.availableWidth - width)
+                        y: audioSeekSlider.topPadding
+                           + audioSeekSlider.availableHeight / 2 - height / 2
+                        width: 12
+                        height: 12
+                        radius: 6
+                        color: audioSeekSlider.visualFocus
+                               ? surface.appTheme.accentMain : surface.appTheme.sliderHandle
+                    }
+                    Binding {
+                        target: audioSeekSlider
+                        property: "value"
+                        value: surface.playbackForCurrentNode
+                               ? surface.viewerController.position : 0
+                        when: !audioSeekSlider.pressed
+                    }
+                }
+
+                Text {
+                    Layout.preferredWidth: 88
+                    text: surface.formatTime(surface.playbackForCurrentNode
+                                             ? surface.viewerController.position : 0)
+                          + " / " + surface.formatTime(surface.playbackForCurrentNode
+                                                       ? surface.viewerController.duration : 0)
+                    color: surface.appTheme.textMuted
+                    horizontalAlignment: Text.AlignRight
+                    font.family: "Segoe UI"
+                    font.pointSize: 8
+                }
+            }
+
             Column {
                 anchors.fill: parent
                 spacing: 2
@@ -719,10 +1075,12 @@ FocusScope {
 
                     MediaIconButton {
                         appTheme: surface.appTheme
-                        iconSource: surface.viewerController.playing
+                        iconSource: surface.playbackForCurrentNode
+                                    && surface.viewerController.playing
                                     ? "../assets/icons/pause.svg"
                                     : "../assets/icons/play.svg"
-                        accessibleName: surface.viewerController.playing
+                        accessibleName: surface.playbackForCurrentNode
+                                        && surface.viewerController.playing
                                         ? "Pause video (Space)"
                                         : "Play video (Space)"
                         enabled: !surface.viewerController.loading
@@ -782,15 +1140,20 @@ FocusScope {
                         Binding {
                             target: seekSlider
                             property: "value"
-                            value: surface.viewerController.position
+                            value: surface.playbackForCurrentNode
+                                   ? surface.viewerController.position : 0
                             when: !seekSlider.pressed
                         }
                     }
 
                     Text {
-                        Layout.preferredWidth: surface.viewerController.duration >= 3600000 ? 112 : 88
-                        text: surface.formatTime(surface.viewerController.position)
-                              + " / " + surface.formatTime(surface.viewerController.duration)
+                        Layout.preferredWidth: (surface.playbackForCurrentNode
+                                               ? surface.viewerController.duration : 0)
+                                               >= 3600000 ? 112 : 88
+                        text: surface.formatTime(surface.playbackForCurrentNode
+                                                 ? surface.viewerController.position : 0)
+                              + " / " + surface.formatTime(surface.playbackForCurrentNode
+                                                           ? surface.viewerController.duration : 0)
                         color: surface.appTheme.textMuted
                         horizontalAlignment: Text.AlignRight
                         verticalAlignment: Text.AlignVCenter
@@ -1076,6 +1439,57 @@ FocusScope {
         }
     }
 
+    Popup {
+        id: descriptionGuard
+        parent: surface
+        anchors.centerIn: parent
+        modal: false
+        padding: 12
+        focus: true
+        closePolicy: Popup.NoAutoClose
+
+        background: Rectangle {
+            color: surface.appTheme.bgPanel
+            border.width: 1
+            border.color: surface.appTheme.borderDefault
+            radius: 8
+        }
+
+        Column {
+            width: Math.min(300, surface.width - 36)
+            spacing: 9
+
+            Text {
+                width: parent.width
+                text: "Save media description changes?"
+                color: surface.appTheme.textMain
+                font.family: surface.appTheme.textFontFamily
+                font.pointSize: 10
+                wrapMode: Text.WordWrap
+            }
+
+            Row {
+                width: parent.width
+                spacing: 6
+                Button {
+                    text: "Save"
+                    focusPolicy: Qt.TabFocus
+                    onClicked: surface.saveDescriptionAndContinue()
+                }
+                Button {
+                    text: "Discard"
+                    focusPolicy: Qt.TabFocus
+                    onClicked: surface.discardDescriptionAndContinue()
+                }
+                Button {
+                    text: "Continue editing"
+                    focusPolicy: Qt.TabFocus
+                    onClicked: descriptionGuard.close()
+                }
+            }
+        }
+    }
+
     TagPicker {
         id: mediaTagPicker
         canvasController: surface.canvasController
@@ -1090,6 +1504,7 @@ FocusScope {
 
         function onSessionChanged() {
             surface.syncTitleForSession()
+            surface.syncDescriptionForSession()
             surface.syncVideoOutput()
         }
 
@@ -1099,6 +1514,10 @@ FocusScope {
 
         function onImageStateChanged() {
             surface.syncImageState()
+        }
+
+        function onPlaybackChanged() {
+            surface.syncVideoOutput()
         }
 
         function onActiveChanged() {

@@ -246,6 +246,11 @@ class NodeService:
     def update_text_content(self, item_id, title, new_text, title_size=14, text_size=10):
         self.repo.update_text_content(item_id, title, new_text, title_size, text_size)
 
+    def update_media_description(self, item_id, new_text, text_size=10):
+        """Persist Markdown content without changing a media node title."""
+
+        self.repo.update_media_description(item_id, new_text, text_size)
+
     def get_chunk(self, item_id, chunk_index):
         return self.repo.get_chunk(item_id, chunk_index)
 

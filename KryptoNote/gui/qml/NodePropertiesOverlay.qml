@@ -34,6 +34,8 @@ Popup {
             return "Image node"
         case "video":
             return "Video node"
+        case "audio":
+            return "Audio node"
         case "frame":
             return "Frame"
         default:

@@ -2,24 +2,27 @@ import os
 import re
 from datetime import datetime
 
+from ..core.constants import MEDIA_NODE_TYPES
 from ..core.database.models import NodeItemDTO, ConnectionDTO
 
 
 class MarkdownExportService:
-    """Exports text nodes and their connections to a structured Markdown file."""
+    """Export text and media descriptions with attachment metadata."""
 
     def export(self, items: list[NodeItemDTO], connections: list[ConnectionDTO], output_path: str):
-        text_nodes = [n for n in items if n.type == "text"]
-        if not text_nodes:
-            raise ValueError("No text nodes to export.")
+        export_nodes = [
+            n for n in items if n.type == "text" or n.type in MEDIA_NODE_TYPES
+        ]
+        if not export_nodes:
+            raise ValueError("No text or media nodes to export.")
 
-        node_map = {n.id: n for n in text_nodes}
+        node_map = {n.id: n for n in export_nodes}
         adj = self._build_adjacency(connections, node_map)
 
-        lines = self._render_header(text_nodes, connections)
+        lines = self._render_header(export_nodes, connections)
         lines.append("")
 
-        for node in text_nodes:
+        for node in export_nodes:
             lines.extend(self._render_node(node, adj, node_map))
             lines.append("")
 
@@ -79,6 +82,17 @@ class MarkdownExportService:
 
         lines.append(f"## {display_name}")
         lines.append("")
+
+        if node.type in MEDIA_NODE_TYPES:
+            original = node.original_filename or node.title or "-"
+            lines.extend([
+                f"- Type: `{node.type}`",
+                f"- Original file: `{original}`",
+                f"- Size: `{int(node.total_size or 0)}` bytes",
+                f"- Dimensions: `{int(node.media_width or 0)} x {int(node.media_height or 0)}`",
+                f"- Duration: `{float(node.media_duration or 0):.2f}` seconds",
+                "",
+            ])
 
         body = node.text_content.strip() if node.text_content else ""
         if body:

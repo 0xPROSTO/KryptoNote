@@ -17,6 +17,7 @@ from PySide6.QtGui import QColor, QGuiApplication, QImage
 from PySide6.QtWidgets import QLineEdit
 
 from ...config import Config
+from ...core.constants import MEDIA_NODE_TYPES
 from ..theme.palette import Palette
 from ..services.auto_fit_service import AutoFitService
 from ..services.graph_command_service import GraphCommandService
@@ -1524,7 +1525,7 @@ class QmlCanvasController(QObject):
         data = self._node_model.get_node_data(node_id)
         if data and data["type"] == "text":
             self.openTextEditorRequested.emit(node_id)
-        elif data and data["type"] in ("image", "video"):
+        elif data and data["type"] in MEDIA_NODE_TYPES:
             self.open_media_viewer_requested.emit(node_id)
         elif data and data["type"] == "frame":
             self.openFrameEditorRequested.emit(node_id)
@@ -1613,7 +1614,7 @@ class QmlCanvasController(QObject):
             return
         if node["type"] == "text":
             self._auto_fit_text_node(node_id)
-        elif node["type"] in ("image", "video"):
+        elif node["type"] in MEDIA_NODE_TYPES:
             self._auto_fit_media_node_from_qimage(node_id, node.get("thumbnail"))
 
     def _auto_fit_text_node(self, node_id):

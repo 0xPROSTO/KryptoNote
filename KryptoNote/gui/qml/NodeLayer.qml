@@ -7,6 +7,7 @@ Item {
     required property var canvasRoot
     required property var nodeModel
     required property var canvasController
+    required property var viewerController
     required property Item contentLayer
     required property var appTheme
     required property bool framesOnly
@@ -18,6 +19,7 @@ Item {
             canvasRoot: nodeLayer.canvasRoot
             nodeModel: nodeLayer.nodeModel
             canvasController: nodeLayer.canvasController
+            viewerController: nodeLayer.viewerController
             contentLayer: nodeLayer.contentLayer
             appTheme: nodeLayer.appTheme
             renderFrames: nodeLayer.framesOnly

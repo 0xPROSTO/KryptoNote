@@ -421,7 +421,7 @@ class ExportDialog(QDialog):
             )
         else:
             self._format_hint.setText(
-                "Only text nodes are exported; images and videos are omitted."
+                "Text nodes and media Markdown descriptions are exported with attachment metadata."
             )
 
         if selected:
@@ -429,7 +429,7 @@ class ExportDialog(QDialog):
             noun = "text node" if export_format == "md" else "node"
             self._scope_hint.setText(f"Will export {count} selected {noun}{'' if count == 1 else 's'}.")
         elif export_format == "md":
-            self._scope_hint.setText("All text nodes will be exported.")
+            self._scope_hint.setText("All text and media-description nodes will be exported.")
         else:
             self._scope_hint.setText("The complete case will be exported.")
 
@@ -504,7 +504,7 @@ class ExportDialog(QDialog):
             self._show_error("Select at least one node first.")
             return
         if selected and export_format == "md" and self._selected_text_count == 0:
-            self._show_error("The selection contains no text nodes.")
+            self._show_error("The selection contains no text or media-description nodes.")
             return
         path = self._path_edit.text().strip()
         if not path:

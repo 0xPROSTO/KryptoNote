@@ -347,8 +347,18 @@ class PdfExportService:
                 )
             else:
                 media = media_by_node.get(node["id"])
-                thumbnail = graph.read_thumbnail(media) if media else None
-                if thumbnail:
+                thumbnail = None
+                if media and media.node_type == "audio" and media.waveform:
+                    self._draw_waveform(
+                        painter,
+                        media.waveform,
+                        body,
+                        link_color,
+                        muted_color,
+                    )
+                else:
+                    thumbnail = graph.read_thumbnail(media) if media else None
+                if media and media.node_type != "audio" and thumbnail:
                     image = QImage.fromData(thumbnail)
                     if not image.isNull():
                         target = self._fit_rect(image.width(), image.height(), body)
@@ -535,7 +545,10 @@ class PdfExportService:
             self._check_cancelled()
             media_record = media_by_node.get(node["id"])
             minimum_space = (
-                430 if media_record and media_record.has_thumbnail else 150
+                430
+                if media_record
+                and (media_record.has_thumbnail or media_record.waveform)
+                else 150
             )
             if y > content.top() + 2 and content.bottom() - y < minimum_space:
                 new_page()
@@ -605,7 +618,22 @@ class PdfExportService:
                 graph.read_thumbnail(media_record)
                 if media_record else None
             )
-            if thumbnail:
+            if media_record and media_record.waveform:
+                waveform_area = QRectF(
+                    content.left(), y, min(content.width() * 0.70, 560), 72
+                )
+                if content.bottom() - y < waveform_area.height() + 20:
+                    new_page()
+                    waveform_area.moveTop(y)
+                self._draw_waveform(
+                    painter,
+                    media_record.waveform,
+                    waveform_area,
+                    accent_color,
+                    muted_color,
+                )
+                y = waveform_area.bottom() + 14
+            elif thumbnail:
                 image = QImage.fromData(thumbnail)
                 if not image.isNull():
                     desired_height = min(260.0, max(100.0, content.height() * 0.30))
@@ -618,7 +646,9 @@ class PdfExportService:
                     painter.drawImage(target, image)
                     y = target.bottom() + 14
 
-            if node.get("type") == "text":
+            if node.get("type") == "text" or (
+                node.get("type") in {"image", "video", "audio"}
+            ):
                 body = node.get("content") or ""
                 if body:
                     y = self._draw_lines(
@@ -636,6 +666,38 @@ class PdfExportService:
                 0.35 + 0.63 * ((index + 1) / max(1, len(nodes))),
                 f"Rendering catalog {index + 1}/{len(nodes)}...",
             )
+
+    @staticmethod
+    def _draw_waveform(painter, values, area, accent_color, muted_color):
+        """Render a compact, deterministic waveform without decoding audio."""
+
+        peaks = [
+            max(0.0, min(1.0, float(value or 0)))
+            for value in (values or [])
+        ]
+        if not peaks or area.width() <= 1 or area.height() <= 1:
+            return
+        painter.save()
+        try:
+            painter.setPen(QPen(muted_color, 0.8))
+            painter.setBrush(QColor(muted_color))
+            painter.drawRoundedRect(area, 3, 3)
+            center_y = area.center().y()
+            usable_height = max(2.0, area.height() - 8.0)
+            slot = area.width() / len(peaks)
+            bar_width = max(1.0, slot * 0.65)
+            painter.setBrush(QColor(accent_color))
+            painter.setPen(Qt.PenStyle.NoPen)
+            for index, peak in enumerate(peaks):
+                height = max(2.0, usable_height * peak)
+                x = area.left() + index * slot + (slot - bar_width) / 2
+                painter.drawRoundedRect(
+                    QRectF(x, center_y - height / 2, bar_width, height),
+                    min(2.0, bar_width / 2),
+                    min(2.0, bar_width / 2),
+                )
+        finally:
+            painter.restore()
 
     def _new_catalog_page(
         self, painter, writer, background, text_color, muted_color, case_name

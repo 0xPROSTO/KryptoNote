@@ -82,6 +82,12 @@ Item {
         return mediaSurface.commitPendingEdits()
     }
 
+    function promptDescriptionGuard(action) {
+        if (!viewerController.descriptionDirty) return false
+        mediaSurface.openDescriptionGuard(action)
+        return true
+    }
+
     function resetExpanded() {
         expansionTimer.stop()
         expansionTransition = false
@@ -93,12 +99,16 @@ Item {
         if (expanded) {
             setExpanded(false)
         } else {
-            requestCloseAnimated()
+            mediaSurface.requestClose()
         }
     }
 
     function requestCloseAnimated() {
         runAfterCollapse("close")
+    }
+
+    function requestCloseGuarded() {
+        mediaSurface.requestClose()
     }
 
     function requestDetachAnimated() {

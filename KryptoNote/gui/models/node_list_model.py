@@ -11,6 +11,8 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import QImage
 
+from ...core.constants import MEDIA_NODE_TYPES
+from ...utils.media_proc import decode_audio_waveform
 from ...utils.text_utils import process_markdown_for_pyside
 
 
@@ -38,6 +40,8 @@ class NodeRoles(IntEnum):
     FrameLockedRole = Qt.ItemDataRole.UserRole + 20
     FrameColorRole = Qt.ItemDataRole.UserRole + 21
     FrameOpacityRole = Qt.ItemDataRole.UserRole + 22
+    AudioWaveformRole = Qt.ItemDataRole.UserRole + 23
+    MediaDurationRole = Qt.ItemDataRole.UserRole + 24
 
 
 class NodeListModel(QAbstractListModel):
@@ -92,6 +96,8 @@ class NodeListModel(QAbstractListModel):
             NodeRoles.FrameLockedRole: "frame_locked",
             NodeRoles.FrameColorRole: "frame_color",
             NodeRoles.FrameOpacityRole: "frame_opacity",
+            NodeRoles.AudioWaveformRole: "audio_waveform",
+            NodeRoles.MediaDurationRole: "media_duration",
         }
 
         key = role_map.get(role)
@@ -165,6 +171,8 @@ class NodeListModel(QAbstractListModel):
             NodeRoles.FrameLockedRole: QByteArray(b"nodeFrameLocked"),
             NodeRoles.FrameColorRole: QByteArray(b"nodeFrameColor"),
             NodeRoles.FrameOpacityRole: QByteArray(b"nodeFrameOpacity"),
+            NodeRoles.AudioWaveformRole: QByteArray(b"audioWaveform"),
+            NodeRoles.MediaDurationRole: QByteArray(b"nodeMediaDuration"),
         }
 
     def flags(self, index):
@@ -210,7 +218,15 @@ class NodeListModel(QAbstractListModel):
 
     def _node_data_from_item(self, item, tags_by_item):
         thumb_image = None
-        if item.thumbnail:
+        audio_waveform = []
+        # Audio thumbnails contain the versioned waveform payload, not an
+        # image.  Never hand those bytes to QImage: doing so is both wasteful
+        # and can make a valid audio node look like a broken image.
+        if item.type == "audio":
+            decoded = decode_audio_waveform(item.thumbnail)
+            if decoded is not None:
+                audio_waveform = list(decoded.peaks)
+        elif item.thumbnail:
             image = QImage.fromData(item.thumbnail)
             if not image.isNull():
                 thumb_image = image
@@ -231,7 +247,8 @@ class NodeListModel(QAbstractListModel):
             "draft": False,
             "title_size": item.title_size,
             "text_size": item.text_size,
-            "media_type": item.type if item.type in ("image", "video") else "",
+            "media_type": item.type if item.type in MEDIA_NODE_TYPES else "",
+            "audio_waveform": audio_waveform,
             "total_size": int(item.total_size or 0),
             "created_at": item.created_at or "",
             "updated_at": item.updated_at or item.created_at or "",
@@ -262,7 +279,12 @@ class NodeListModel(QAbstractListModel):
                  media_width=0, media_height=0, media_duration=0.0,
                  frame_locked=False, frame_color="", frame_opacity=0.21):
         thumb_image = None
-        if thumbnail_bytes:
+        audio_waveform = []
+        if node_type == "audio":
+            decoded = decode_audio_waveform(thumbnail_bytes)
+            if decoded is not None:
+                audio_waveform = list(decoded.peaks)
+        elif thumbnail_bytes:
             thumb_image = QImage.fromData(thumbnail_bytes)
 
         node_data = {
@@ -282,7 +304,8 @@ class NodeListModel(QAbstractListModel):
             "draft": draft,
             "title_size": title_size,
             "text_size": text_size,
-            "media_type": node_type if node_type in ("image", "video") else "",
+            "media_type": node_type if node_type in MEDIA_NODE_TYPES else "",
+            "audio_waveform": audio_waveform,
             "total_size": int(total_size or 0),
             "created_at": created_at or datetime.now().isoformat(timespec="seconds"),
             "updated_at": updated_at or created_at or datetime.now().isoformat(timespec="seconds"),
@@ -660,6 +683,51 @@ class NodeListModel(QAbstractListModel):
         self._apply_selection(
             self._selected_ids.union(self._normalize_node_ids(node_ids))
         )
+
+    @Slot(int, str)
+    @Slot(int, str, int)
+    def update_media_description(self, node_id, content, text_size=None):
+        """Refresh a media Markdown description after it is persisted."""
+        idx = self._id_to_index.get(int(node_id))
+        if idx is None:
+            return
+        node = self._nodes[idx]
+        if node.get("type") not in MEDIA_NODE_TYPES:
+            return
+        node["content"] = content or ""
+        if text_size is not None:
+            try:
+                node["text_size"] = max(1, int(text_size))
+            except (TypeError, ValueError):
+                pass
+        node["updated_at"] = datetime.now().isoformat(timespec="seconds")
+        self._refresh_metadata_fields(node)
+        model_idx = self.index(idx, 0)
+        roles = [
+            NodeRoles.ContentRole,
+            NodeRoles.TextSizeRole,
+            NodeRoles.UpdatedAtRole,
+            NodeRoles.MetaSummaryRole,
+        ]
+        self.dataChanged.emit(model_idx, model_idx, roles)
+
+    @Slot(int, object)
+    def set_audio_waveform(self, node_id, peaks):
+        idx = self._id_to_index.get(int(node_id))
+        if idx is None:
+            return
+        node = self._nodes[idx]
+        if node.get("type") != "audio":
+            return
+        try:
+            normalized = [max(0.0, min(1.0, float(value))) for value in (peaks or [])]
+        except (TypeError, ValueError):
+            normalized = []
+        if normalized == node.get("audio_waveform", []):
+            return
+        node["audio_waveform"] = normalized
+        model_idx = self.index(idx, 0)
+        self.dataChanged.emit(model_idx, model_idx, [NodeRoles.AudioWaveformRole])
 
     @Slot(int, bool)
     def set_selected(self, node_id, selected):
@@ -1055,7 +1123,7 @@ class NodeListModel(QAbstractListModel):
             f"Position: {int(node.get('x', 0))}, {int(node.get('y', 0))}",
             f"Node size: {int(node.get('width', 0))} x {int(node.get('height', 0))}",
         ]
-        if node.get("type") in ("image", "video"):
+        if node.get("type") in MEDIA_NODE_TYPES:
             lines.append(f"File size: {self._format_size(node.get('total_size', 0))}")
             if node.get("media_width") and node.get("media_height"):
                 lines.append(f"Resolution: {node['media_width']} x {node['media_height']}")
@@ -1104,7 +1172,7 @@ class NodeListModel(QAbstractListModel):
         node["content_size"] = self._calculate_content_size(node)
         node["created_at_display"] = self._format_datetime(node.get("created_at"))
         node["updated_at_display"] = self._format_datetime(node.get("updated_at"))
-        if node.get("type") in ("image", "video"):
+        if node.get("type") in MEDIA_NODE_TYPES:
             parts = [node["created_at_display"]]
             if node.get("media_duration"):
                 parts.append(self._format_duration(node["media_duration"]))

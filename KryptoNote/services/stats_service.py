@@ -2,6 +2,7 @@ import datetime
 import os
 from collections import Counter
 
+from ..core.constants import MEDIA_NODE_TYPES
 from ..core.database.operations import read_database_space_stats
 
 
@@ -63,8 +64,16 @@ class KnowledgeStatsService:
         content_size = KnowledgeStatsService.content_size(nodes)
         media_size = sum(int(node.get("total_size") or 0) for node in nodes)
         text_nodes = [node for node in nodes if node.get("type") == "text"]
-        text_chars = sum(len(node.get("content") or "") for node in text_nodes)
-        text_words = sum(len((node.get("content") or "").split()) for node in text_nodes)
+        # ``text_chars``/``text_words`` are description metrics: media
+        # Markdown descriptions count alongside ordinary text-node content.
+        described_nodes = [
+            node for node in nodes
+            if node.get("type") == "text" or node.get("type") in MEDIA_NODE_TYPES
+        ]
+        text_chars = sum(len(node.get("content") or "") for node in described_nodes)
+        text_words = sum(
+            len((node.get("content") or "").split()) for node in described_nodes
+        )
         connected_node_ids = KnowledgeStatsService.connected_node_ids(connections)
         if not connected_node_ids and link_count:
             connected_node_ids = set()
@@ -103,7 +112,9 @@ class KnowledgeStatsService:
             "type_counts": dict(sorted(type_counts.items())),
             "type_stats": type_stats,
             "text_node_count": len(text_nodes),
-            "media_node_count": sum(1 for node in nodes if node.get("type") in ("image", "video")),
+            "media_node_count": sum(
+                1 for node in nodes if node.get("type") in MEDIA_NODE_TYPES
+            ),
             "text_chars": text_chars,
             "text_chars_label": f"{text_chars:,}".replace(",", " "),
             "text_words": text_words,
@@ -129,9 +140,11 @@ class KnowledgeStatsService:
                 total += int(cached_size or 0)
                 continue
             node_type = node.get("type")
-            if node_type == "text":
+            if node_type == "text" or node_type in MEDIA_NODE_TYPES:
                 total += len((node.get("title") or "").encode("utf-8"))
                 total += len((node.get("content") or "").encode("utf-8"))
+                if node_type in MEDIA_NODE_TYPES:
+                    total += int(node.get("total_size") or 0)
             else:
                 total += int(node.get("total_size") or 0)
         return total

@@ -15,6 +15,12 @@ FocusScope {
         return mediaSurface.commitPendingEdits()
     }
 
+    function promptDescriptionGuard(action) {
+        if (!viewerController.descriptionDirty) return false
+        mediaSurface.openDescriptionGuard(action)
+        return true
+    }
+
     MediaViewerSurface {
         id: mediaSurface
         anchors.fill: parent

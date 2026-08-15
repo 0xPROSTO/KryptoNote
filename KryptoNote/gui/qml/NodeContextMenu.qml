@@ -141,6 +141,19 @@ Popup {
                     }
 
                     MenuButton {
+                        text: "Audio…"
+                        iconSource: "../assets/icons/play.svg"
+                        onClicked: {
+                            contextPopup.close()
+                            contextPopup.canvasController.add_media_node_at(
+                                "audio",
+                                contextPopup.canvasX,
+                                contextPopup.canvasY
+                            )
+                        }
+                    }
+
+                    MenuButton {
                         text: "Frame"
                         iconSource: "../assets/icons/frame.svg"
                         onClicked: {
@@ -290,7 +303,10 @@ Popup {
 
         Loader {
             width: parent.width
-            active: contextPopup.targetKind === "node" && (contextPopup.nodeType === "image" || contextPopup.nodeType === "video")
+            active: contextPopup.targetKind === "node"
+                    && (contextPopup.nodeType === "image"
+                        || contextPopup.nodeType === "video"
+                        || contextPopup.nodeType === "audio")
             visible: active
             height: active && item ? (item as Column).implicitHeight : 0
             sourceComponent: Component {

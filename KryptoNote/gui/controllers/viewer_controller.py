@@ -1,5 +1,6 @@
 import concurrent.futures
 import logging
+import re
 import threading
 
 from PySide6.QtCore import QObject, Property, QUrl, Signal, Slot
@@ -7,6 +8,7 @@ from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 
 from ...core.database.connection import DatabaseConnection
 from ...core.database.repository import NodeRepository
+from ...core.constants import MEDIA_NODE_TYPES, PLAYABLE_NODE_TYPES
 from ...services.node_service import NodeService
 
 
@@ -75,6 +77,7 @@ class ViewerController(QObject):
         self._title = ""
         self._tags = []
         self._metadata = {}
+        self._audio_waveform = []
         self._media_aspect_ratio = 1.0
         self._loading = False
         self._error_text = ""
@@ -94,6 +97,10 @@ class ViewerController(QObject):
         self._muted = False
         self._resume_after_seek = False
         self._stream = None
+        self._playback_node_id = 0
+        self._playback_media_type = ""
+        self._playback_generation = 0
+        self._playback_sequence = 0
         self._video_output = None
         self._generation = 0
         self._shutting_down = False
@@ -101,6 +108,13 @@ class ViewerController(QObject):
         self._player_signal_connections = []
         self._preview_futures = set()
         self._preview_futures_lock = threading.Lock()
+        self._description_saved = ""
+        self._description_draft = ""
+        self._description_dirty = False
+        self._description_text_size = 10
+        self._description_saved_text_size = 10
+        self._description_split_ratio = 0.20
+        self._description_split_manual = False
 
         self._player = player or QMediaPlayer(self)
         self._audio = audio or QAudioOutput(self)
@@ -197,6 +211,16 @@ class ViewerController(QObject):
     duration = Property(float, lambda self: float(self._duration), notify=playbackChanged)
     volume = Property(int, lambda self: self._volume, notify=playbackChanged)
     muted = Property(bool, lambda self: self._muted, notify=playbackChanged)
+    playbackNodeId = Property(int, lambda self: self._playback_node_id, notify=playbackChanged)
+    audioWaveform = Property(
+        "QVariantList",
+        lambda self: list(self._audio_waveform),
+        notify=sessionChanged,
+    )
+    descriptionDraft = Property(str, lambda self: self._description_draft, notify=sessionChanged)
+    descriptionDirty = Property(bool, lambda self: self._description_dirty, notify=sessionChanged)
+    descriptionTextSize = Property(int, lambda self: self._description_text_size, notify=sessionChanged)
+    descriptionSplitRatio = Property(float, lambda self: self._description_split_ratio, notify=sessionChanged)
 
     @Slot(int)
     def open_media_viewer(self, node_id):
@@ -204,7 +228,7 @@ class ViewerController(QObject):
 
     def _open_media_viewer(self, node_id, *, announce):
         node = self._node_model.get_node_data(node_id)
-        if not node or node.get("type") not in ("image", "video"):
+        if not node or node.get("type") not in MEDIA_NODE_TYPES:
             return
 
         if self._active and self._node_id == node_id and not self._error_text:
@@ -213,14 +237,29 @@ class ViewerController(QObject):
         self._generation += 1
         generation = self._generation
         self._cancel_preview_requests()
-        self._dispose_backend(clear_preview=True)
+        target_type = str(node.get("type"))
+        same_audio_playback = (
+            target_type == "audio"
+            and self._playback_node_id == int(node_id)
+            and self._playback_media_type == "audio"
+        )
+        preserve_audio_playback = (
+            target_type == "image"
+            and self._playback_node_id > 0
+            and self._playback_media_type == "audio"
+        )
+        if same_audio_playback or preserve_audio_playback:
+            self._image_revision = self._preview_provider.clear()
+        else:
+            self._dispose_backend(clear_preview=True)
         self._node_id = int(node_id)
-        self._media_type = node["type"]
-        self._loading = True
+        self._media_type = target_type
+        self._loading = not same_audio_playback
         self._error_text = ""
-        self._position = 0
-        self._duration = 0
-        self._playing = False
+        if not (same_audio_playback or preserve_audio_playback):
+            self._position = 0
+            self._duration = 0
+            self._playing = False
         self._image_state = {
             "rotation": 0,
             "zoom": 1.0,
@@ -240,8 +279,8 @@ class ViewerController(QObject):
 
         if self._media_type == "image":
             self._start_image_preview(generation)
-        else:
-            self._start_video()
+        elif not same_audio_playback:
+            self._start_media_stream(autoplay=self._media_type == "video")
 
     def _start_image_preview(self, generation):
         db_path = self._service.get_db_path()
@@ -304,27 +343,118 @@ class ViewerController(QObject):
         if not self._error_text and image is not None and not image.isNull():
             if image.width() > 0 and image.height() > 0:
                 self._media_aspect_ratio = image.width() / image.height()
-            self._image_revision = self._preview_provider.set_image(image)
+                if not self._description_split_manual:
+                    ratio = max(
+                        0.0,
+                        min(
+                            1.0,
+                            (self._media_aspect_ratio - 1.0)
+                            / (16.0 / 9.0 - 1.0),
+                        ),
+                    )
+                    self._description_split_ratio = 0.20 + 0.15 * ratio
+                self._image_revision = self._preview_provider.set_image(image)
         elif not self._error_text:
             self._error_text = "Unable to decode this image."
         self.sessionChanged.emit()
 
-    def _start_video(self):
+    def _next_playback_generation(self):
+        self._playback_sequence += 1
+        return self._playback_sequence
+
+    def _playback_belongs_to_viewer(self):
+        return bool(
+            self._active
+            and self._playback_node_id == self._node_id
+            and self._playback_media_type == self._media_type
+        )
+
+    def _start_media_stream(self, *, autoplay=False):
         try:
+            node = self._node_model.get_node_data(self._node_id) or {}
             info = self._service.get_item_info(self._node_id)
             if not info or not info.is_chunked:
-                raise ValueError("Unable to open this video.")
+                raise ValueError("Unable to open this media.")
             self._stream = self._service.open_item_stream(self._node_id)
-            self._connect_player_signals(self._generation)
-            self._player.setSourceDevice(self._stream, QUrl("secure.mp4"))
-            if self._video_output is not None:
+            self._playback_node_id = self._node_id
+            self._playback_media_type = self._media_type
+            playback_generation = self._next_playback_generation()
+            self._playback_generation = playback_generation
+            self._connect_player_signals(playback_generation)
+            suffix = self._safe_source_suffix(
+                getattr(info, "original_filename", ""),
+                self._media_type
+            )
+            self._player.setSourceDevice(self._stream, QUrl("secure" + suffix))
+            if self._video_output is not None and self._media_type == "video":
                 self._player.setVideoOutput(self._video_output)
-            self._player.play()
+            self.playbackChanged.emit()
+            if autoplay:
+                self._player.play()
         except Exception as exc:
             self._set_session_error(
-                str(exc) or "Unable to open this video.",
+                str(exc) or "Unable to open this media.",
                 dispose_backend=True,
             )
+
+    @staticmethod
+    def _safe_source_suffix(filename, media_type):
+        suffix = ""
+        if filename:
+            match = re.search(r"(\.[A-Za-z0-9]{1,10})$", str(filename))
+            if match:
+                suffix = match.group(1).lower()
+        if not suffix:
+            suffix = ".mp4" if media_type == "video" else ".ogg"
+        return suffix
+
+    def _start_playback_for_node(self, node_id, *, autoplay=True):
+        node = self._node_model.get_node_data(int(node_id))
+        if not node or node.get("type") not in PLAYABLE_NODE_TYPES:
+            return False
+        self._dispose_playback()
+        playback_generation = self._next_playback_generation()
+        try:
+            info = self._service.get_item_info(int(node_id))
+            if not info or not info.is_chunked:
+                raise ValueError("Unable to open this media.")
+            stream = self._service.open_item_stream(int(node_id))
+            self._stream = stream
+            self._playback_node_id = int(node_id)
+            self._playback_media_type = str(node.get("type"))
+            self._playback_generation = playback_generation
+            self._position = 0
+            self._duration = int(float(node.get("media_duration") or 0) * 1000)
+            self._playing = False
+            self._connect_player_signals(playback_generation)
+            suffix = self._safe_source_suffix(
+                getattr(info, "original_filename", ""),
+                self._playback_media_type
+            )
+            self._player.setSourceDevice(stream, QUrl("secure" + suffix))
+            if (
+                self._video_output is not None
+                and self._playback_media_type == "video"
+                and self._active
+                and self._node_id == int(node_id)
+            ):
+                self._player.setVideoOutput(self._video_output)
+            if autoplay:
+                self._player.play()
+            self.playbackChanged.emit()
+            return True
+        except Exception as exc:
+            viewer_playback = self._playback_belongs_to_viewer()
+            self._dispose_playback()
+            message = str(exc) or "Unable to open this media."
+            if viewer_playback:
+                self._set_session_error(message, dispose_backend=False)
+            else:
+                self._canvas_controller.status_message.emit(
+                    f"Playback failed: {message}", "error"
+                )
+            self.playbackChanged.emit()
+            return False
 
     def _set_session_error(self, message, *, dispose_backend=False):
         if dispose_backend:
@@ -339,15 +469,28 @@ class ViewerController(QObject):
     def close_viewer(self):
         if not self._active:
             return
+        keep_audio_playback = (
+            self._playback_node_id > 0
+            and self._playback_media_type == "audio"
+        )
         self._generation += 1
         self._cancel_preview_requests()
-        self._dispose_backend(clear_preview=True)
+        if not keep_audio_playback:
+            self._dispose_backend(clear_preview=True)
+        else:
+            self._video_output = None
         self._active = False
         self._node_id = 0
         self._media_type = ""
         self._title = ""
         self._tags = []
         self._metadata = {}
+        self._audio_waveform = []
+        self._description_saved = ""
+        self._description_draft = ""
+        self._description_dirty = False
+        self._description_text_size = 10
+        self._description_saved_text_size = 10
         self._loading = False
         self._error_text = ""
         if self._detached:
@@ -365,6 +508,69 @@ class ViewerController(QObject):
         if not self._active or self._node_id <= 0:
             return
         self._open_media_viewer(self._node_id, announce=False)
+
+    @Slot(str)
+    @Slot(str, int)
+    def set_description_draft(self, text, text_size=None):
+        if not self._active or self._node_id <= 0:
+            return
+        self._description_draft = str(text or "")
+        if text_size is not None:
+            try:
+                self._description_text_size = max(1, int(text_size))
+            except (TypeError, ValueError):
+                pass
+        self._description_dirty = (
+            self._description_draft != self._description_saved
+            or self._description_text_size != self._description_saved_text_size
+        )
+        self.sessionChanged.emit()
+
+    @Slot(result=bool)
+    def save_description(self):
+        if not self._active or self._node_id <= 0:
+            return False
+        try:
+            self._service.update_media_description(
+                self._node_id,
+                self._description_draft,
+                self._description_text_size,
+            )
+            self._node_model.update_media_description(
+                self._node_id,
+                self._description_draft,
+                self._description_text_size,
+            )
+        except Exception as exc:
+            self._canvas_controller.status_message.emit(
+                f"Description save failed: {exc}", "error"
+            )
+            return False
+        self._description_saved = self._description_draft
+        self._description_saved_text_size = self._description_text_size
+        self._description_dirty = False
+        self.sessionChanged.emit()
+        return True
+
+    @Slot()
+    def discard_description(self):
+        self._description_draft = self._description_saved
+        self._description_text_size = self._description_saved_text_size
+        self._description_dirty = False
+        self.sessionChanged.emit()
+
+    @Slot(float)
+    def set_description_split_ratio(self, ratio):
+        try:
+            value = float(ratio)
+        except (TypeError, ValueError):
+            return
+        value = max(0.10, min(0.90, value))
+        if abs(value - self._description_split_ratio) < 0.0001 and self._description_split_manual:
+            return
+        self._description_split_ratio = value
+        self._description_split_manual = True
+        self.sessionChanged.emit()
 
     @Slot(str, result=bool)
     def rename_current(self, title):
@@ -410,7 +616,12 @@ class ViewerController(QObject):
     @Slot(QObject)
     def attach_video_output(self, output):
         self._video_output = output
-        if self._active and self._media_type == "video":
+        if (
+            self._active
+            and self._media_type == "video"
+            and self._playback_media_type == "video"
+            and self._playback_node_id == self._node_id
+        ):
             self._player.setVideoOutput(output)
 
     @Slot(QObject)
@@ -422,7 +633,17 @@ class ViewerController(QObject):
 
     @Slot()
     def toggle_playback(self):
-        if not self._active or self._media_type != "video" or self._error_text:
+        if not self._active or self._media_type not in PLAYABLE_NODE_TYPES or self._error_text:
+            return
+        self.toggle_playback_for(self._node_id)
+
+    @Slot(int)
+    def toggle_playback_for(self, node_id):
+        node_id = int(node_id)
+        if node_id <= 0:
+            return
+        if self._playback_node_id != node_id:
+            self._start_playback_for_node(node_id, autoplay=True)
             return
         if self._playing:
             self._player.pause()
@@ -431,8 +652,14 @@ class ViewerController(QObject):
 
     @Slot(float)
     def seek(self, position):
-        if self._active and self._media_type == "video":
-            self._player.setPosition(max(0, min(int(position), self._duration)))
+        if self._active and self._media_type in PLAYABLE_NODE_TYPES:
+            self.seek_for(self._node_id, position)
+
+    @Slot(int, float)
+    def seek_for(self, node_id, position):
+        if int(node_id) != self._playback_node_id:
+            return
+        self._player.setPosition(max(0, min(int(position), self._duration or int(position))))
 
     @Slot()
     def begin_seek(self):
@@ -444,7 +671,7 @@ class ViewerController(QObject):
     def end_seek(self):
         should_resume = self._resume_after_seek
         self._resume_after_seek = False
-        if should_resume and self._active and not self._error_text:
+        if should_resume and self._playback_node_id > 0 and not self._error_text:
             self._player.play()
 
     @Slot(int)
@@ -497,7 +724,7 @@ class ViewerController(QObject):
         self._detached = detached
         self.detachedChanged.emit()
 
-    def _dispose_backend(self, clear_preview):
+    def _dispose_playback(self):
         self._disconnect_player_signals()
         self._resetting_player = True
         try:
@@ -523,6 +750,12 @@ class ViewerController(QObject):
         self._position = 0
         self._duration = 0
         self._resume_after_seek = False
+        self._playback_node_id = 0
+        self._playback_media_type = ""
+        self._playback_generation = 0
+
+    def _dispose_backend(self, clear_preview):
+        self._dispose_playback()
         if clear_preview:
             self._image_revision = self._preview_provider.clear()
 
@@ -532,6 +765,9 @@ class ViewerController(QObject):
             return
         title = node.get("title", "") or ""
         tags = [dict(tag) for tag in node.get("tags", [])]
+        description = node.get("content", "") or ""
+        node_text_size = max(1, int(node.get("text_size") or 10))
+        waveform = list(node.get("audio_waveform", []) or [])
         media_width = int(node.get("media_width") or 0)
         media_height = int(node.get("media_height") or 0)
         self._media_aspect_ratio = (
@@ -554,14 +790,32 @@ class ViewerController(QObject):
         title_changed = force or title != self._title
         tags_changed = force or tags != self._tags
         metadata_changed = force or metadata != self._metadata
+        description_changed = force or description != self._description_saved
+        text_size_changed = force or node_text_size != self._description_saved_text_size
+        waveform_changed = force or waveform != self._audio_waveform
         self._title = title
         self._tags = tags
         self._metadata = metadata
+        if not self._description_dirty:
+            self._description_saved = description
+            self._description_draft = description
+            self._description_saved_text_size = node_text_size
+            self._description_text_size = node_text_size
+            self._description_dirty = False
+        self._audio_waveform = waveform
+        if not self._description_split_manual:
+            if node.get("type") == "audio":
+                self._description_split_ratio = 0.35
+            else:
+                ratio = max(0.0, min(1.0, (self._media_aspect_ratio - 1.0) / (16.0 / 9.0 - 1.0)))
+                self._description_split_ratio = 0.20 + 0.15 * ratio
         if title_changed:
             self.titleChanged.emit()
         if tags_changed:
             self.tagsChanged.emit()
         if metadata_changed:
+            self.sessionChanged.emit()
+        if description_changed or text_size_changed or waveform_changed:
             self.sessionChanged.emit()
 
     def _on_model_data_changed(self, *_args):
@@ -571,43 +825,45 @@ class ViewerController(QObject):
     def _ensure_active_node_exists(self, *_args):
         if self._active and not self._node_model.get_node_data(self._node_id):
             self.close_viewer()
+        if self._playback_node_id and not self._node_model.get_node_data(self._playback_node_id):
+            self._dispose_backend(clear_preview=False)
+            self.playbackChanged.emit()
 
-    def _is_current_video_session(self, generation):
+    def _is_current_playback_session(self, generation):
         return (
             not self._shutting_down
-            and generation == self._generation
-            and self._active
-            and self._media_type == "video"
+            and generation == self._playback_generation
+            and self._playback_node_id > 0
         )
 
     def _on_position_changed(self, generation, position):
-        if not self._is_current_video_session(generation):
+        if not self._is_current_playback_session(generation):
             return
         self._position = int(position)
         self.playbackChanged.emit()
 
     def _on_duration_changed(self, generation, duration):
-        if not self._is_current_video_session(generation):
+        if not self._is_current_playback_session(generation):
             return
         self._duration = max(0, int(duration))
         self.playbackChanged.emit()
 
     def _on_playback_state_changed(self, generation, state):
-        if not self._is_current_video_session(generation):
+        if not self._is_current_playback_session(generation):
             return
         playing_state = getattr(QMediaPlayer.PlaybackState, "PlayingState", None)
         self._playing = state == playing_state
         self.playbackChanged.emit()
 
     def _on_media_status_changed(self, generation, status):
-        if not self._is_current_video_session(generation):
+        if not self._is_current_playback_session(generation):
             return
         ready_statuses = {
             QMediaPlayer.MediaStatus.LoadedMedia,
             QMediaPlayer.MediaStatus.BufferedMedia,
             QMediaPlayer.MediaStatus.EndOfMedia,
         }
-        if status in ready_statuses and self._loading:
+        if status in ready_statuses and self._active and self._loading:
             self._loading = False
             self.sessionChanged.emit()
 
@@ -615,13 +871,18 @@ class ViewerController(QObject):
         if (
             self._resetting_player
             or error == QMediaPlayer.Error.NoError
-            or not self._is_current_video_session(generation)
+            or not self._is_current_playback_session(generation)
         ):
             return
-        self._set_session_error(
-            error_string or self._player.errorString(),
-            dispose_backend=True,
-        )
+        message = error_string or self._player.errorString() or "Unable to play media."
+        if self._playback_belongs_to_viewer():
+            self._set_session_error(message, dispose_backend=True)
+        else:
+            self._dispose_playback()
+            self._canvas_controller.status_message.emit(
+                f"Playback failed: {message}", "error"
+            )
+            self.playbackChanged.emit()
 
     def shutdown(self):
         if self._shutting_down:

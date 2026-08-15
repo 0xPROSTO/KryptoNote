@@ -2,6 +2,7 @@ from PySide6.QtCore import QObject, Signal, Slot
 from PySide6.QtWidgets import QMessageBox
 
 from ...core.exceptions import InsufficientDiskSpaceError
+from ...core.constants import PLAYABLE_NODE_TYPES
 from ...core.database.operations import DatabaseOperationProgress
 from ..services.operation_coordinator import OperationCoordinator
 
@@ -343,7 +344,7 @@ class DeleteController(QObject):
         return bool(
             node
             and (
-                node.get("type") == "video"
+                node.get("type") in PLAYABLE_NODE_TYPES
                 or int(node.get("total_size") or 0)
                 >= cls.VACUUM_THRESHOLD_BYTES
             )

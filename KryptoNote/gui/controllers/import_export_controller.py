@@ -13,17 +13,24 @@ from PySide6.QtWidgets import (
 )
 
 from ...config import Config
+from ...core.constants import (
+    AUDIO_EXTENSIONS,
+    IMAGE_EXTENSIONS,
+    MEDIA_NODE_TYPES,
+    VIDEO_EXTENSIONS,
+)
 from ..services.media_import_service import MediaImportService, MediaImportWorker
 from ..services.media_export_service import MediaExportService
 from ..services.graph_export_worker import GraphExportWorker
 from ..services.operation_coordinator import OperationCoordinator
+from ...utils.media_proc import supported_audio_extensions
 from ..theme.palette import Palette
 from ..theme.theme_manager import CONNECTION_WIDTHS, get_theme_manager
 from ..widgets.dialogs.export_dialog import ExportDialog
 
 
 class ImportExportController(QObject):
-    """Handles media import (image/video) and export (media + markdown).
+    """Handle image/video/audio imports and graph/Markdown exports.
 
     Extracted from QmlCanvasController to reduce god-object complexity.
     """
@@ -50,7 +57,7 @@ class ImportExportController(QObject):
         self._settings = QSettings(Config.APP_NAME, Config.APP_NAME)
 
     def _last_dir(self, category):
-        """Get last used directory for a category (image/video/export)."""
+        """Get last used directory for a media or export category."""
         return self._settings.value(f"last_dir/{category}", "")
 
     def _save_last_dir(self, category, path):
@@ -96,7 +103,7 @@ class ImportExportController(QObject):
     def _add_imported_media_node(self, item):
         self._node_model.add_node(
             item.node_id, item.node_type, item.x, item.y, item.width, item.height,
-            title=item.title, thumbnail_bytes=None,
+            title=item.title, thumbnail_bytes=item.thumbnail_bytes,
             total_size=item.total_size,
             media_width=item.media_width, media_height=item.media_height,
             media_duration=item.media_duration,
@@ -335,7 +342,19 @@ class ImportExportController(QObject):
 
         mtype = node.get("media_type", node.get("type", ""))
         title = node.get("title", "file")
-        default_ext = ".jpg" if mtype == "image" else ".mp4"
+        original_filename = ""
+        try:
+            item_info = self._service.get_item_info(node_id)
+            original_filename = getattr(item_info, "original_filename", "") or ""
+        except Exception:
+            item_info = None
+        original_suffix = Path(original_filename).suffix.lower()
+        fallback_ext = {
+            "image": ".jpg",
+            "video": ".mp4",
+            "audio": ".ogg",
+        }.get(mtype, ".bin")
+        default_ext = original_suffix or fallback_ext
 
         path, _ = QFileDialog.getSaveFileName(
             None, "Save File", os.path.join(self._last_dir("export"), title + default_ext)
@@ -387,7 +406,8 @@ class ImportExportController(QObject):
                 selected_ids = set(selected_ids or [])
                 items = [
                     item for item in items
-                    if item.id in selected_ids and item.type == "text"
+                    if item.id in selected_ids
+                    and (item.type == "text" or item.type in MEDIA_NODE_TYPES)
                 ]
 
             self.progress_updated.emit(0.4, "Reading connections...")
@@ -431,7 +451,10 @@ class ImportExportController(QObject):
         selected_text_count = sum(
             1
             for node_id in selected_ids
-            if (self._node_model.get_node_data(node_id) or {}).get("type") == "text"
+            if (
+                (self._node_model.get_node_data(node_id) or {}).get("type") == "text"
+                or (self._node_model.get_node_data(node_id) or {}).get("type") in MEDIA_NODE_TYPES
+            )
         )
         from ...services.graph_export_service import GraphExportService
 
@@ -485,7 +508,7 @@ class ImportExportController(QObject):
             answer = QMessageBox.question(
                 None,
                 "Unencrypted Export",
-                "The ZIP contains decrypted text, photos and videos. Anyone with "
+                "The ZIP contains decrypted text, photos, videos and audio. Anyone with "
                 "the archive can read them. Continue?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
                 QMessageBox.StandardButton.Cancel,
@@ -540,7 +563,7 @@ class ImportExportController(QObject):
             answer = QMessageBox.question(
                 None,
                 "Unencrypted Export",
-                "The ZIP contains decrypted text, photos and videos. Anyone with "
+                "The ZIP contains decrypted text, photos, videos and audio. Anyone with "
                 "the archive can read them. Continue?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
                 QMessageBox.StandardButton.Cancel,
@@ -781,8 +804,11 @@ class ImportExportController(QObject):
 
     # ── Drag & Drop ─────────────────────────────────────────────────
 
-    SUPPORTED_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp"}
-    SUPPORTED_VIDEO_EXTS = {".mp4", ".avi", ".mkv", ".mov", ".webm"}
+    SUPPORTED_IMAGE_EXTS = set(IMAGE_EXTENSIONS)
+    SUPPORTED_VIDEO_EXTS = set(VIDEO_EXTENSIONS)
+    # Include Qt backend formats discovered at runtime.  Shared containers
+    # remain video-first in ``import_files_by_paths`` below.
+    SUPPORTED_AUDIO_EXTS = set(supported_audio_extensions())
 
     @Slot(list, float, float)
     def import_files_by_paths(self, file_paths, center_x, center_y):
@@ -797,14 +823,18 @@ class ImportExportController(QObject):
 
         image_paths = []
         video_paths = []
+        audio_paths = []
         invalid_paths = []
 
         for path in file_paths:
             ext = os.path.splitext(path)[1].lower()
-            if ext in self.SUPPORTED_IMAGE_EXTS:
-                image_paths.append(path)
-            elif ext in self.SUPPORTED_VIDEO_EXTS:
+            if ext in self.SUPPORTED_VIDEO_EXTS:
+                # Video precedence keeps shared containers as video on drop.
                 video_paths.append(path)
+            elif ext in self.SUPPORTED_IMAGE_EXTS:
+                image_paths.append(path)
+            elif ext in self.SUPPORTED_AUDIO_EXTS:
+                audio_paths.append(path)
             else:
                 invalid_paths.append(os.path.basename(path))
 
@@ -817,11 +847,12 @@ class ImportExportController(QObject):
                 f"Skipped unsupported files:\n{names}",
             )
 
-        self._warn_about_large_files(image_paths + video_paths)
+        self._warn_about_large_files(image_paths + video_paths + audio_paths)
 
         jobs = [
             *(("image", path) for path in image_paths),
             *(("video", path) for path in video_paths),
+            *(("audio", path) for path in audio_paths),
         ]
         if jobs:
             self._start_media_import(jobs, center_x, center_y)

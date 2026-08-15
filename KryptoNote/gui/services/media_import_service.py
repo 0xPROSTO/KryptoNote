@@ -8,7 +8,12 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
 from ...config import Config
-from ...core.constants import MEDIA_CHUNK_SIZE
+from ...core.constants import (
+    AUDIO_EXTENSIONS,
+    IMAGE_EXTENSIONS,
+    MEDIA_CHUNK_SIZE,
+    VIDEO_EXTENSIONS,
+)
 from ...core.database.connection import (
     acquire_database_operation_lock,
     cleanup_staged_items,
@@ -19,7 +24,12 @@ from ...core.exceptions import (
     InsufficientDiskSpaceError,
     OperationCancelledError,
 )
-from ...utils.media_proc import create_thumbnail, read_media_metadata
+from ...utils.media_proc import (
+    AudioAnalysisCancelled,
+    create_thumbnail,
+    read_media_metadata,
+    supported_audio_extensions,
+)
 
 
 @dataclass
@@ -44,8 +54,9 @@ class MediaImportService:
     LARGE_FILE_WARNING_BYTES = 256 * 1024 * 1024
 
     VALID_EXTENSIONS = {
-        "image": {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp"},
-        "video": {".mp4", ".avi", ".mkv", ".mov", ".webm"},
+        "image": set(IMAGE_EXTENSIONS),
+        "video": set(VIDEO_EXTENSIONS),
+        "audio": set(AUDIO_EXTENSIONS),
     }
 
     def __init__(self, node_service):
@@ -56,11 +67,20 @@ class MediaImportService:
             return "Images (*.png *.jpg *.jpeg *.bmp *.gif *.webp)"
         if media_type == "video":
             return "Videos (*.mp4 *.avi *.mkv *.mov *.webm)"
+        if media_type == "audio":
+            suffixes = " ".join(
+                f"*{suffix}" for suffix in sorted(supported_audio_extensions())
+            )
+            return f"Audio ({suffixes})"
         return "All Files (*)"
 
     @classmethod
     def validate_path(cls, media_type, path):
-        valid = cls.VALID_EXTENSIONS.get(media_type)
+        valid = (
+            supported_audio_extensions()
+            if media_type == "audio"
+            else cls.VALID_EXTENSIONS.get(media_type)
+        )
         if not valid:
             return True
         return os.path.splitext(path)[1].lower() in valid
@@ -85,17 +105,52 @@ class MediaImportService:
         center_y,
         progress_callback=None,
         imported_callback=None,
+        cancel_check=None,
     ):
         imported = []
         for index, path in enumerate(paths):
+            if cancel_check and cancel_check():
+                raise OperationCancelledError("Media import cancelled")
             if not self.validate_path(media_type, path):
                 raise ValueError(f"'{os.path.basename(path)}' is not a valid {media_type}.")
 
             if progress_callback:
                 progress_callback(index, len(paths), 0, 1, f"Processing {media_type}")
 
-            thumbnail = create_thumbnail(path)
-            metadata = read_media_metadata(path)
+            if media_type == "audio":
+                if progress_callback:
+                    progress_callback(
+                        index, len(paths), 0, 1, "Analyzing audio"
+                    )
+
+                def audio_progress(current, total):
+                    if not progress_callback:
+                        return
+                    progress_callback(
+                        index,
+                        len(paths),
+                        max(0, int(current)),
+                        max(1, int(total)),
+                        "Analyzing audio",
+                    )
+
+                try:
+                    metadata = read_media_metadata(
+                        path,
+                        media_type="audio",
+                        cancel_check=cancel_check,
+                        progress_callback=audio_progress,
+                    )
+                except AudioAnalysisCancelled as exc:
+                    raise OperationCancelledError(
+                        "Media import cancelled"
+                    ) from exc
+                thumbnail = metadata.waveform
+            else:
+                thumbnail = create_thumbnail(path)
+                metadata = read_media_metadata(path, media_type=media_type)
+            if cancel_check and cancel_check():
+                raise OperationCancelledError("Media import cancelled")
             file_size = os.path.getsize(path)
             title = os.path.basename(path)
             width = Config.NODE_MEDIA_SIZE
@@ -440,10 +495,56 @@ class MediaImportWorker(QObject):
                     f"Preparing media {file_index + 1}/{file_count}",
                 )
 
-                thumbnail = create_thumbnail(path)
-                if self._is_cancelled():
-                    raise OperationCancelledError("Media import cancelled")
-                metadata = read_media_metadata(path)
+                title = os.path.basename(path)
+                if media_type == "audio":
+                    self._emit_progress(
+                        "Analyzing audio",
+                        completed_bytes,
+                        total_bytes,
+                        f"Analyzing audio {title}",
+                    )
+
+                    def audio_progress(current, total):
+                        if self._is_cancelled():
+                            raise AudioAnalysisCancelled(
+                                "Media import cancelled"
+                            )
+                        try:
+                            current_value = float(current or 0)
+                            total_value = float(total or 0)
+                        except (TypeError, ValueError):
+                            current_value = total_value = 0.0
+                        fraction = (
+                            current_value / total_value
+                            if total_value > 0
+                            else 0.0
+                        )
+                        fraction = max(0.0, min(1.0, fraction))
+                        self._emit_progress(
+                            "Analyzing audio",
+                            completed_bytes
+                            + int(max(file_size, 1) * fraction),
+                            total_bytes,
+                            f"Analyzing audio {title}",
+                        )
+
+                    try:
+                        metadata = read_media_metadata(
+                            path,
+                            media_type="audio",
+                            cancel_check=self._is_cancelled,
+                            progress_callback=audio_progress,
+                        )
+                    except AudioAnalysisCancelled as exc:
+                        raise OperationCancelledError(
+                            "Media import cancelled"
+                        ) from exc
+                    thumbnail = metadata.waveform
+                else:
+                    thumbnail = create_thumbnail(path)
+                    if self._is_cancelled():
+                        raise OperationCancelledError("Media import cancelled")
+                    metadata = read_media_metadata(path, media_type=media_type)
                 title = os.path.basename(path)
                 self._assert_source_unchanged(
                     path, job_stats[file_index], title

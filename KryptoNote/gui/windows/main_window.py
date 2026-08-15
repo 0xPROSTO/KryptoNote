@@ -466,6 +466,14 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
     @Slot(int)
     def _request_open_media(self, node_id):
         if not self._commit_pending_media_edits():
+            root = None
+            if self.viewer_controller.detached and self._detached_view is not None:
+                root = self._detached_view.rootObject()
+            if root is None and hasattr(self, "view"):
+                root = self.view.rootObject()
+            prompt = getattr(root, "promptDescriptionGuard", None) if root else None
+            if callable(prompt) and self.viewer_controller.descriptionDirty:
+                prompt(f"switch:{int(node_id)}")
             return
         root = self.view.rootObject() if hasattr(self, "view") else None
         if root is not None and not self.viewer_controller.detached:
@@ -550,6 +558,11 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             self._dispose_detached_view()
             return
         if not self._commit_pending_media_edits():
+            if self._detached_view is not None and self.viewer_controller.descriptionDirty:
+                root = self._detached_view.rootObject()
+                prompt = getattr(root, "promptDescriptionGuard", None) if root else None
+                if callable(prompt):
+                    prompt("attach")
             return
         root = self.view.rootObject() if hasattr(self, "view") else None
         if root is not None:
@@ -576,6 +589,11 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         if self._closing_detached_view:
             return False
         if not self._commit_pending_media_edits():
+            if self._detached_view is not None and self.viewer_controller.descriptionDirty:
+                root = self._detached_view.rootObject()
+                prompt = getattr(root, "promptDescriptionGuard", None) if root else None
+                if callable(prompt):
+                    prompt("close")
             if close_event is not None:
                 close_event.ignore()
             return True
@@ -748,6 +766,13 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         act_vid.triggered.connect(self._on_add_video_node)
         add_menu.addAction(act_vid)
 
+        act_audio = QAction("Audio…", self)
+        # Reuse the existing playback glyph until a dedicated asset is
+        # available; this keeps menu iconography within the current SVG set.
+        act_audio.setIcon(SvgIcons.get_icon("play"))
+        act_audio.triggered.connect(self._on_add_audio_node)
+        add_menu.addAction(act_audio)
+
         act_frame = QAction("Frame", self)
         act_frame.setIcon(SvgIcons.get_icon("frame"))
         act_frame.triggered.connect(self._on_add_frame)
@@ -783,7 +808,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             (act_export, "export"),
             (act_change_pwd, "lock"), (self._theme_action, "palette"),
             (act_close, "exit"), (act_note, "note"), (act_img, "image"),
-            (act_vid, "video"), (act_frame, "frame"),
+            (act_vid, "video"), (act_audio, "play"), (act_frame, "frame"),
             (act_search, "search"),
             (self.act_snap, "grid"), (act_keybinds, "keyboard"),
             (act_about, "info"),
@@ -800,6 +825,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             act_note,
             act_img,
             act_vid,
+            act_audio,
             act_frame,
             act_search,
             self.act_snap,
@@ -1243,6 +1269,10 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
 
     def _on_add_video_node(self):
         self.canvas_controller.add_media_node("video")
+        self._defer_modifier_sync()
+
+    def _on_add_audio_node(self):
+        self.canvas_controller.add_media_node("audio")
         self._defer_modifier_sync()
 
     def _on_add_frame(self):

@@ -9,6 +9,7 @@ Item {
     required property var canvasRoot
     required property var nodeModel
     required property var canvasController
+    required property var viewerController
     required property Item contentLayer
     required property var appTheme
     required property bool renderFrames
@@ -57,7 +58,8 @@ Item {
 
     Loader {
         id: nodeLoader
-        z: delegateRoot.model.nodeType === "frame" ? 2 : 0
+        z: delegateRoot.model.nodeType === "frame"
+           ? 2 : (delegateRoot.model.nodeType === "audio" ? 4 : 0)
         property bool itemResizeHovered: false
         onItemChanged: itemResizeHovered = false
         x: 0
@@ -72,7 +74,8 @@ Item {
                          ? frameNodeComponent
                          : (delegateRoot.model.nodeType === "text"
                             ? textNodeComponent
-                            : mediaNodeComponent)
+                            : (delegateRoot.model.nodeType === "audio"
+                               ? audioNodeComponent : mediaNodeComponent))
     }
 
     Component {
@@ -129,6 +132,32 @@ Item {
     }
 
     Component {
+        id: audioNodeComponent
+        AudioNode {
+            canvasRoot: delegateRoot.canvasRoot
+            nodeModel: delegateRoot.nodeModel
+            contentLayer: delegateRoot.contentLayer
+            appTheme: delegateRoot.appTheme
+            delegateItem: delegateRoot
+            viewerController: delegateRoot.viewerController
+            nodeId: delegateRoot.model.nodeId
+            nodeTitle: delegateRoot.model.nodeTitle
+            nodeContent: delegateRoot.model.nodeContent
+            textSize: delegateRoot.model.nodeTextSize
+            mediaType: delegateRoot.model.nodeMediaType
+            metaSummary: delegateRoot.model.nodeMetaSummary
+            audioWaveform: delegateRoot.model.audioWaveform
+            mediaDuration: delegateRoot.model.nodeMediaDuration
+            isSelected: delegateRoot.visuallySelected
+            isHovered: delegateRoot.model.nodeIsHovered
+            nodeWidth: delegateRoot.model.nodeWidth
+            nodeHeight: delegateRoot.model.nodeHeight
+            tags: delegateRoot.model.nodeTags
+            onIsResizeHoveredChanged: nodeLoader.itemResizeHovered = isResizeHovered
+        }
+    }
+
+    Component {
         id: mediaNodeComponent
         MediaNode {
             canvasRoot: delegateRoot.canvasRoot
@@ -138,6 +167,8 @@ Item {
             delegateItem: delegateRoot
             nodeId: delegateRoot.model.nodeId
             nodeTitle: delegateRoot.model.nodeTitle
+            nodeContent: delegateRoot.model.nodeContent
+            textSize: delegateRoot.model.nodeTextSize
             mediaType: delegateRoot.model.nodeMediaType
             metaSummary: delegateRoot.model.nodeMetaSummary
             isSelected: delegateRoot.visuallySelected

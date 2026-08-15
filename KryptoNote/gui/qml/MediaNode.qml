@@ -11,10 +11,12 @@ Rectangle {
     property int nodeId: 0
     required property Item delegateItem
     property string nodeTitle: ""
+    property string nodeContent: ""
     property string mediaType: "image"
     property string metaSummary: ""
     property bool isSelected: false
     property bool isHovered: false
+    property int textSize: 10
     property real nodeWidth: 220
     property real nodeHeight: 220
     property var tags: []
@@ -49,7 +51,8 @@ Rectangle {
         x: 10
         y: titleText.y + titleText.contentHeight + 5
         width: parent.width - 20
-        height: Math.max(0, parent.height - y - footerLabel.contentHeight - 10)
+        height: Math.max(24, parent.height - y - footerLabel.contentHeight
+                         - descriptionText.height - 12)
         color: mediaNode.appTheme.bgPanel
         radius: 3
         border.color: mediaNode.appTheme.borderDefault
@@ -85,6 +88,22 @@ Rectangle {
             visible: mediaNode.thumbnailRequested
                      && (thumbImage.status === Image.Error || thumbImage.status === Image.Null)
         }
+    }
+
+    Text {
+        id: descriptionText
+        x: 10
+        y: mediaFrame.y + mediaFrame.height + 4
+        width: parent.width - 20
+        height: visible ? Math.min(72, Math.max(18, implicitHeight)) : 0
+        text: mediaNode.nodeContent
+        color: mediaNode.appTheme.textMain
+        font.family: mediaNode.appTheme.textFontFamily
+        font.pointSize: mediaNode.textSize > 0 ? mediaNode.textSize : 10
+        textFormat: Text.MarkdownText
+        wrapMode: Text.WordWrap
+        clip: true
+        visible: mediaNode.nodeContent.trim().length > 0
     }
 
     Timer {

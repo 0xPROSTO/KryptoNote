@@ -11,11 +11,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ..config import Config
+from ..core.constants import AUDIO_EXTENSIONS, MEDIA_NODE_TYPES
 from ..core.exceptions import OperationCancelledError
+from ..utils.media_proc import decode_audio_waveform
 from .export_viewer import render_viewer, render_viewer_parts
 
 
-EXPORT_SCHEMA = "zeroxx-kryptonote-export/v1"
+EXPORT_SCHEMA = "zeroxx-kryptonote-export/v2"
 STANDALONE_WARNING_BYTES = 256 * 1024 * 1024
 
 
@@ -31,6 +33,7 @@ class ExportMedia:
     total_size: int
     is_chunked: bool
     has_thumbnail: bool
+    waveform: list[float] | None = None
 
 
 @dataclass(slots=True)
@@ -197,7 +200,7 @@ class GraphExportService:
             }
             row_cursor = connection.execute(
                 "SELECT id, type, title, x, y, width, height, text_content, "
-                "thumbnail IS NOT NULL, is_chunked, total_size, title_size, text_size, "
+                "thumbnail, is_chunked, total_size, title_size, text_size, "
                 "created_at, updated_at, media_width, media_height, "
                 "media_duration, original_filename, frame_locked, "
                 "frame_color, frame_opacity "
@@ -222,7 +225,7 @@ class GraphExportService:
                 self._check_cancelled()
                 (
                     node_id, node_type, encrypted_title, x, y, width, height,
-                    encrypted_text, has_thumbnail, is_chunked, total_size,
+                    encrypted_text, encrypted_thumbnail, is_chunked, total_size,
                     title_size, text_size, created_at, updated_at, media_width,
                     media_height, media_duration, encrypted_original_filename,
                     frame_locked, frame_color, frame_opacity,
@@ -249,7 +252,9 @@ class GraphExportService:
                     "id": int(node_id),
                     "type": node_type,
                     "title": title,
-                    "content": text if node_type == "text" else "",
+                    # Media descriptions use the same ``content`` key as text
+                    # nodes so v2 consumers/search do not need a second field.
+                    "content": text,
                     "position": {"x": float(x or 0), "y": float(y or 0)},
                     "size": {"width": float(width or 0), "height": float(height or 0)},
                     "font": {
@@ -271,7 +276,8 @@ class GraphExportService:
                     "tags": node_tags,
                     "linked_node_ids": sorted(adjacency.get(node_id, [])),
                 }
-                if node_type in {"image", "video"}:
+                if node_type in MEDIA_NODE_TYPES:
+                    has_thumbnail = bool(encrypted_thumbnail)
                     media_size = int(total_size or 0)
                     if not is_chunked and media_size == 0:
                         media_size = self._read_non_chunked_media_size(
@@ -285,13 +291,41 @@ class GraphExportService:
                         title,
                         bool(is_chunked),
                     )
-                    folder = "images" if node_type == "image" else "videos"
+                    folder = {
+                        "image": "images",
+                        "video": "videos",
+                        "audio": "audio",
+                    }[node_type]
                     media_path = f"media/{folder}/node-{node_id}{extension}"
                     thumbnail_path = (
                         f"thumbnails/node-{node_id}.jpg"
-                        if has_thumbnail else ""
+                        if has_thumbnail and node_type != "audio" else ""
                     )
-                    mime_type = mimetypes.guess_type(media_path)[0] or "application/octet-stream"
+                    mime_type = mimetypes.guess_type(media_path)[0]
+                    if not mime_type and node_type == "audio":
+                        mime_type = {
+                            ".mp3": "audio/mpeg",
+                            ".wav": "audio/wav",
+                            ".flac": "audio/flac",
+                            ".ogg": "audio/ogg",
+                            ".oga": "audio/ogg",
+                            ".opus": "audio/opus",
+                            ".m4a": "audio/mp4",
+                            ".aac": "audio/aac",
+                        }.get(extension)
+                    mime_type = mime_type or "application/octet-stream"
+                    waveform = None
+                    if node_type == "audio" and encrypted_thumbnail:
+                        try:
+                            waveform_payload = self.crypto.decrypt(
+                                encrypted_thumbnail,
+                                aad=self.crypto.item_aad(node_id, "thumbnail"),
+                            )
+                        except Exception:
+                            waveform_payload = None
+                        decoded_waveform = decode_audio_waveform(waveform_payload)
+                        if decoded_waveform is not None:
+                            waveform = [float(value) for value in decoded_waveform.peaks]
                     record = ExportMedia(
                         node_id=int(node_id),
                         node_type=node_type,
@@ -302,7 +336,8 @@ class GraphExportService:
                         mime_type=mime_type,
                         total_size=media_size,
                         is_chunked=bool(is_chunked),
-                        has_thumbnail=bool(has_thumbnail),
+                        has_thumbnail=bool(thumbnail_path),
+                        waveform=waveform,
                     )
                     media_records.append(record)
                     node["media"] = {
@@ -314,6 +349,7 @@ class GraphExportService:
                         "width": int(media_width or 0),
                         "height": int(media_height or 0),
                         "duration": float(media_duration or 0),
+                        "waveform": waveform,
                     }
                 nodes.append(node)
                 exported_index += 1
@@ -548,6 +584,9 @@ class GraphExportService:
         allowed = {
             "image": {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".tiff"},
             "video": {".mp4", ".mov", ".mkv", ".webm", ".avi", ".mpeg", ".mpg", ".m4v"},
+            "audio": set(AUDIO_EXTENSIONS) | {
+                ".mka", ".mkv", ".wma", ".mp4", ".mov",
+            },
         }
         for candidate in (original_filename, title):
             suffix = Path(candidate or "").suffix.lower()
@@ -611,9 +650,24 @@ class GraphExportService:
             return ".webp"
         if data[:4] == b"RIFF" and data[8:12] == b"AVI ":
             return ".avi"
+        if node_type == "audio":
+            if data[:4] == b"RIFF" and data[8:12] == b"WAVE":
+                return ".wav"
+            if data.startswith(b"fLaC"):
+                return ".flac"
+            if data.startswith(b"OggS"):
+                return ".ogg"
+            if data.startswith(b"ID3") or (
+                len(data) >= 2 and data[0] == 0xFF and data[1] & 0xE0 == 0xE0
+            ):
+                return ".mp3"
+            if data.startswith((b"ADIF", b"\xff\xf1", b"\xff\xf9")):
+                return ".aac"
         if data.startswith(b"\x1aE\xdf\xa3"):
             return ".webm" if node_type == "video" else None
         if len(data) >= 12 and data[4:8] == b"ftyp":
+            if node_type == "audio" and data[8:12] in (b"M4A ", b"M4B ", b"M4P "):
+                return ".m4a"
             return ".mov" if data[8:12] == b"qt  " else ".mp4"
         return None
 
@@ -726,6 +780,14 @@ class GraphExportService:
                 ])
                 if media.get("thumbnail"):
                     lines.append(f"- Thumbnail: [preview]({media['thumbnail']})")
+                if media.get("waveform"):
+                    lines.append(
+                        "- Waveform: `"
+                        + ", ".join(f"{float(value):.3f}" for value in media["waveform"])
+                        + "`"
+                    )
+            if node.get("type") in MEDIA_NODE_TYPES and node.get("content"):
+                lines.extend([self._markdown_text(node["content"]), ""])
             lines.append("")
             if node.get("type") == "text" and node.get("content"):
                 lines.extend([self._markdown_text(node["content"]), ""])
