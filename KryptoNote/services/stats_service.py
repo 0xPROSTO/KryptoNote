@@ -135,18 +135,21 @@ class KnowledgeStatsService:
     def content_size(nodes):
         total = 0
         for node in nodes or []:
-            cached_size = node.get("content_size")
-            if cached_size is not None:
-                total += int(cached_size or 0)
-                continue
             node_type = node.get("type")
             if node_type == "text" or node_type in MEDIA_NODE_TYPES:
+                # Recompute text/media entries from their source fields.  The
+                # model cache predates media descriptions and external/stale
+                # node dictionaries may still contain a total-only value.
                 total += len((node.get("title") or "").encode("utf-8"))
                 total += len((node.get("content") or "").encode("utf-8"))
                 if node_type in MEDIA_NODE_TYPES:
                     total += int(node.get("total_size") or 0)
             else:
-                total += int(node.get("total_size") or 0)
+                cached_size = node.get("content_size")
+                if cached_size is not None:
+                    total += int(cached_size or 0)
+                else:
+                    total += int(node.get("total_size") or 0)
         return total
 
     @staticmethod

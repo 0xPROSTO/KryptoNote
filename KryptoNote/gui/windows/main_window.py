@@ -268,6 +268,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self._detached_view = None
         self._closing_detached_view = False
         self._detached_dispose_scheduled = False
+        self._application_close_pending = False
 
         from PySide6.QtGui import QSurfaceFormat
         format = QSurfaceFormat()
@@ -339,6 +340,9 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             raise RuntimeError(error_text)
         root.textEditorOpenChanged.connect(self._on_text_editor_open_changed)
         root.mediaViewerOpenChanged.connect(self._on_media_viewer_open_changed)
+        root.applicationCloseRequested.connect(
+            self._on_application_close_requested
+        )
 
         self.overlay = ArrayListOverlay(self)
         self.overlay.set_snap_status(Config.SNAP_TO_GRID)
@@ -463,6 +467,21 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             )
             return False
 
+    @Slot()
+    def _on_application_close_requested(self):
+        """Finish a close request after the media description guard resolved."""
+        if self._application_close_pending:
+            return
+        self._application_close_pending = True
+        # The viewer closes synchronously before this signal is emitted, but
+        # defer the actual QMainWindow close until QML signal handlers unwind.
+        QTimer.singleShot(0, self._finish_application_close)
+
+    @Slot()
+    def _finish_application_close(self):
+        self._application_close_pending = False
+        self.close()
+
     @Slot(int)
     def _request_open_media(self, node_id):
         if not self._commit_pending_media_edits():
@@ -526,6 +545,11 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             if detached.status() == QQuickView.Status.Error:
                 errors = "\n".join(error.toString() for error in detached.errors())
                 raise RuntimeError(errors or "Unable to load media viewer window")
+            detached_root = detached.rootObject()
+            if detached_root is not None:
+                detached_root.applicationCloseRequested.connect(
+                    self._on_application_close_requested
+                )
 
             screen = self.screen()
             available = screen.availableGeometry()
@@ -2112,6 +2136,24 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         viewer_controller = getattr(self, "viewer_controller", None)
         if viewer_controller is not None and not self._commit_pending_media_edits():
             event.ignore()
+            root = None
+            if viewer_controller.detached and self._detached_view is not None:
+                root = self._detached_view.rootObject()
+            if root is None and hasattr(self, "view"):
+                root = self.view.rootObject()
+            prompt = getattr(root, "promptDescriptionGuard", None) if root else None
+            if viewer_controller.descriptionDirty and callable(prompt):
+                prompt("application-close")
+            elif viewer_controller.descriptionDirty:
+                self._handle_status_update(
+                    "Save or discard the media description before closing.",
+                    "warning",
+                )
+            else:
+                self._handle_status_update(
+                    "Save or cancel the current media edit before closing.",
+                    "warning",
+                )
             return
         self._dispose_detached_view()
         if viewer_controller is not None:

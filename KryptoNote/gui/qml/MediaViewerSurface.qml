@@ -60,6 +60,8 @@ FocusScope {
     signal closeRequested()
     signal detachRequested()
     signal expandRequested()
+    signal applicationCloseRequested()
+    signal descriptionGuardCanceled(string action)
 
     focus: true
     clip: true
@@ -285,6 +287,7 @@ FocusScope {
         if (action === "close") closeRequested()
         else if (action === "detach") detachRequested()
         else if (action === "attach") viewerController.request_attach()
+        else if (action === "application-close") applicationCloseRequested()
         else if (action.indexOf("switch:") === 0)
             viewerController.open_media_viewer(Number(action.substring(7)))
         return true
@@ -298,6 +301,7 @@ FocusScope {
         if (action === "close") closeRequested()
         else if (action === "detach") detachRequested()
         else if (action === "attach") viewerController.request_attach()
+        else if (action === "application-close") applicationCloseRequested()
         else if (action.indexOf("switch:") === 0)
             viewerController.open_media_viewer(Number(action.substring(7)))
     }
@@ -305,6 +309,13 @@ FocusScope {
     function openDescriptionGuard(action) {
         _pendingMediaAction = action
         descriptionGuard.open()
+    }
+
+    function cancelDescriptionGuard() {
+        var action = _pendingMediaAction
+        _pendingMediaAction = ""
+        descriptionGuard.close()
+        descriptionGuardCanceled(action)
     }
 
     function cancelRename() {
@@ -1484,7 +1495,7 @@ FocusScope {
                 Button {
                     text: "Continue editing"
                     focusPolicy: Qt.TabFocus
-                    onClicked: descriptionGuard.close()
+                    onClicked: surface.cancelDescriptionGuard()
                 }
             }
         }

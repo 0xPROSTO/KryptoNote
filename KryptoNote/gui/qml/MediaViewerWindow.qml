@@ -9,6 +9,8 @@ FocusScope {
     required property var canvasController
     required property var viewerController
 
+    signal applicationCloseRequested()
+
     focus: true
 
     function commitPendingMediaEdits() {
@@ -32,6 +34,10 @@ FocusScope {
         surfaceActive: windowRoot.viewerController.active
                        && windowRoot.viewerController.detached
         onCloseRequested: windowRoot.viewerController.close_viewer()
+        onApplicationCloseRequested: {
+            windowRoot.viewerController.close_viewer()
+            windowRoot.applicationCloseRequested()
+        }
         onExpandRequested: {}
     }
 }

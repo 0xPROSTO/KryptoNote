@@ -657,12 +657,26 @@ class GraphExportService:
                 return ".flac"
             if data.startswith(b"OggS"):
                 return ".ogg"
+            # ADTS AAC and MPEG audio both start with 0xFF and a second byte
+            # whose top three bits are set.  Check the AAC layer bits first:
+            # an ADTS header has a 12-bit 0xFFF syncword and layer == 0,
+            # whereas MPEG audio requires a non-zero layer field.  Include
+            # CRC-present ADTS headers (FF F0 / FF F8) as well as the common
+            # protection-absent forms (FF F1 / FF F9).
+            if data.startswith(b"ADIF") or (
+                len(data) >= 2
+                and data[0] == 0xFF
+                and (data[1] & 0xF6) == 0xF0
+            ):
+                return ".aac"
             if data.startswith(b"ID3") or (
-                len(data) >= 2 and data[0] == 0xFF and data[1] & 0xE0 == 0xE0
+                len(data) >= 2
+                and data[0] == 0xFF
+                and (data[1] & 0xE0) == 0xE0
+                and (data[1] & 0x06) != 0
+                and (data[1] & 0x18) != 0x08
             ):
                 return ".mp3"
-            if data.startswith((b"ADIF", b"\xff\xf1", b"\xff\xf9")):
-                return ".aac"
         if data.startswith(b"\x1aE\xdf\xa3"):
             return ".webm" if node_type == "video" else None
         if len(data) >= 12 and data[4:8] == b"ftyp":

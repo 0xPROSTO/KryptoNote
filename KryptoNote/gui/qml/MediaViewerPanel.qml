@@ -41,6 +41,8 @@ Item {
     signal requestedClose()
     signal requestedCenter(int nodeId)
     signal expandedChangedByUser(bool expanded)
+    signal requestedApplicationClose()
+    signal descriptionGuardCanceled(string action)
 
     width: expanded && parent
            ? parent.width
@@ -131,6 +133,10 @@ Item {
             requestedClose()
         else if (action === "detach")
             viewerController.request_detach()
+        else if (action === "application-close") {
+            requestedClose()
+            requestedApplicationClose()
+        }
     }
 
     function setExpanded(nextExpanded) {
@@ -249,5 +255,7 @@ Item {
         onCloseRequested: panel.requestCloseAnimated()
         onDetachRequested: panel.requestDetachAnimated()
         onExpandRequested: panel.toggleExpanded()
+        onApplicationCloseRequested: panel.runAfterCollapse("application-close")
+        onDescriptionGuardCanceled: (action) => panel.descriptionGuardCanceled(action)
     }
 }

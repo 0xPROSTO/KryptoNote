@@ -1186,11 +1186,15 @@ class NodeListModel(QAbstractListModel):
 
     @staticmethod
     def _calculate_content_size(node):
-        if node.get("type") == "text":
-            return (
+        node_type = node.get("type")
+        if node_type == "text" or node_type in MEDIA_NODE_TYPES:
+            size = (
                 len((node.get("title") or "").encode("utf-8"))
                 + len((node.get("content") or "").encode("utf-8"))
             )
+            if node_type in MEDIA_NODE_TYPES:
+                size += int(node.get("total_size") or 0)
+            return size
         return int(node.get("total_size") or 0)
 
     @staticmethod

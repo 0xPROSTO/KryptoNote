@@ -246,31 +246,140 @@ def _audio_buffer_peaks(buffer):
     else:
         values = samples.astype(np.float32)
     frame_peaks = np.max(np.abs(values), axis=1)
-    # Retain one scalar per decoder buffer.  This discards PCM immediately and
-    # keeps the retained summary tiny even for very long recordings; the final
-    # pass below max-pools these summaries into the 96 output bins.
+    # Retain one scalar per decoder buffer.  This discards PCM immediately;
+    # ``_StreamingAudioPeakAggregator`` below folds those scalars into a
+    # bounded hierarchy instead of retaining one tuple per decoder buffer.
     return frame_count, float(np.max(frame_peaks))
 
 
-def _combine_audio_peak_summaries(summaries, total_frames):
-    peaks = [0.0] * AUDIO_WAVEFORM_PEAK_COUNT
-    if total_frames <= 0:
+_AUDIO_ANALYSIS_MAX_BINS = AUDIO_WAVEFORM_PEAK_COUNT * 2
+
+
+class _StreamingAudioPeakAggregator:
+    """Bounded max-pool for decoder-buffer peak summaries.
+
+    The final 96-bin mapping depends on the total frame count, which is not
+    guaranteed to be known while ``QAudioDecoder`` is emitting buffers.  A
+    list of all ``(start, length, peak)`` tuples therefore grows linearly with
+    the input duration.  This accumulator keeps a contiguous, frame-aligned
+    hierarchy of at most 192 bins.  When the next summary would exceed that
+    bound, adjacent bins are max-pooled and their frame width is doubled.
+
+    Max-pooling is monotonic: every input peak remains represented in the
+    covered interval, while PCM and per-buffer state are released immediately.
+    At the end, the retained intervals are projected onto the 96 output bins.
+    The extra level halves the amount of temporal smearing compared with
+    pooling directly into the final 96 bins.
+    """
+
+    __slots__ = ("_bins", "_bin_width", "_max_bins", "_end_frame")
+
+    def __init__(self, *, max_bins=_AUDIO_ANALYSIS_MAX_BINS):
+        max_bins = int(max_bins)
+        if max_bins < AUDIO_WAVEFORM_PEAK_COUNT:
+            raise ValueError("Audio peak aggregator requires at least 96 bins")
+        self._bins = []
+        self._bin_width = 1
+        self._max_bins = max_bins
+        self._end_frame = 0
+
+    @property
+    def retained_bin_count(self):
+        """Number of retained bins, exposed for bounded-state tests."""
+
+        return len(self._bins)
+
+    @property
+    def retained_bin_width(self):
+        """Frame width represented by one retained bin."""
+
+        return self._bin_width
+
+    def _pool_once(self):
+        if len(self._bins) <= 1:
+            self._bins = list(self._bins)
+        else:
+            self._bins = [
+                max(self._bins[index : index + 2])
+                for index in range(0, len(self._bins), 2)
+            ]
+        self._bin_width *= 2
+
+    def _ensure_capacity(self, end_frame):
+        # A single decoder buffer can cover more than the current hierarchy;
+        # increase the frame width before materialising any bins so memory is
+        # bounded even for unusually large backend buffers.
+        while (max(0, int(end_frame) - 1) // self._bin_width) + 1 > self._max_bins:
+            self._pool_once()
+
+    def add(self, start_frame, frame_count, peak):
+        """Merge one decoded-buffer summary into the bounded hierarchy."""
+
+        try:
+            start = max(0, int(start_frame))
+            count = int(frame_count)
+            value = float(peak)
+        except (TypeError, ValueError, OverflowError):
+            return
+        if count <= 0:
+            return
+        if not math.isfinite(value):
+            value = 0.0
+        value = max(0.0, min(1.0, value))
+        end = start + count
+        if end <= start:
+            return
+
+        self._ensure_capacity(end)
+        first_bin = start // self._bin_width
+        last_bin = (end - 1) // self._bin_width
+        required_count = last_bin + 1
+        if required_count > len(self._bins):
+            self._bins.extend([0.0] * (required_count - len(self._bins)))
+        for index in range(first_bin, last_bin + 1):
+            self._bins[index] = max(self._bins[index], value)
+        self._end_frame = max(self._end_frame, end)
+
+    def finalize(self, total_frames=None):
+        """Project the retained intervals into 96 normalized max-pool bins."""
+
+        try:
+            total = int(self._end_frame if total_frames is None else total_frames)
+        except (TypeError, ValueError, OverflowError):
+            total = self._end_frame
+        peaks = [0.0] * AUDIO_WAVEFORM_PEAK_COUNT
+        if total <= 0:
+            return peaks
+        for index, peak in enumerate(self._bins):
+            if peak <= 0.0:
+                continue
+            start_frame = index * self._bin_width
+            if start_frame >= total:
+                break
+            end_frame = min(total, start_frame + self._bin_width)
+            first_bin = min(
+                AUDIO_WAVEFORM_PEAK_COUNT - 1,
+                int(start_frame * AUDIO_WAVEFORM_PEAK_COUNT / total),
+            )
+            last_bin = min(
+                AUDIO_WAVEFORM_PEAK_COUNT - 1,
+                max(
+                    first_bin,
+                    int(max(0, end_frame - 1) * AUDIO_WAVEFORM_PEAK_COUNT / total),
+                ),
+            )
+            for target in range(first_bin, last_bin + 1):
+                peaks[target] = max(peaks[target], float(peak))
         return peaks
+
+
+def _combine_audio_peak_summaries(summaries, total_frames):
+    """Compatibility helper that combines an iterable without extra storage."""
+
+    accumulator = _StreamingAudioPeakAggregator()
     for start_frame, frame_count, peak in summaries:
-        if frame_count <= 0:
-            continue
-        first_bin = min(
-            AUDIO_WAVEFORM_PEAK_COUNT - 1,
-            int(start_frame * AUDIO_WAVEFORM_PEAK_COUNT / total_frames),
-        )
-        end_frame = start_frame + frame_count
-        last_bin = min(
-            AUDIO_WAVEFORM_PEAK_COUNT - 1,
-            max(first_bin, int(max(0, end_frame - 1) * AUDIO_WAVEFORM_PEAK_COUNT / total_frames)),
-        )
-        for target in range(first_bin, last_bin + 1):
-            peaks[target] = max(peaks[target], float(peak))
-    return peaks
+        accumulator.add(start_frame, frame_count, peak)
+    return accumulator.finalize(total_frames)
 
 
 def analyze_audio_file(
@@ -302,7 +411,7 @@ def analyze_audio_file(
 
     decoder = QAudioDecoder()
     loop = QEventLoop()
-    summaries = []
+    peak_aggregator = _StreamingAudioPeakAggregator()
     total_frames = 0
     sample_rate = 0
     decoder_duration = 0
@@ -350,7 +459,7 @@ def analyze_audio_file(
                 frame_count, peak = _audio_buffer_peaks(buffer)
                 if frame_count <= 0:
                     continue
-                summaries.append((total_frames, frame_count, peak))
+                peak_aggregator.add(total_frames, frame_count, peak)
                 total_frames += frame_count
                 if progress_callback:
                     duration_value = int(decoder.duration() or 0)
@@ -418,7 +527,7 @@ def analyze_audio_file(
         if sample_rate > 0
         else max(0.0, float(decoder_duration) / 1000.0)
     )
-    peaks = _combine_audio_peak_summaries(summaries, total_frames)
+    peaks = peak_aggregator.finalize(total_frames)
     return MediaMetadata(
         duration=duration,
         waveform=encode_audio_waveform(peaks, duration),

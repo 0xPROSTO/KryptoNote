@@ -71,6 +71,10 @@ Rectangle {
     property bool _suppressEditorCameraReturn: false
     property bool _suppressMediaCameraReturn: false
     property bool _searchCameraOffsetActive: false
+    property string _pendingMediaEditorAction: ""
+    property int _pendingMediaEditorNodeId: 0
+
+    signal applicationCloseRequested()
 
     Component.onCompleted: {
         viewport.initialize()
@@ -284,6 +288,7 @@ Rectangle {
         open: root.isMediaViewerOpen
 
         onRequestedClose: root.viewerController.close_viewer()
+        onRequestedApplicationClose: root.applicationCloseRequested()
         onRequestedCenter: function(nodeId) {
             root.centerOnNodeForMedia(nodeId)
         }
@@ -344,6 +349,18 @@ Rectangle {
 
         function onSessionClosed() {
             root.returnFromMediaViewer()
+            var pendingAction = root._pendingMediaEditorAction
+            var pendingNodeId = root._pendingMediaEditorNodeId
+            root._pendingMediaEditorAction = ""
+            root._pendingMediaEditorNodeId = 0
+            if (pendingNodeId > 0) {
+                Qt.callLater(function() {
+                    if (pendingAction === "text")
+                        root.openEditorForNode(pendingNodeId)
+                    else if (pendingAction === "frame")
+                        root.openFrameEditorForNode(pendingNodeId)
+                })
+            }
         }
 
         function onDetachedChanged() {
@@ -358,6 +375,15 @@ Rectangle {
             if (globalTagPicker.visible && globalTagPicker.nodeId === nodeId)
                 globalTagPicker.refresh()
             searchPanel.syncTagsAndRefresh()
+        }
+    }
+
+    Connections {
+        target: mediaViewerPanel
+
+        function onDescriptionGuardCanceled(action) {
+            root._pendingMediaEditorAction = ""
+            root._pendingMediaEditorNodeId = 0
         }
     }
 
@@ -522,7 +548,14 @@ Rectangle {
         return mediaViewerPanel.commitPendingEdits()
     }
 
+    function clearPendingMediaEditorOpen() {
+        root._pendingMediaEditorAction = ""
+        root._pendingMediaEditorNodeId = 0
+    }
+
     function promptDescriptionGuard(action) {
+        if (action === "application-close")
+            root.clearPendingMediaEditorOpen()
         return mediaViewerPanel.promptDescriptionGuard(action)
     }
 
@@ -562,8 +595,11 @@ Rectangle {
     function openEditorForNode(nodeId) {
         if (root.viewerController.active && !root.viewerController.detached) {
             if (!mediaViewerPanel.commitPendingEdits()) {
-                if (root.viewerController.descriptionDirty)
+                if (root.viewerController.descriptionDirty) {
+                    root._pendingMediaEditorAction = "text"
+                    root._pendingMediaEditorNodeId = Number(nodeId)
                     mediaViewerPanel.promptDescriptionGuard("close")
+                }
                 return
             }
             if (root._hasMediaReturn && !root._hasEditorReturn) {
@@ -586,8 +622,11 @@ Rectangle {
     function openFrameEditorForNode(nodeId) {
         if (root.viewerController.active && !root.viewerController.detached) {
             if (!mediaViewerPanel.commitPendingEdits()) {
-                if (root.viewerController.descriptionDirty)
+                if (root.viewerController.descriptionDirty) {
+                    root._pendingMediaEditorAction = "frame"
+                    root._pendingMediaEditorNodeId = Number(nodeId)
                     mediaViewerPanel.promptDescriptionGuard("close")
+                }
                 return
             }
             root.viewerController.close_viewer()
