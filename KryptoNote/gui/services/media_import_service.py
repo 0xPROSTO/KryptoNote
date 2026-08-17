@@ -1,3 +1,4 @@
+import json
 import os
 import sqlite3
 import shutil
@@ -46,6 +47,18 @@ class ImportedMediaNode:
     media_width: int = 0
     media_height: int = 0
     media_duration: float = 0.0
+    original_filename: str = ""
+    media_metadata: tuple[dict, ...] = ()
+
+
+def _encode_media_metadata(metadata):
+    if not metadata:
+        return None
+    return json.dumps(
+        list(metadata),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
 
 
 class MediaImportService:
@@ -153,8 +166,12 @@ class MediaImportService:
                 raise OperationCancelledError("Media import cancelled")
             file_size = os.path.getsize(path)
             title = os.path.basename(path)
-            width = Config.NODE_MEDIA_SIZE
-            height = Config.NODE_MEDIA_SIZE
+            if media_type == "audio":
+                width = Config.NODE_AUDIO_WIDTH
+                height = Config.NODE_AUDIO_HEIGHT
+            else:
+                width = Config.NODE_MEDIA_SIZE
+                height = Config.NODE_MEDIA_SIZE
             offset = index * 25
             x = center_x - width / 2 + offset
             y = center_y - height / 2 + offset
@@ -167,6 +184,7 @@ class MediaImportService:
                 media_type, x, y, width, height, title, thumbnail, path,
                 chunk_progress, metadata.width, metadata.height, metadata.duration,
                 os.path.basename(path),
+                metadata.embedded_metadata,
             )
             item = ImportedMediaNode(
                 node_id=node_id,
@@ -181,6 +199,8 @@ class MediaImportService:
                 media_width=metadata.width,
                 media_height=metadata.height,
                 media_duration=metadata.duration,
+                original_filename=os.path.basename(path),
+                media_metadata=metadata.embedded_metadata,
             )
             imported.append(item)
             if imported_callback:
@@ -289,9 +309,9 @@ class MediaImportWorker(QObject):
                     type, title, x, y, width, height, thumbnail,
                     is_chunked, total_size, created_at, updated_at,
                     media_width, media_height, media_duration,
-                    original_filename, storage_state
+                    original_filename, media_metadata, storage_state
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, 'importing')
+                VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, 'importing')
                 """,
                 (
                     media_type,
@@ -307,6 +327,7 @@ class MediaImportWorker(QObject):
                     metadata.width,
                     metadata.height,
                     metadata.duration,
+                    None,
                     None,
                 ),
             )
@@ -326,10 +347,27 @@ class MediaImportWorker(QObject):
                 os.path.basename(path).encode(),
                 aad=self._crypto.item_aad(item_id, "original_filename"),
             )
+            metadata_payload = _encode_media_metadata(
+                metadata.embedded_metadata
+            )
+            enc_media_metadata = (
+                self._crypto.encrypt(
+                    metadata_payload,
+                    aad=self._crypto.item_aad(item_id, "media_metadata"),
+                )
+                if metadata_payload else None
+            )
             cursor.execute(
-                "UPDATE items SET title=?, thumbnail=?, original_filename=? "
+                "UPDATE items SET title=?, thumbnail=?, original_filename=?, "
+                "media_metadata=? "
                 "WHERE id=? AND storage_state='importing'",
-                (enc_title, enc_thumbnail, enc_filename, item_id),
+                (
+                    enc_title,
+                    enc_thumbnail,
+                    enc_filename,
+                    enc_media_metadata,
+                    item_id,
+                ),
             )
             conn.commit()
 
@@ -558,8 +596,12 @@ class MediaImportWorker(QObject):
                 self._assert_source_unchanged(
                     path, job_stats[file_index], title
                 )
-                width = Config.NODE_MEDIA_SIZE
-                height = Config.NODE_MEDIA_SIZE
+                if media_type == "audio":
+                    width = Config.NODE_AUDIO_WIDTH
+                    height = Config.NODE_AUDIO_HEIGHT
+                else:
+                    width = Config.NODE_MEDIA_SIZE
+                    height = Config.NODE_MEDIA_SIZE
                 offset = file_index * 25
                 x = self._center_x - width / 2 + offset
                 y = self._center_y - height / 2 + offset
@@ -594,6 +636,8 @@ class MediaImportWorker(QObject):
                     media_width=metadata.width,
                     media_height=metadata.height,
                     media_duration=metadata.duration,
+                    original_filename=os.path.basename(path),
+                    media_metadata=metadata.embedded_metadata,
                 )
                 imported_count += 1
                 completed_bytes += job_work_sizes[file_index]

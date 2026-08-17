@@ -10,7 +10,7 @@ CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 class AppConfig:
 
     APP_NAME = "ZeroXX-KryptoNote"
-    VERSION = "3.6.3"
+    VERSION = "3.6.4"
     COMPANY_NAME = "ZeroXWare"
 
     CHUNK_SIZE = MEDIA_CHUNK_SIZE
@@ -31,6 +31,8 @@ class AppConfig:
     NODE_DEFAULT_WIDTH = 200
     NODE_DEFAULT_HEIGHT = 150
     NODE_MEDIA_SIZE = 220
+    NODE_AUDIO_WIDTH = 360
+    NODE_AUDIO_HEIGHT = 108
     FRAME_DEFAULT_WIDTH = 600
     FRAME_DEFAULT_HEIGHT = 400
     FRAME_DEFAULT_OPACITY = 0.21

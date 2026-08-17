@@ -1,4 +1,5 @@
 import concurrent.futures
+import json
 import shutil
 import sqlite3
 import time
@@ -24,11 +25,33 @@ from ..exceptions import InsufficientDiskSpaceError, OperationCancelledError
 
 # Shared chunked-media writer
 
+
+def _encode_media_metadata(metadata):
+    if not metadata:
+        return None
+    return json.dumps(
+        list(metadata),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def _decode_media_metadata(payload):
+    if not payload:
+        return []
+    try:
+        decoded = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError, AttributeError):
+        return []
+    if not isinstance(decoded, list):
+        return []
+    return [entry for entry in decoded if isinstance(entry, dict)]
+
 def write_chunked_media(
     cursor, conn, crypto, item_type, x, y, w, h, title, thumb,
     file_path, chunk_size, progress_callback=None,
     media_width=0, media_height=0, media_duration=0.0,
-    cancel_check=None, original_filename="",
+    cancel_check=None, original_filename="", media_metadata=None,
 ):
     with open(file_path, "rb") as f:
         f.seek(0, 2)
@@ -43,11 +66,11 @@ def write_chunked_media(
         cursor.execute("""
             INSERT INTO items (type, title, x, y, width, height, thumbnail, is_chunked, total_size,
                                created_at, updated_at, media_width, media_height, media_duration,
-                               original_filename)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+                               original_filename, media_metadata)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             item_type, b"", x, y, w, h, None, file_size,
-            now, now, media_width, media_height, media_duration, None,
+            now, now, media_width, media_height, media_duration, None, None,
         ))
         item_id = cursor.lastrowid
         enc_title = crypto.encrypt(
@@ -66,10 +89,25 @@ def write_chunked_media(
             )
             if original_filename else None
         )
+        metadata_payload = _encode_media_metadata(media_metadata)
+        enc_media_metadata = (
+            crypto.encrypt(
+                metadata_payload,
+                aad=crypto.item_aad(item_id, "media_metadata"),
+            )
+            if metadata_payload else None
+        )
         cursor.execute(
-            "UPDATE items SET title=?, thumbnail=?, original_filename=? "
+            "UPDATE items SET title=?, thumbnail=?, original_filename=?, "
+            "media_metadata=? "
             "WHERE id=?",
-            (enc_title, enc_thumb, enc_original_filename, item_id),
+            (
+                enc_title,
+                enc_thumb,
+                enc_original_filename,
+                enc_media_metadata,
+                item_id,
+            ),
         )
 
         with open(file_path, "rb") as f:
@@ -236,6 +274,7 @@ class NodeRepository:
             media_height=0, media_duration=0.0, original_filename="",
             frame_locked=False, frame_color="", frame_opacity=0.21,
             commit=True,
+            media_metadata=None,
     ):
         is_chunked = 0
         total_size = len(data) if data else 0
@@ -249,15 +288,15 @@ class NodeRepository:
                             INSERT INTO items (type, title, x, y, width, height, text_content, thumbnail, full_data,
                                                is_chunked, total_size, title_size, text_size, created_at, updated_at,
                                                media_width, media_height, media_duration, original_filename,
-                                               frame_locked, frame_color, frame_opacity)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                               frame_locked, frame_color, frame_opacity, media_metadata)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             """,
                             (
                                 item_type, b"", x, y, w, h, None, None,
                                 None, is_chunked, total_size, title_size, text_size,
                                 now, now, media_width, media_height, media_duration,
                                 None, int(bool(frame_locked)),
-                                frame_color or "", float(frame_opacity),
+                                frame_color or "", float(frame_opacity), None,
                             ))
             item_id = self.cursor.lastrowid
             aad = self.crypto.item_aad
@@ -289,15 +328,24 @@ class NodeRepository:
                 )
                 if original_filename else None
             )
+            metadata_payload = _encode_media_metadata(media_metadata)
+            enc_media_metadata = (
+                self.crypto.encrypt(
+                    metadata_payload,
+                    aad=aad(item_id, "media_metadata"),
+                )
+                if metadata_payload else None
+            )
             self.cursor.execute(
                 "UPDATE items SET title=?, text_content=?, thumbnail=?, "
-                "full_data=?, original_filename=? WHERE id=?",
+                "full_data=?, original_filename=?, media_metadata=? WHERE id=?",
                 (
                     enc_title,
                     enc_text,
                     enc_thumb,
                     enc_data,
                     enc_original_filename,
+                    enc_media_metadata,
                     item_id,
                 ),
             )
@@ -313,7 +361,7 @@ class NodeRepository:
     def add_streamed_media(
             self, item_type, x, y, w, h, title, thumb, file_path,
             progress_callback=None, media_width=0, media_height=0,
-            media_duration=0.0, original_filename=""
+            media_duration=0.0, original_filename="", media_metadata=None,
     ):
         """Thin wrapper around module-level write_chunked_media."""
         return write_chunked_media(
@@ -322,6 +370,7 @@ class NodeRepository:
             file_path, MEDIA_CHUNK_SIZE, progress_callback,
             media_width, media_height, media_duration,
             original_filename=original_filename,
+            media_metadata=media_metadata,
         )
 
     def get_chunk(self, item_id, chunk_index):
@@ -343,7 +392,7 @@ class NodeRepository:
         "SELECT id, type, title, x, y, width, height, text_content, thumbnail, "
         "is_chunked, total_size, title_size, text_size, created_at, updated_at, "
         "media_width, media_height, media_duration, original_filename, "
-        "frame_locked, frame_color, frame_opacity "
+        "media_metadata, frame_locked, frame_color, frame_opacity "
         "FROM items"
     )
     _ITEM_SELECT = (
@@ -360,7 +409,8 @@ class NodeRepository:
         "media_width, media_height, media_duration, "
         "frame_locked, frame_color, frame_opacity, "
         "thumbnail IS NOT NULL, full_data IS NOT NULL, "
-        "text_content IS NOT NULL, original_filename IS NOT NULL "
+        "text_content IS NOT NULL, original_filename IS NOT NULL, "
+        "media_metadata IS NOT NULL "
         "FROM items"
     )
 
@@ -419,7 +469,7 @@ class NodeRepository:
             encrypted_text, encrypted_thumbnail, is_chunked, total_size,
             title_size, text_size, created_at, updated_at, media_width,
             media_height, media_duration, encrypted_original_filename,
-            frame_locked, frame_color, frame_opacity,
+            encrypted_media_metadata, frame_locked, frame_color, frame_opacity,
         ) = row
         if self.crypto:
             title = (
@@ -455,11 +505,21 @@ class NodeRepository:
                 ).decode()
                 if encrypted_original_filename else ""
             )
+            media_metadata = (
+                _decode_media_metadata(
+                    self.crypto.decrypt(
+                        encrypted_media_metadata,
+                        aad=self.crypto.item_aad(item_id, "media_metadata"),
+                    )
+                )
+                if encrypted_media_metadata else []
+            )
         else:
             title = ""
             text = ""
             thumbnail = None
             original_filename = ""
+            media_metadata = []
         return NodeItemDTO(
             id=item_id, type=item_type, title=title, x=x, y=y,
             width=width, height=height, text_content=text, thumbnail=thumbnail,
@@ -469,6 +529,7 @@ class NodeRepository:
             media_width=media_width or 0, media_height=media_height or 0,
             media_duration=media_duration or 0.0,
             original_filename=original_filename,
+            media_metadata=media_metadata,
             frame_locked=bool(frame_locked),
             frame_color=frame_color or "",
             frame_opacity=float(
@@ -710,7 +771,7 @@ class NodeRepository:
             created_at, updated_at, media_width, media_height, media_duration,
             frame_locked, frame_color,
             frame_opacity, has_thumbnail, has_full_data, has_text,
-            has_original_filename,
+            has_original_filename, has_media_metadata,
         ) = row
 
         return {
@@ -738,6 +799,7 @@ class NodeRepository:
             "has_full_data": bool(has_full_data),
             "has_text": bool(has_text),
             "has_original_filename": bool(has_original_filename),
+            "has_media_metadata": bool(has_media_metadata),
         }
 
     @staticmethod
@@ -1403,7 +1465,7 @@ class NodeRepository:
                 source_id = int(node["source_id"])
                 source_cursor.execute(
                     "SELECT type, title, text_content, thumbnail, "
-                    "is_chunked, total_size, original_filename, "
+                    "is_chunked, total_size, original_filename, media_metadata, "
                     "full_data IS NOT NULL "
                     "FROM items WHERE id=? AND storage_state=?",
                     (source_id, READY_STORAGE_STATE),
@@ -1421,6 +1483,7 @@ class NodeRepository:
                     is_chunked,
                     total_size,
                     source_filename,
+                    source_media_metadata,
                     source_has_full_data,
                 ) = source_row
                 if source_type != node.get("type"):
@@ -1443,6 +1506,13 @@ class NodeRepository:
                 ):
                     raise ValueError(
                         f"Source node {source_id} changed payload during "
+                        "graph copy"
+                    )
+                if bool(node.get("has_media_metadata")) != bool(
+                    source_media_metadata
+                ):
+                    raise ValueError(
+                        f"Source node {source_id} changed metadata during "
                         "graph copy"
                     )
 
@@ -1501,10 +1571,10 @@ class NodeRepository:
                         thumbnail, full_data, is_chunked, total_size,
                         title_size, text_size, created_at, updated_at,
                         media_width, media_height, media_duration,
-                        original_filename, frame_locked, frame_color,
+                        original_filename, media_metadata, frame_locked, frame_color,
                         frame_opacity, storage_state
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                               ?, ?, ?, ?, ?, ?, ?, ?)
+                               ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         node.get("type") or source_type,
@@ -1525,6 +1595,7 @@ class NodeRepository:
                         int(node.get("media_width", 0) or 0),
                         int(node.get("media_height", 0) or 0),
                         float(node.get("media_duration", 0) or 0),
+                        None,
                         None,
                         int(bool(node.get("frame_locked", False))),
                         node.get("frame_color") or "",
@@ -1588,9 +1659,19 @@ class NodeRepository:
                         filename.encode(),
                         aad=self.crypto.item_aad(target_id, "original_filename"),
                     )
+                encrypted_media_metadata = None
+                if source_media_metadata is not None:
+                    plain_media_metadata = self.crypto.decrypt(
+                        source_media_metadata,
+                        aad=self.crypto.item_aad(source_id, "media_metadata"),
+                    )
+                    encrypted_media_metadata = self.crypto.encrypt(
+                        plain_media_metadata,
+                        aad=self.crypto.item_aad(target_id, "media_metadata"),
+                    )
                 self.cursor.execute(
                     "UPDATE items SET title=?, text_content=?, thumbnail=?, "
-                    "full_data=?, original_filename=? WHERE id=?",
+                    "full_data=?, original_filename=?, media_metadata=? WHERE id=?",
                     (
                         encrypted_title,
                         encrypted_text,
@@ -1606,6 +1687,7 @@ class NodeRepository:
                             else None
                         ),
                         encrypted_filename,
+                        encrypted_media_metadata,
                         target_id,
                     ),
                 )

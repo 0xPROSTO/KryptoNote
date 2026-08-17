@@ -114,7 +114,7 @@ class ViewerController(QObject):
         self._description_text_size = 10
         self._description_saved_text_size = 10
         self._description_split_ratio = 0.20
-        self._description_split_manual = False
+        self._description_split_ratios = {}
 
         self._player = player or QMediaPlayer(self)
         self._audio = audio or QAudioOutput(self)
@@ -355,7 +355,7 @@ class ViewerController(QObject):
         if not self._error_text and image is not None and not image.isNull():
             if image.width() > 0 and image.height() > 0:
                 self._media_aspect_ratio = image.width() / image.height()
-                if not self._description_split_manual:
+                if "image" not in self._description_split_ratios:
                     ratio = max(
                         0.0,
                         min(
@@ -582,10 +582,14 @@ class ViewerController(QObject):
         except (TypeError, ValueError):
             return
         value = max(0.10, min(0.90, value))
-        if abs(value - self._description_split_ratio) < 0.0001 and self._description_split_manual:
+        if (
+            abs(value - self._description_split_ratio) < 0.0001
+            and self._media_type in self._description_split_ratios
+        ):
             return
         self._description_split_ratio = value
-        self._description_split_manual = True
+        if self._media_type:
+            self._description_split_ratios[self._media_type] = value
         self.sessionChanged.emit()
 
     @Slot(str, result=bool)
@@ -819,12 +823,15 @@ class ViewerController(QObject):
             self._description_text_size = node_text_size
             self._description_dirty = False
         self._audio_waveform = waveform
-        if not self._description_split_manual:
-            if node.get("type") == "audio":
-                self._description_split_ratio = 0.35
-            else:
-                ratio = max(0.0, min(1.0, (self._media_aspect_ratio - 1.0) / (16.0 / 9.0 - 1.0)))
-                self._description_split_ratio = 0.20 + 0.15 * ratio
+        media_type = str(node.get("type") or "")
+        manual_split = self._description_split_ratios.get(media_type)
+        if manual_split is not None:
+            self._description_split_ratio = manual_split
+        elif media_type == "audio":
+            self._description_split_ratio = 0.70
+        else:
+            ratio = max(0.0, min(1.0, (self._media_aspect_ratio - 1.0) / (16.0 / 9.0 - 1.0)))
+            self._description_split_ratio = 0.20 + 0.15 * ratio
         if title_changed:
             self.titleChanged.emit()
         if tags_changed:

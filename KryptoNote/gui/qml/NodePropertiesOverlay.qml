@@ -116,6 +116,7 @@ Popup {
         }
 
         var fileSize = metadataValue("File size")
+        var originalFile = metadataValue("Original file")
         var resolution = metadataValue("Resolution")
         var duration = metadataValue("Duration")
         var tags = metadataValue("Tags")
@@ -125,6 +126,9 @@ Popup {
         var typography = metadataValue("Typography")
         if (fileSize) {
             rows.push({"label": "File size", "value": fileSize})
+        }
+        if (originalFile) {
+            rows.push({"label": "Original file", "value": originalFile})
         }
         if (resolution) {
             rows.push({"label": "Resolution", "value": resolution})
@@ -178,6 +182,37 @@ Popup {
                 "label": "Appearance",
                 "value": appearance.join("  ·  ")
             })
+        }
+        var consumed = {
+            "ID": true,
+            "Type": true,
+            "Title": true,
+            "Created": true,
+            "Updated": true,
+            "Position": true,
+            "Node size": true,
+            "File size": true,
+            "Original file": true,
+            "Resolution": true,
+            "Duration": true,
+            "Tags": true,
+            "Characters": true,
+            "Words": true,
+            "Lines": true,
+            "Typography": true,
+            "Lock": true,
+            "Background": true,
+            "Opacity": true
+        }
+        for (var index = 0; index < metadataLines.length; ++index) {
+            var line = String(metadataLines[index])
+            var separator = line.indexOf(":")
+            if (separator <= 0) continue
+            var label = line.slice(0, separator).trim()
+            var value = line.slice(separator + 1).trim()
+            if (!consumed[label] && value) {
+                rows.push({"label": label, "value": value})
+            }
         }
         return rows
     }

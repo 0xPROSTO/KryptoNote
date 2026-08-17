@@ -839,6 +839,8 @@ class QmlCanvasController(QObject):
                 media_width=item.media_width,
                 media_height=item.media_height,
                 media_duration=item.media_duration,
+                original_filename=item.original_filename,
+                media_metadata=item.media_metadata,
                 created_at=item.created_at,
                 updated_at=item.updated_at,
                 frame_locked=getattr(item, "frame_locked", False),

@@ -110,6 +110,8 @@ class ImportExportController(QObject):
             total_size=item.total_size,
             media_width=item.media_width, media_height=item.media_height,
             media_duration=item.media_duration,
+            original_filename=item.original_filename,
+            media_metadata=item.media_metadata,
         )
         self._auto_fit_callback(item.node_id, item.thumbnail_bytes)
 

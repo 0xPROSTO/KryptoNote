@@ -81,22 +81,25 @@ class NodeService:
             media_height=0, media_duration=0.0, original_filename="",
             frame_locked=False, frame_color="", frame_opacity=0.21,
             commit=True,
+            media_metadata=None,
     ):
         return self.repo.add_item(
             item_type, x, y, w, h, title, text, thumb, data, title_size,
             text_size, media_width, media_height, media_duration,
             original_filename, frame_locked, frame_color, frame_opacity,
-            commit,
+            commit=commit,
+            media_metadata=media_metadata,
         )
 
     def add_streamed_media(
             self, item_type, x, y, w, h, title, thumb, file_path,
             progress_callback=None, media_width=0, media_height=0,
-            media_duration=0.0, original_filename=""
+            media_duration=0.0, original_filename="", media_metadata=None,
     ):
         return self.repo.add_streamed_media(
             item_type, x, y, w, h, title, thumb, file_path, progress_callback,
-            media_width, media_height, media_duration, original_filename
+            media_width, media_height, media_duration, original_filename,
+            media_metadata,
         )
 
     def add_connection(self, start_id, end_id, commit=True):

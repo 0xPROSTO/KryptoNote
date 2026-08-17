@@ -255,6 +255,11 @@ class NodeListModel(QAbstractListModel):
             "media_width": int(item.media_width or 0),
             "media_height": int(item.media_height or 0),
             "media_duration": float(item.media_duration or 0.0),
+            "original_filename": item.original_filename or "",
+            "media_metadata": [
+                dict(entry) for entry in (item.media_metadata or [])
+                if isinstance(entry, dict)
+            ],
             "frame_locked": bool(getattr(item, "frame_locked", False)),
             "frame_color": getattr(item, "frame_color", "") or "",
             "frame_opacity": float(
@@ -277,6 +282,7 @@ class NodeListModel(QAbstractListModel):
                  title_size=14, text_size=10, auto_fit_pending=False,
                  draft=False, created_at="", updated_at="", total_size=0,
                  media_width=0, media_height=0, media_duration=0.0,
+                 original_filename="", media_metadata=None,
                  frame_locked=False, frame_color="", frame_opacity=0.21):
         thumb_image = None
         audio_waveform = []
@@ -312,6 +318,11 @@ class NodeListModel(QAbstractListModel):
             "media_width": int(media_width or 0),
             "media_height": int(media_height or 0),
             "media_duration": float(media_duration or 0.0),
+            "original_filename": original_filename or "",
+            "media_metadata": [
+                dict(entry) for entry in (media_metadata or [])
+                if isinstance(entry, dict)
+            ],
             "frame_locked": bool(frame_locked),
             "frame_color": frame_color or "",
             "frame_opacity": float(frame_opacity),
@@ -1125,10 +1136,35 @@ class NodeListModel(QAbstractListModel):
         ]
         if node.get("type") in MEDIA_NODE_TYPES:
             lines.append(f"File size: {self._format_size(node.get('total_size', 0))}")
+            if node.get("original_filename"):
+                lines.append(f"Original file: {node['original_filename']}")
             if node.get("media_width") and node.get("media_height"):
                 lines.append(f"Resolution: {node['media_width']} x {node['media_height']}")
             if node.get("media_duration"):
                 lines.append(f"Duration: {self._format_duration(node['media_duration'])}")
+            reserved_labels = {
+                "ID", "Type", "Title", "Created", "Updated", "Position",
+                "Node size", "File size", "Original file", "Resolution",
+                "Duration", "Tags", "Characters", "Words", "Lines",
+                "Typography", "Lock", "Background", "Opacity",
+            }
+            for entry in node.get("media_metadata", []):
+                if not isinstance(entry, dict):
+                    continue
+                label = str(entry.get("label") or entry.get("key") or "Metadata")
+                label = label.replace(":", " · ").strip()
+                if label in reserved_labels:
+                    label = "Embedded " + label.lower()
+                raw_values = entry.get("values", [])
+                if not isinstance(raw_values, (list, tuple)):
+                    raw_values = [raw_values]
+                values = [
+                    str(value).strip()
+                    for value in raw_values
+                    if str(value).strip()
+                ]
+                if label and values:
+                    lines.append(f"{label}: " + "\n".join(values))
         if node.get("tags"):
             lines.append("Tags: " + ", ".join("@" + tag["name"] for tag in node["tags"]))
         if node.get("type") == "text":
@@ -1173,7 +1209,8 @@ class NodeListModel(QAbstractListModel):
         node["created_at_display"] = self._format_datetime(node.get("created_at"))
         node["updated_at_display"] = self._format_datetime(node.get("updated_at"))
         if node.get("type") in MEDIA_NODE_TYPES:
-            parts = [node["created_at_display"]]
+            artist = self._embedded_metadata_value(node, "Artist")
+            parts = [artist or node["created_at_display"]]
             if node.get("media_duration"):
                 parts.append(self._format_duration(node["media_duration"]))
             if node.get("total_size"):
@@ -1183,6 +1220,20 @@ class NodeListModel(QAbstractListModel):
             node["meta_summary"] = " | ".join(part for part in parts if part and part != "-")
         else:
             node["meta_summary"] = ""
+
+    @staticmethod
+    def _embedded_metadata_value(node, label):
+        for entry in node.get("media_metadata", []) or []:
+            if not isinstance(entry, dict) or entry.get("label") != label:
+                continue
+            values = entry.get("values", [])
+            if not isinstance(values, (list, tuple)):
+                values = [values]
+            for value in values:
+                text = str(value).strip()
+                if text:
+                    return text
+        return ""
 
     @staticmethod
     def _calculate_content_size(node):

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from mutagen import File as MutagenFile
 from PIL import Image, ImageOps
 
 from ..core.constants import (
@@ -32,6 +33,10 @@ class MediaMetadata:
     # waveform in the existing encrypted thumbnail column avoids a schema
     # migration while allowing the model/export layers to decode it later.
     waveform: bytes | None = None
+    # Normalized textual tags and technical fields extracted from the source.
+    # Binary payloads (for example cover art) are represented by a descriptor;
+    # the original bytes remain preserved in the encrypted media file itself.
+    embedded_metadata: tuple[dict, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -209,8 +214,328 @@ def supported_audio_extensions():
     return frozenset(extensions)
 
 
-def _audio_buffer_peaks(buffer):
-    """Reduce one QAudioBuffer to its frame count and maximum peak."""
+_AUDIO_TAG_LABELS = {
+    "title": "Title",
+    "tit2": "Title",
+    "\xa9nam": "Title",
+    "artist": "Artist",
+    "tpe1": "Artist",
+    "\xa9art": "Artist",
+    "album": "Album",
+    "talb": "Album",
+    "\xa9alb": "Album",
+    "albumartist": "Album artist",
+    "album artist": "Album artist",
+    "tpe2": "Album artist",
+    "aart": "Album artist",
+    "composer": "Composer",
+    "tcom": "Composer",
+    "\xa9wrt": "Composer",
+    "genre": "Genre",
+    "tcon": "Genre",
+    "\xa9gen": "Genre",
+    "gnre": "Genre",
+    "date": "Date",
+    "year": "Date",
+    "tdrc": "Date",
+    "tyer": "Date",
+    "\xa9day": "Date",
+    "tracknumber": "Track",
+    "track": "Track",
+    "trck": "Track",
+    "trkn": "Track",
+    "discnumber": "Disc",
+    "disc": "Disc",
+    "tpos": "Disc",
+    "disk": "Disc",
+    "bpm": "BPM",
+    "tbpm": "BPM",
+    "tmpo": "BPM",
+    "isrc": "ISRC",
+    "tsrc": "ISRC",
+    "language": "Language",
+    "tlan": "Language",
+    "copyright": "Copyright",
+    "tcop": "Copyright",
+    "cprt": "Copyright",
+    "publisher": "Publisher",
+    "tpub": "Publisher",
+    "organization": "Publisher",
+    "encodedby": "Encoded by",
+    "encoder": "Encoder",
+    "tenc": "Encoded by",
+    "\xa9too": "Encoder",
+    "comment": "Comment",
+    "comments": "Comment",
+    "comm": "Comment",
+    "\xa9cmt": "Comment",
+    "lyrics": "Lyrics",
+    "unsyncedlyrics": "Lyrics",
+    "unsynced lyrics": "Lyrics",
+    "uslt": "Lyrics",
+    "\xa9lyr": "Lyrics",
+    "sylt": "Synchronized lyrics",
+    "apic": "Cover art",
+    "covr": "Cover art",
+    "picture": "Cover art",
+    "compilation": "Compilation",
+    "cpil": "Compilation",
+}
+
+_AUDIO_INFO_LABELS = {
+    "bitrate": "Bitrate",
+    "sample_rate": "Sample rate",
+    "channels": "Channels",
+    "bits_per_sample": "Bits per sample",
+    "bitrate_mode": "Bitrate mode",
+    "codec": "Codec",
+    "codec_description": "Codec",
+    "encoder_info": "Encoder",
+    "encoder_settings": "Encoder settings",
+    "track_gain": "Track gain",
+    "track_peak": "Track peak",
+    "album_gain": "Album gain",
+    "album_peak": "Album peak",
+}
+
+
+def _metadata_label(raw_key, value=None):
+    raw = str(raw_key or "Metadata").replace("\x00", "").strip()
+    base = raw.split(":", 1)[0]
+    label = _AUDIO_TAG_LABELS.get(raw.casefold())
+    if label is None:
+        label = _AUDIO_TAG_LABELS.get(base.casefold())
+    if label is None:
+        label = raw.replace(":", " · ").replace("_", " ").strip()
+        label = label[:1].upper() + label[1:] if label else "Metadata"
+
+    qualifiers = []
+    for attribute in ("desc", "lang"):
+        detail = getattr(value, attribute, "")
+        detail = str(detail or "").strip()
+        if detail and detail.lower() not in {"xxx", "und"}:
+            qualifiers.append(detail)
+    if qualifiers:
+        label += " (" + " · ".join(dict.fromkeys(qualifiers)) + ")"
+    return label.replace(":", " · ")
+
+
+def _binary_metadata_descriptor(value):
+    raw = bytes(value)
+    format_name = getattr(value, "imageformat", None)
+    formats = {13: "JPEG", 14: "PNG"}
+    try:
+        kind = formats.get(int(format_name), "Binary data")
+    except (TypeError, ValueError):
+        kind = "Binary data"
+    return f"{kind} · {len(raw):,} bytes"
+
+
+def _metadata_text_values(value, *, depth=0):
+    if value is None or depth > 5:
+        return []
+    if isinstance(value, str):
+        text = value.replace("\x00", "").strip()
+        return [text] if text else []
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        raw = bytes(value)
+        try:
+            decoded = raw.decode("utf-8").replace("\x00", "").strip()
+        except UnicodeDecodeError:
+            decoded = ""
+        if decoded and sum(character.isprintable() or character in "\r\n\t" for character in decoded) / len(decoded) > 0.9:
+            return [decoded]
+        return [_binary_metadata_descriptor(value)]
+    if isinstance(value, bool):
+        return ["Yes" if value else "No"]
+    if isinstance(value, (int, float)):
+        if isinstance(value, float) and not math.isfinite(value):
+            return []
+        return [str(value)]
+    if isinstance(value, dict):
+        result = []
+        for key in sorted(value, key=lambda item: str(item).casefold()):
+            for item in _metadata_text_values(value[key], depth=depth + 1):
+                result.append(f"{key}={item}")
+        return result
+    if isinstance(value, (list, tuple, set, frozenset)):
+        if (
+            isinstance(value, tuple)
+            and len(value) == 2
+            and isinstance(value[0], str)
+            and isinstance(value[1], (int, float))
+        ):
+            return [f"{value[0]} @ {value[1]} ms"]
+        result = []
+        for item in value:
+            result.extend(_metadata_text_values(item, depth=depth + 1))
+        return result
+
+    text_payload = getattr(value, "text", None)
+    if text_payload is not None:
+        return _metadata_text_values(text_payload, depth=depth + 1)
+    url = getattr(value, "url", None)
+    if url:
+        return _metadata_text_values(url, depth=depth + 1)
+    scalar = getattr(value, "value", None)
+    if scalar is not None and scalar is not value:
+        return _metadata_text_values(scalar, depth=depth + 1)
+
+    descriptor = []
+    for attribute, label in (
+        ("mime", "MIME"),
+        ("type", "Type"),
+        ("desc", "Description"),
+        ("filename", "Filename"),
+        ("owner", "Owner"),
+        ("email", "Email"),
+        ("rating", "Rating"),
+        ("count", "Count"),
+    ):
+        detail = getattr(value, attribute, None)
+        if detail not in (None, "", b""):
+            descriptor.append(f"{label}: {detail}")
+    data = getattr(value, "data", None)
+    if isinstance(data, (bytes, bytearray, memoryview)):
+        descriptor.append(f"Data: {len(data):,} bytes")
+    if descriptor:
+        return [" · ".join(descriptor)]
+
+    pretty = getattr(value, "pprint", None)
+    if callable(pretty):
+        try:
+            return _metadata_text_values(pretty(), depth=depth + 1)
+        except Exception:
+            pass
+    text = str(value).replace("\x00", "").strip()
+    if not text or (text.startswith("<") and text.endswith(">") and " object at " in text):
+        return []
+    return [text]
+
+
+def _technical_metadata_values(name, value):
+    try:
+        if name == "bitrate" and float(value) > 0:
+            return [f"{float(value) / 1000:.0f} kbps"]
+        if name == "sample_rate" and float(value) > 0:
+            rate = float(value) / 1000
+            return [f"{rate:g} kHz"]
+    except (TypeError, ValueError, OverflowError):
+        pass
+    return _metadata_text_values(value)
+
+
+def read_audio_embedded_metadata(file_path):
+    """Return every displayable audio tag and technical field Mutagen exposes.
+
+    Text is retained verbatim. Binary fields are represented by size/type
+    descriptors because the complete original file is already stored encrypted.
+    Metadata errors never make an otherwise decodable audio import fail.
+    """
+
+    try:
+        audio = MutagenFile(file_path, easy=False)
+    except Exception:
+        return ()
+    if audio is None:
+        return ()
+
+    entries = []
+    tags = getattr(audio, "tags", None)
+    if tags is not None and hasattr(tags, "items"):
+        try:
+            tag_items = sorted(tags.items(), key=lambda item: str(item[0]).casefold())
+        except Exception:
+            tag_items = []
+        for raw_key, raw_value in tag_items:
+            values = _metadata_text_values(raw_value)
+            if values:
+                entries.append(
+                    {
+                        "key": str(raw_key),
+                        "label": _metadata_label(raw_key, raw_value),
+                        "values": values,
+                        "source": "tag",
+                    }
+                )
+        for attribute, label in (("version", "Tag version"), ("size", "Tag size")):
+            detail = getattr(tags, attribute, None)
+            values = _metadata_text_values(detail)
+            if values:
+                entries.append(
+                    {
+                        "key": f"tag.{attribute}",
+                        "label": label,
+                        "values": values,
+                        "source": "technical",
+                    }
+                )
+        for index, unknown in enumerate(
+            getattr(tags, "unknown_frames", ()) or (), start=1
+        ):
+            entries.append(
+                {
+                    "key": f"UNKNOWN:{index}",
+                    "label": f"Unknown tag frame {index}",
+                    "values": [_binary_metadata_descriptor(unknown)],
+                    "source": "tag",
+                }
+            )
+
+    info = getattr(audio, "info", None)
+    if info is not None:
+        for name in sorted(item for item in dir(info) if not item.startswith("_")):
+            if name in {"length", "pprint"}:
+                continue
+            try:
+                raw_value = getattr(info, name)
+            except Exception:
+                continue
+            if callable(raw_value):
+                continue
+            values = _technical_metadata_values(name, raw_value)
+            if not values:
+                continue
+            label = _AUDIO_INFO_LABELS.get(
+                name, name.replace("_", " ").capitalize()
+            )
+            entries.append(
+                {
+                    "key": f"info.{name}",
+                    "label": label,
+                    "values": values,
+                    "source": "technical",
+                }
+            )
+
+    for index, picture in enumerate(getattr(audio, "pictures", ()) or (), start=1):
+        parts = []
+        for attribute, label in (
+            ("mime", "MIME"),
+            ("type", "Type"),
+            ("desc", "Description"),
+            ("width", "Width"),
+            ("height", "Height"),
+            ("depth", "Depth"),
+        ):
+            detail = getattr(picture, attribute, None)
+            if detail not in (None, ""):
+                parts.append(f"{label}: {detail}")
+        picture_data = getattr(picture, "data", b"") or b""
+        parts.append(f"Data: {len(picture_data):,} bytes")
+        entries.append(
+            {
+                "key": f"PICTURE:{index}",
+                "label": "Cover art" if index == 1 else f"Cover art {index}",
+                "values": [" · ".join(parts)],
+                "source": "tag",
+            }
+        )
+    return tuple(entries)
+
+
+def _audio_buffer_frame_energy(buffer):
+    """Return per-frame mean-square energy without retaining decoded PCM."""
 
     audio_format = buffer.format()
     channel_count = int(audio_format.channelCount() or 0)
@@ -228,14 +553,14 @@ def _audio_buffer_peaks(buffer):
     item_size = np.dtype(dtype).itemsize
     byte_count = int(buffer.byteCount() or 0)
     if byte_count <= 0:
-        return 0, []
+        return 0, np.empty(0, dtype=np.float32), 0
     try:
         samples = np.frombuffer(buffer.constData(), dtype=dtype, count=byte_count // item_size)
     except (TypeError, ValueError, BufferError) as exc:
         raise AudioAnalysisError("Unable to read decoded audio samples") from exc
     frame_count = min(int(buffer.frameCount() or 0), samples.size // channel_count)
     if frame_count <= 0:
-        return 0, []
+        return 0, np.empty(0, dtype=np.float32), 0
     samples = samples[: frame_count * channel_count].reshape(frame_count, channel_count)
     if sample_format_name == "UInt8":
         values = (samples.astype(np.float32) - 128.0) / 128.0
@@ -245,31 +570,52 @@ def _audio_buffer_peaks(buffer):
         values = samples.astype(np.float32) / 2147483648.0
     else:
         values = samples.astype(np.float32)
-    frame_peaks = np.max(np.abs(values), axis=1)
-    # Retain one scalar per decoder buffer.  This discards PCM immediately;
-    # ``_StreamingAudioPeakAggregator`` below folds those scalars into a
-    # bounded hierarchy instead of retaining one tuple per decoder buffer.
-    return frame_count, float(np.max(frame_peaks))
+    frame_energy = np.mean(np.square(values, dtype=np.float32), axis=1)
+    return frame_count, frame_energy, int(audio_format.sampleRate() or 0)
+
+
+def _audio_buffer_peaks(buffer):
+    """Compatibility helper returning one RMS value for a QAudioBuffer."""
+
+    frame_count, frame_energy, _sample_rate = _audio_buffer_frame_energy(buffer)
+    if frame_count <= 0:
+        return 0, 0.0
+    return frame_count, float(np.sqrt(np.mean(frame_energy)))
+
+
+def _audio_buffer_envelope(buffer):
+    """Return short RMS windows so transients do not flatten a whole buffer."""
+
+    frame_count, frame_energy, sample_rate = _audio_buffer_frame_energy(buffer)
+    if frame_count <= 0:
+        return 0, ()
+    # About 12 ms retains useful rhythmic variation while the streaming
+    # accumulator below keeps memory bounded for arbitrarily long tracks.
+    window_frames = max(128, int(round((sample_rate or 44_100) * 0.012)))
+    summaries = []
+    for start in range(0, frame_count, window_frames):
+        end = min(frame_count, start + window_frames)
+        rms = float(np.sqrt(np.mean(frame_energy[start:end])))
+        summaries.append((start, end - start, rms))
+    return frame_count, tuple(summaries)
 
 
 _AUDIO_ANALYSIS_MAX_BINS = AUDIO_WAVEFORM_PEAK_COUNT * 2
 
 
 class _StreamingAudioPeakAggregator:
-    """Bounded max-pool for decoder-buffer peak summaries.
+    """Bounded RMS envelope for short decoded-audio summaries.
 
     The final 96-bin mapping depends on the total frame count, which is not
     guaranteed to be known while ``QAudioDecoder`` is emitting buffers.  A
     list of all ``(start, length, peak)`` tuples therefore grows linearly with
     the input duration.  This accumulator keeps a contiguous, frame-aligned
     hierarchy of at most 192 bins.  When the next summary would exceed that
-    bound, adjacent bins are max-pooled and their frame width is doubled.
+    bound, adjacent energy/count pairs are merged and their width is doubled.
 
-    Max-pooling is monotonic: every input peak remains represented in the
-    covered interval, while PCM and per-buffer state are released immediately.
-    At the end, the retained intervals are projected onto the 96 output bins.
-    The extra level halves the amount of temporal smearing compared with
-    pooling directly into the final 96 bins.
+    Energy averaging prevents one transient from forcing an entire visual bin
+    to full height. PCM and per-buffer state are released immediately, and the
+    retained intervals are projected onto the final 96 bins at the end.
     """
 
     __slots__ = ("_bins", "_bin_width", "_max_bins", "_end_frame")
@@ -299,10 +645,16 @@ class _StreamingAudioPeakAggregator:
         if len(self._bins) <= 1:
             self._bins = list(self._bins)
         else:
-            self._bins = [
-                max(self._bins[index : index + 2])
-                for index in range(0, len(self._bins), 2)
-            ]
+            pooled = []
+            for index in range(0, len(self._bins), 2):
+                pair = self._bins[index : index + 2]
+                pooled.append(
+                    (
+                        sum(bin_energy for bin_energy, _count in pair),
+                        sum(count for _bin_energy, count in pair),
+                    )
+                )
+            self._bins = pooled
         self._bin_width *= 2
 
     def _ensure_capacity(self, end_frame):
@@ -335,28 +687,41 @@ class _StreamingAudioPeakAggregator:
         last_bin = (end - 1) // self._bin_width
         required_count = last_bin + 1
         if required_count > len(self._bins):
-            self._bins.extend([0.0] * (required_count - len(self._bins)))
+            self._bins.extend([(0.0, 0)] * (required_count - len(self._bins)))
         for index in range(first_bin, last_bin + 1):
-            self._bins[index] = max(self._bins[index], value)
+            bin_start = index * self._bin_width
+            bin_end = bin_start + self._bin_width
+            overlap = max(0, min(end, bin_end) - max(start, bin_start))
+            if overlap <= 0:
+                continue
+            energy, covered_frames = self._bins[index]
+            self._bins[index] = (
+                energy + value * value * overlap,
+                covered_frames + overlap,
+            )
         self._end_frame = max(self._end_frame, end)
 
     def finalize(self, total_frames=None):
-        """Project the retained intervals into 96 normalized max-pool bins."""
+        """Project retained energy into 96 RMS amplitude bins."""
 
         try:
             total = int(self._end_frame if total_frames is None else total_frames)
         except (TypeError, ValueError, OverflowError):
             total = self._end_frame
-        peaks = [0.0] * AUDIO_WAVEFORM_PEAK_COUNT
+        target_energy = [0.0] * AUDIO_WAVEFORM_PEAK_COUNT
+        target_frames = [0.0] * AUDIO_WAVEFORM_PEAK_COUNT
         if total <= 0:
-            return peaks
-        for index, peak in enumerate(self._bins):
-            if peak <= 0.0:
+            return target_energy
+        for index, (energy, covered_frames) in enumerate(self._bins):
+            if energy <= 0.0 or covered_frames <= 0:
                 continue
             start_frame = index * self._bin_width
             if start_frame >= total:
                 break
-            end_frame = min(total, start_frame + self._bin_width)
+            end_frame = min(total, self._end_frame, start_frame + self._bin_width)
+            if end_frame <= start_frame:
+                continue
+            energy_per_frame = energy / covered_frames
             first_bin = min(
                 AUDIO_WAVEFORM_PEAK_COUNT - 1,
                 int(start_frame * AUDIO_WAVEFORM_PEAK_COUNT / total),
@@ -369,8 +734,21 @@ class _StreamingAudioPeakAggregator:
                 ),
             )
             for target in range(first_bin, last_bin + 1):
-                peaks[target] = max(peaks[target], float(peak))
-        return peaks
+                target_start = target * total / AUDIO_WAVEFORM_PEAK_COUNT
+                target_end = (target + 1) * total / AUDIO_WAVEFORM_PEAK_COUNT
+                overlap = max(
+                    0.0,
+                    min(float(end_frame), target_end)
+                    - max(float(start_frame), target_start),
+                )
+                if overlap <= 0:
+                    continue
+                target_energy[target] += energy_per_frame * overlap
+                target_frames[target] += overlap
+        return [
+            min(1.0, math.sqrt(energy / frames)) if frames > 0 else 0.0
+            for energy, frames in zip(target_energy, target_frames)
+        ]
 
 
 def _combine_audio_peak_summaries(summaries, total_frames):
@@ -456,10 +834,15 @@ def analyze_audio_file(
                 last_activity = time.monotonic()
                 audio_format = buffer.format()
                 sample_rate = sample_rate or int(audio_format.sampleRate() or 0)
-                frame_count, peak = _audio_buffer_peaks(buffer)
+                frame_count, summaries = _audio_buffer_envelope(buffer)
                 if frame_count <= 0:
                     continue
-                peak_aggregator.add(total_frames, frame_count, peak)
+                for offset, summary_frames, rms in summaries:
+                    peak_aggregator.add(
+                        total_frames + offset,
+                        summary_frames,
+                        rms,
+                    )
                 total_frames += frame_count
                 if progress_callback:
                     duration_value = int(decoder.duration() or 0)
@@ -531,6 +914,7 @@ def analyze_audio_file(
     return MediaMetadata(
         duration=duration,
         waveform=encode_audio_waveform(peaks, duration),
+        embedded_metadata=read_audio_embedded_metadata(path),
     )
 
 

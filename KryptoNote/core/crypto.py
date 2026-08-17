@@ -17,6 +17,7 @@ class CryptoManager:
             "thumbnail",
             "full_data",
             "original_filename",
+            "media_metadata",
         }
     )
     KDF_NAME = "argon2id"

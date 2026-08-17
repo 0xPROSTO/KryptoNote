@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 STAGED_STORAGE_STATE = "importing"
 READY_STORAGE_STATE = "ready"
 RECOVERY_METADATA_KEY = "db_maintenance_state"
@@ -623,6 +623,7 @@ class DatabaseConnection:
                                 media_height INTEGER DEFAULT 0,
                                 media_duration REAL DEFAULT 0,
                                  original_filename BLOB,
+                                 media_metadata BLOB,
                                  storage_state TEXT NOT NULL DEFAULT 'ready',
                                  frame_locked INTEGER NOT NULL DEFAULT 0,
                                 frame_color TEXT NOT NULL DEFAULT '',
@@ -742,6 +743,8 @@ class DatabaseConnection:
             self.cursor.execute("ALTER TABLE items ADD COLUMN media_duration REAL DEFAULT 0")
         if "original_filename" not in columns:
             self.cursor.execute("ALTER TABLE items ADD COLUMN original_filename BLOB")
+        if "media_metadata" not in columns:
+            self.cursor.execute("ALTER TABLE items ADD COLUMN media_metadata BLOB")
         if "storage_state" not in columns:
             self.cursor.execute(
                 "ALTER TABLE items ADD COLUMN storage_state "

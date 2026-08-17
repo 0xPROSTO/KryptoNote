@@ -694,6 +694,9 @@ FocusScope {
                 waveform: surface.viewerController.audioWaveform
                 enabled: !surface.viewerController.loading
                          && surface.viewerController.errorText.length === 0
+                playing: surface.playbackForCurrentNode
+                         && surface.viewerController.playing
+                playbackDuration: surface.viewerController.duration
                 progress: surface.viewerController.playbackNodeId
                           === surface.viewerController.nodeId
                           && surface.viewerController.duration > 0

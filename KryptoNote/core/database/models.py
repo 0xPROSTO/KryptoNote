@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 
@@ -23,6 +23,7 @@ class NodeItemDTO:
     media_height: int = 0
     media_duration: float = 0.0
     original_filename: str = ""
+    media_metadata: list[dict] = field(default_factory=list)
     frame_locked: bool = False
     frame_color: str = ""
     frame_opacity: float = 0.21

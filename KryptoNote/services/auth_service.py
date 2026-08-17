@@ -545,6 +545,7 @@ class AuthService:
             "thumbnail",
             "full_data",
             "original_filename",
+            "media_metadata",
         ):
             if column not in item_columns:
                 continue
@@ -716,6 +717,7 @@ class AuthService:
                 "thumbnail",
                 "full_data",
                 "original_filename",
+                "media_metadata",
             )
             for item_id in AuthService._iter_migration_ids(
                 db_conn.conn, "items"
@@ -723,7 +725,7 @@ class AuthService:
                 AuthService._raise_if_cancelled(cancel_check)
                 row = db_conn.conn.execute(
                     "SELECT title, text_content, thumbnail, full_data, "
-                    "original_filename FROM items WHERE id=?",
+                    "original_filename, media_metadata FROM items WHERE id=?",
                     (item_id,),
                 ).fetchone()
                 if row is None:
@@ -741,7 +743,7 @@ class AuthService:
                 ]
                 db_conn.conn.execute(
                     "UPDATE items SET title=?, text_content=?, thumbnail=?, "
-                    "full_data=?, original_filename=? WHERE id=?",
+                    "full_data=?, original_filename=?, media_metadata=? WHERE id=?",
                     (*values, item_id),
                 )
                 current += 1

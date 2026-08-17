@@ -23,6 +23,10 @@ class AutoFitService:
         self.media_min_h = 60
         self.media_max_h = 800
 
+        self.audio_min_w = 360
+        self.audio_max_w = 480
+        self.audio_min_h = 108
+
     def fit_text(self, node):
         title = node.get("title", "")
         content = node.get("content", "")
@@ -103,6 +107,8 @@ class AutoFitService:
         return float(round(best_w)), float(round(best_h))
 
     def fit_media(self, node, thumbnail):
+        if node.get("type") == "audio":
+            return self.fit_audio(node)
         thumb_image = self._coerce_image(thumbnail)
         if thumb_image is None or thumb_image.isNull():
             return 220.0, 220.0
@@ -128,6 +134,31 @@ class AutoFitService:
         available_w = node_w - 20
         node_h = int(available_w * aspect) + title_h + footer_h + 10
         node_h = max(self.media_min_h, min(self.media_max_h, node_h))
+        return float(round(node_w)), float(round(node_h))
+
+    def fit_audio(self, node):
+        title = node.get("title", "") or ""
+        title_font = QFont(Theme.Typography.FONT_DISPLAY, 12, QFont.Weight.Bold)
+        title_metrics = QFontMetricsF(title_font)
+        node_w = max(
+            self.audio_min_w,
+            min(self.audio_max_w, title_metrics.horizontalAdvance(title) + 28),
+        )
+
+        node_h = float(self.audio_min_h)
+        content = node.get("content", "") or ""
+        if content.strip():
+            text_size = max(1, int(node.get("text_size", 10) or 10))
+            body_font = QFont(Theme.Typography.current_text_family(), text_size)
+            description_height = self._document_height(
+                content,
+                body_font,
+                max(1.0, node_w - 20),
+                markdown=True,
+            )
+            node_h += min(58.0, max(18.0, description_height)) + 6.0
+        if node.get("tags"):
+            node_h += 24.0
         return float(round(node_w)), float(round(node_h))
 
     def _document_height(self, text, font, inner_width, markdown=False):
