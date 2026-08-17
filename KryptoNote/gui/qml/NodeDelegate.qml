@@ -21,9 +21,6 @@ Item {
     z: delegateRoot.visuallySelected ? 10 : 1
     visible: matchesLayer
              && (isInViewport || delegateRoot.model.nodeIsDeleting)
-    containmentMask: delegateRoot.model.nodeType === "frame"
-                     ? framePointerMask
-                     : null
 
     property bool _isResizing: false
     property bool _resizeHovered: nodeLoader.itemResizeHovered
@@ -36,25 +33,15 @@ Item {
                                 ? delegateRoot.model.nodeType === "frame"
                                 : delegateRoot.model.nodeType !== "frame"
     property real _viewportMargin: 320 / Math.max(delegateRoot.canvasRoot.contentScale, 0.12)
-    property real _visibleLeft: (-delegateRoot.canvasRoot._contentLayerX / delegateRoot.canvasRoot.contentScale) - _viewportMargin
-    property real _visibleTop: (-delegateRoot.canvasRoot._contentLayerY / delegateRoot.canvasRoot.contentScale) - _viewportMargin
-    property real _visibleRight: ((delegateRoot.canvasRoot.width - delegateRoot.canvasRoot._contentLayerX) / delegateRoot.canvasRoot.contentScale) + _viewportMargin
-    property real _visibleBottom: ((delegateRoot.canvasRoot.height - delegateRoot.canvasRoot._contentLayerY) / delegateRoot.canvasRoot.contentScale) + _viewportMargin
+    property var _visibleRect: delegateRoot.canvasRoot.visibleCanvasRect(_viewportMargin)
+    property real _visibleLeft: _visibleRect.x
+    property real _visibleTop: _visibleRect.y
+    property real _visibleRight: _visibleRect.x + _visibleRect.width
+    property real _visibleBottom: _visibleRect.y + _visibleRect.height
     property bool isInViewport: (x + width >= _visibleLeft
                                  && x <= _visibleRight
                                  && y + height >= _visibleTop
                                  && y <= _visibleBottom)
-
-    QtObject {
-        id: framePointerMask
-
-        function contains(point) {
-            return point.x >= 0
-                    && point.x <= delegateRoot.width
-                    && point.y >= -15
-                    && point.y <= delegateRoot.height
-        }
-    }
 
     Loader {
         id: nodeLoader

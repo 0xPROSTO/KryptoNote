@@ -3,6 +3,10 @@ import QtQuick
 Item {
     id: viewport
     property Item contentLayer
+    // Qt documents pixelDelta as the native high-resolution path, but warns
+    // that X11 pixel deltas are driver-specific.  The Python runtime sets
+    // this only for xcb; Wayland retains pixel-first behavior.
+    property bool preferAngleDelta: false
     property real contentScale: 1.0
     property real minScale: 0.1
     property real maxScale: 5.0
@@ -39,6 +43,7 @@ Item {
     property real _zoomFrom: 1.0
     property real _zoomTo: 1.0
     property real _zoomElapsed: 0.0
+    property bool _zoomAnchorValid: false
     readonly property real zoomDuration: 0.12
 
     property real _panFromX: 0.0
@@ -50,6 +55,41 @@ Item {
 
     signal zoomChanged(real scale)
     signal viewportCenterShifted(real deltaX, real deltaY)
+    signal cameraChanged()
+
+    // The camera contract is deliberately kept in one place.  All canvas
+    // coordinates are logical scene units, while callers pass viewport pixel
+    // (QML logical) coordinates.  Keeping these helpers here prevents small
+    // differences in scale/offset arithmetic between hit testing, delegates,
+    // drag-and-drop, and the viewport proxy.
+    readonly property real safeScale: Math.max(contentScale, 0.0001)
+    readonly property real cameraOffsetX: contentLayer ? contentLayer.x : 0.0
+    readonly property real cameraOffsetY: contentLayer ? contentLayer.y : 0.0
+
+    function screenToCanvas(screenX, screenY) {
+        return Qt.point(
+            (Number(screenX) - cameraOffsetX) / safeScale,
+            (Number(screenY) - cameraOffsetY) / safeScale
+        )
+    }
+
+    function canvasToScreen(canvasX, canvasY) {
+        return Qt.point(
+            cameraOffsetX + Number(canvasX) * safeScale,
+            cameraOffsetY + Number(canvasY) * safeScale
+        )
+    }
+
+    function visibleCanvasRect(margin) {
+        var extra = Number(margin)
+        if (!isFinite(extra)) extra = 0.0
+        return Qt.rect(
+            -cameraOffsetX / safeScale - extra,
+            -cameraOffsetY / safeScale - extra,
+            width / safeScale + extra * 2.0,
+            height / safeScale + extra * 2.0
+        )
+    }
 
     function initialize() {
         if (!contentLayer) return
@@ -101,6 +141,7 @@ Item {
         _inertiaRunning = false
         _keyboardPanRunning = false
         _zoomRunning = false
+        _zoomAnchorValid = false
         _panRunning = false
         keyboardPanLeft = false
         keyboardPanRight = false
@@ -112,12 +153,15 @@ Item {
         keyboardVelocityY = 0
     }
 
-    function panBy(dx, dy) {
+    function panBy(dx, dy, updateVelocity) {
         if (!contentLayer) return
+        if (updateVelocity === undefined) updateVelocity = true
         contentLayer.x += dx
         contentLayer.y += dy
-        velocityX = velocityX * 0.4 + dx * 1.85
-        velocityY = velocityY * 0.4 + dy * 1.85
+        if (updateVelocity) {
+            velocityX = velocityX * 0.4 + dx * 1.85
+            velocityY = velocityY * 0.4 + dy * 1.85
+        }
     }
 
     function startInertiaIfNeeded() {
@@ -127,17 +171,23 @@ Item {
     }
 
     function zoomAt(mouseX, mouseY, zoomIn) {
+        zoomByFactor(mouseX, mouseY, zoomIn ? zoomFactor : (1.0 / zoomFactor))
+    }
+
+    function zoomByFactor(mouseX, mouseY, factor) {
         if (!contentLayer) return
-        var factor = zoomIn ? zoomFactor : (1.0 / zoomFactor)
+        factor = Number(factor)
+        if (!isFinite(factor) || factor <= 0.0) return
         var newScale = Math.max(minScale, Math.min(maxScale, contentScale * factor))
-        _zoomAnchorX = (mouseX - contentLayer.x) / contentScale
-        _zoomAnchorY = (mouseY - contentLayer.y) / contentScale
+        _zoomAnchorX = (Number(mouseX) - contentLayer.x) / safeScale
+        _zoomAnchorY = (Number(mouseY) - contentLayer.y) / safeScale
         _zoomMouseX = mouseX
         _zoomMouseY = mouseY
         _zoomFrom = contentScale
         _zoomTo = newScale
         _zoomElapsed = 0.0
-        _zoomRunning = Math.abs(_zoomTo - _zoomFrom) > 0.0001
+        _zoomAnchorValid = Math.abs(_zoomTo - _zoomFrom) > 0.0001
+        _zoomRunning = _zoomAnchorValid
     }
 
     function smoothCenterOn(targetX, targetY) {
@@ -302,6 +352,7 @@ Item {
         if (progress >= 1.0) {
             contentScale = _zoomTo
             _zoomRunning = false
+            _zoomAnchorValid = false
         }
     }
 
@@ -322,12 +373,79 @@ Item {
         }
     }
 
+    function _wheelComponent(event, propertyName) {
+        if (!event || event[propertyName] === undefined || event[propertyName] === null) {
+            return 0.0
+        }
+        var value = Number(event[propertyName].y)
+        return isFinite(value) ? value : 0.0
+    }
+
+    function _wheelHorizontalComponent(event, propertyName) {
+        if (!event || event[propertyName] === undefined || event[propertyName] === null) {
+            return 0.0
+        }
+        var value = Number(event[propertyName].x)
+        return isFinite(value) ? value : 0.0
+    }
+
+    function _wheelDelta(event) {
+        var pixelX = _wheelHorizontalComponent(event, "pixelDelta")
+        var pixelY = _wheelComponent(event, "pixelDelta")
+        var hasPixels = Math.abs(pixelX) > 0.001 || Math.abs(pixelY) > 0.001
+        if (hasPixels && !viewport.preferAngleDelta) {
+            return Qt.point(pixelX, pixelY)
+        }
+        var angleX = _wheelHorizontalComponent(event, "angleDelta")
+        var angleY = _wheelComponent(event, "angleDelta")
+        if (Math.abs(angleX) <= 0.001 && Math.abs(angleY) <= 0.001 && hasPixels) {
+            return Qt.point(pixelX, pixelY)
+        }
+        // One wheel step is conventionally 120 eighths of a degree.  Keep a
+        // useful screen-space fallback for traditional mouse wheels.
+        return Qt.point(angleX / 120.0 * 48.0, angleY / 120.0 * 48.0)
+    }
+
+    function handleWheel(event, zoom) {
+        var mouseX = event && event.x !== undefined ? event.x : viewport.width / 2
+        var mouseY = event && event.y !== undefined ? event.y : viewport.height / 2
+        var delta = _wheelDelta(event)
+        if (zoom) {
+            var magnitude = Math.abs(delta.y) > 0.001
+                    ? delta.y / 240.0
+                    : delta.x / 240.0
+            if (Math.abs(magnitude) <= 0.0001) return false
+            viewport.zoomByFactor(
+                mouseX,
+                mouseY,
+                Math.exp(magnitude * Math.log(viewport.zoomFactor))
+            )
+            return true
+        }
+        if (Math.abs(delta.x) > 0.001 || Math.abs(delta.y) > 0.001) {
+            // Wheel/touchpad momentum is delivered by Qt.  Do not feed it
+            // into the canvas drag inertia accumulator a second time.
+            viewport.panBy(delta.x, delta.y, false)
+            return true
+        }
+        return false
+    }
+
     WheelHandler {
+        id: zoomWheel
         acceptedModifiers: Qt.ControlModifier
+        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
         onWheel: function(event) {
-            var mouseX = event.x !== undefined ? event.x : viewport.width / 2
-            var mouseY = event.y !== undefined ? event.y : viewport.height / 2
-            viewport.zoomAt(mouseX, mouseY, event.angleDelta.y > 0)
+            event.accepted = viewport.handleWheel(event, true)
+        }
+    }
+
+    WheelHandler {
+        id: panWheel
+        acceptedModifiers: Qt.NoModifier
+        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+        onWheel: function(event) {
+            event.accepted = viewport.handleWheel(event, false)
         }
     }
 
@@ -336,8 +454,11 @@ Item {
 
     onContentScaleChanged: {
         if (!contentLayer) return
-        contentLayer.x = _zoomMouseX - _zoomAnchorX * contentScale
-        contentLayer.y = _zoomMouseY - _zoomAnchorY * contentScale
+        if (_zoomRunning || _zoomAnchorValid) {
+            contentLayer.x = _zoomMouseX - _zoomAnchorX * contentScale
+            contentLayer.y = _zoomMouseY - _zoomAnchorY * contentScale
+        }
+        cameraChanged()
         zoomChanged(contentScale)
     }
 

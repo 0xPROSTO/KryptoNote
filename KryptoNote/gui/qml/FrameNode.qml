@@ -115,8 +115,9 @@ Item {
                      && frame.dragController.canDrag
             onActiveChanged: {
                 if (active) frame.dragController.beginDrag()
-                else frame.dragController.finishDrag()
+                else frame.dragController.handleDragActiveChanged(titleDrag)
             }
+            onCanceled: frame.dragController.cancelDrag()
             onTranslationChanged: {
                 if (active) frame.dragController.updateDrag(titleDrag)
             }

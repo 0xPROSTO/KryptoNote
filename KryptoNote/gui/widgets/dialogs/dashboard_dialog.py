@@ -1,4 +1,4 @@
-from PySide6.QtCore import QPoint, QSize, Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import (
     QDialog,
     QFrame,
@@ -14,21 +14,20 @@ from PySide6.QtWidgets import (
 
 from KryptoNote.gui.theme import Theme
 from KryptoNote.gui.theme.icons import SvgIcons
+from KryptoNote.gui.widgets.frameless_window import FramelessWindowDragMixin
 
 
-class DashboardDialog(QDialog):
+class DashboardDialog(FramelessWindowDragMixin, QDialog):
     def __init__(self, stats, parent=None):
         super().__init__(parent)
         self.stats = stats or {}
 
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.configure_dialog_chrome("Knowledge Dashboard")
         self.setFixedSize(700, 650)
         self.setStyleSheet(self._style())
 
-        self._dragging = False
-        self._drag_start_pos = QPoint()
         self._init_ui()
+        self._setup_window_drag(drag_height=72, drag_handles=[self._drag_handle])
 
     def _init_ui(self):
         main_layout = QVBoxLayout(self)
@@ -42,6 +41,7 @@ class DashboardDialog(QDialog):
         layout.setSpacing(16)
 
         header = QWidget()
+        self._drag_handle = header
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(0, 0, 0, 0)
 
@@ -225,20 +225,6 @@ class DashboardDialog(QDialog):
         value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         layout.addWidget(value)
         return row
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._dragging = True
-            self._drag_start_pos = event.position().toPoint()
-            event.accept()
-
-    def mouseMoveEvent(self, event):
-        if self._dragging and event.buttons() & Qt.MouseButton.LeftButton:
-            self.move(event.globalPosition().toPoint() - self._drag_start_pos)
-            event.accept()
-
-    def mouseReleaseEvent(self, event):
-        self._dragging = False
 
     @staticmethod
     def _style():

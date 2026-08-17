@@ -15,7 +15,8 @@ Item {
     property bool isEraserMode: false
     property bool isCtrlHeld: false
     property bool isShiftHeld: false
-    property bool isPanning: false
+    property string gestureState: "idle"
+    readonly property bool isPanning: gestureState === "canvasPan"
     property bool suppressingNextPress: false
     property bool suppressingMouseSequence: false
     signal contextMenuRequested(
@@ -37,6 +38,7 @@ Item {
         property point lastPos: Qt.point(0, 0)
         property point pressPos: Qt.point(0, 0)
         property bool dragging: false
+        property int activeButton: 0
 
         onPressed: function(mouse) {
             if (input.suppressingNextPress) {
@@ -50,9 +52,12 @@ Item {
             input.viewport.stopMotion()
             lastPos = Qt.point(mouse.x, mouse.y)
             pressPos = Qt.point(mouse.x, mouse.y)
+            activeButton = mouse.button
+            input.transitionGesture("idle")
 
             if (mouse.button === Qt.RightButton && input.isShiftHeld) {
                 input.isEraserMode = true
+                input.transitionGesture("eraser")
                 cursorShape = Qt.ForbiddenCursor
                 mouse.accepted = true
                 return
@@ -60,14 +65,13 @@ Item {
 
             if (mouse.button === Qt.LeftButton && input.isCtrlHeld) {
                 input.rubberBand.begin(mouse.x, mouse.y)
+                input.transitionGesture("rubberBand")
                 mouse.accepted = true
                 return
             }
 
             if (mouse.button === Qt.LeftButton || mouse.button === Qt.MiddleButton) {
-                input.isPanning = true
-                dragging = true
-                cursorShape = Qt.ClosedHandCursor
+                input.transitionGesture("canvasPan")
                 mouse.accepted = true
             }
         }
@@ -78,10 +82,10 @@ Item {
                 return
             }
 
-            var contentPos = mapToItem(input.contentLayer, mouse.x, mouse.y)
-            mouse.accepted = false
+            var contentPos = input.viewport.screenToCanvas(mouse.x, mouse.y)
 
             if (input.isEraserMode) {
+                mouse.accepted = true
                 var hitRadius = 10 / Math.max(input.contentScale, 0.12)
                 var connectionId = input.connectionModel.hit_test_connection(
                     contentPos.x,
@@ -95,13 +99,19 @@ Item {
             }
 
             if (input.rubberBand.visible) {
+                mouse.accepted = true
                 input.rubberBand.updateBand(mouse.x, mouse.y)
                 return
             }
 
-            if (dragging) {
+            if (input.gestureState === "canvasPan" && dragging) {
+                mouse.accepted = true
                 input.viewport.panBy(mouse.x - lastPos.x, mouse.y - lastPos.y)
                 lastPos = Qt.point(mouse.x, mouse.y)
+            } else if (input.gestureState === "idle") {
+                // Allow node/connection handlers above this fallback layer to
+                // own a pointer that is not part of a canvas gesture.
+                mouse.accepted = false
             }
         }
 
@@ -115,26 +125,28 @@ Item {
 
             if (input.isEraserMode) {
                 input.isEraserMode = false
+                input.transitionGesture("idle")
                 cursorShape = Qt.ArrowCursor
+                mouse.accepted = true
                 return
             }
 
             if (input.rubberBand.visible) {
-                input.rubberBand.finishSelection(input.contentLayer, input.contentScale)
+                input.rubberBand.finishSelection()
+                input.transitionGesture("idle")
+                mouse.accepted = true
                 return
             }
 
-            if (dragging) {
+            var wasPanning = input.gestureState === "canvasPan" && dragging
+            if (wasPanning) {
                 dragging = false
-                input.isPanning = false
-                cursorShape = Qt.ArrowCursor
                 input.viewport.startInertiaIfNeeded()
             }
 
             if (Math.abs(mouse.x - pressPos.x) < 3 && Math.abs(mouse.y - pressPos.y) < 3) {
                 if (mouse.button === Qt.RightButton) {
-                    var contentPos = canvasMouseArea.mapToItem(
-                        input.contentLayer,
+                    var contentPos = input.viewport.screenToCanvas(
                         mouse.x,
                         mouse.y
                     )
@@ -146,11 +158,32 @@ Item {
                         contentPos.y
                     )
                     mouse.accepted = true
-                } else if (mouse.button === Qt.LeftButton && !input.isShiftHeld) {
+                } else if (wasPanning
+                           && mouse.button === Qt.LeftButton
+                           && !input.isShiftHeld) {
                     input.nodeModel.clear_selection()
                     input.nodeModel.clear_hovered()
                 }
             }
+            input.transitionGesture("idle")
+            mouse.accepted = true
+        }
+
+        // PointerHandlers and native window focus changes can take the grab
+        // away without a release.  Reset the FSM here so a later node drag is
+        // never blocked by a stale canvas-pan state.
+        onCanceled: input.cancelPointerGesture()
+    }
+
+    function transitionGesture(nextState) {
+        gestureState = nextState
+        canvasMouseArea.dragging = nextState === "canvasPan"
+        if (nextState === "canvasPan") {
+            canvasMouseArea.cursorShape = Qt.ClosedHandCursor
+        } else if (nextState === "eraser") {
+            canvasMouseArea.cursorShape = Qt.ForbiddenCursor
+        } else {
+            canvasMouseArea.cursorShape = Qt.ArrowCursor
         }
     }
 
@@ -170,9 +203,9 @@ Item {
     function cancelPointerGesture() {
         suppressingNextPress = false
         suppressingMouseSequence = false
-        canvasMouseArea.dragging = false
-        isPanning = false
+        transitionGesture("idle")
         isEraserMode = false
+        canvasMouseArea.activeButton = 0
         if (rubberBand && rubberBand.visible) {
             rubberBand.visible = false
         }

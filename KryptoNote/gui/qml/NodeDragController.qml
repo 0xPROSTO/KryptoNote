@@ -27,6 +27,7 @@ Item {
         && !dragController.resizing
 
     function beginDrag() {
+        if (dragController.dragging) return
         dragController.nodeModel.clear_hovered()
         dragController.lastDx = 0
         dragController.lastDy = 0
@@ -80,15 +81,16 @@ Item {
 
     function updateDrag(handler) {
         if (!dragController.dragging) return
-        var scale = Math.max(dragController.canvasRoot.contentScale, 0.01)
-        dragController.lastDx = (
-            handler.centroid.scenePosition.x
-            - handler.centroid.scenePressPosition.x
-        ) / scale
-        dragController.lastDy = (
+        var current = dragController.canvasRoot.screenToCanvas(
+            handler.centroid.scenePosition.x,
             handler.centroid.scenePosition.y
-            - handler.centroid.scenePressPosition.y
-        ) / scale
+        )
+        var pressed = dragController.canvasRoot.screenToCanvas(
+            handler.centroid.scenePressPosition.x,
+            handler.centroid.scenePressPosition.y
+        )
+        dragController.lastDx = current.x - pressed.x
+        dragController.lastDy = current.y - pressed.y
 
         dragController.previewPending = true
     }
@@ -145,6 +147,45 @@ Item {
         }
     }
 
+    function cancelDrag() {
+        if (!dragController.dragging) return
+        dragController.previewPending = false
+        // Preview positions are intentionally reverted instead of persisted
+        // when Qt reports a canceled pointer grab (focus loss, Wayland seat
+        // transfer, or another PointerHandler taking ownership).
+        var revert = []
+        for (var i = 0; i < dragController.dragNodes.length; i++) {
+            var node = dragController.dragNodes[i]
+            revert.push({"id": node.id, "x": node.x, "y": node.y})
+        }
+        if (revert.length > 0) {
+            dragController.nodeModel.preview_positions(revert)
+        }
+        dragController.dragNodes = []
+        dragController.lastDx = 0
+        dragController.lastDy = 0
+        dragController.dragging = false
+        if (dragController.canvasRoot
+                && dragController.canvasRoot.activeNodeDragController
+                === dragController) {
+            dragController.canvasRoot.activeNodeDragController = null
+        }
+    }
+
+    function handleDragActiveChanged(handler) {
+        if (handler.active) {
+            dragController.beginDrag()
+            return
+        }
+        // Let a possible canceled() signal run first.  On a normal release
+        // the session is still active and gets committed exactly once.
+        Qt.callLater(function() {
+            if (dragController.dragging) {
+                dragController.finishDrag()
+            }
+        })
+    }
+
     Component.onDestruction: {
         if (dragController.canvasRoot
                 && dragController.canvasRoot.activeNodeDragController
@@ -161,10 +202,8 @@ Item {
         grabPermissions: PointerHandler.CanTakeOverFromAnything
         enabled: dragController.nodeType !== "frame"
                  && dragController.canDrag
-        onActiveChanged: {
-            if (active) dragController.beginDrag()
-            else dragController.finishDrag()
-        }
+        onActiveChanged: dragController.handleDragActiveChanged(nodeDrag)
+        onCanceled: dragController.cancelDrag()
         onTranslationChanged: {
             if (active) dragController.updateDrag(nodeDrag)
         }
@@ -185,10 +224,8 @@ Item {
             dragThreshold: 1
             grabPermissions: PointerHandler.CanTakeOverFromAnything
             enabled: dragController.canDrag
-            onActiveChanged: {
-                if (active) dragController.beginDrag()
-                else dragController.finishDrag()
-            }
+            onActiveChanged: dragController.handleDragActiveChanged(topDrag)
+            onCanceled: dragController.cancelDrag()
             onTranslationChanged: {
                 if (active) dragController.updateDrag(topDrag)
             }
@@ -210,10 +247,8 @@ Item {
             dragThreshold: 1
             grabPermissions: PointerHandler.CanTakeOverFromAnything
             enabled: dragController.canDrag
-            onActiveChanged: {
-                if (active) dragController.beginDrag()
-                else dragController.finishDrag()
-            }
+            onActiveChanged: dragController.handleDragActiveChanged(bottomDrag)
+            onCanceled: dragController.cancelDrag()
             onTranslationChanged: {
                 if (active) dragController.updateDrag(bottomDrag)
             }
@@ -235,10 +270,8 @@ Item {
             dragThreshold: 1
             grabPermissions: PointerHandler.CanTakeOverFromAnything
             enabled: dragController.canDrag
-            onActiveChanged: {
-                if (active) dragController.beginDrag()
-                else dragController.finishDrag()
-            }
+            onActiveChanged: dragController.handleDragActiveChanged(leftDrag)
+            onCanceled: dragController.cancelDrag()
             onTranslationChanged: {
                 if (active) dragController.updateDrag(leftDrag)
             }
@@ -263,10 +296,8 @@ Item {
             dragThreshold: 1
             grabPermissions: PointerHandler.CanTakeOverFromAnything
             enabled: dragController.canDrag
-            onActiveChanged: {
-                if (active) dragController.beginDrag()
-                else dragController.finishDrag()
-            }
+            onActiveChanged: dragController.handleDragActiveChanged(rightDrag)
+            onCanceled: dragController.cancelDrag()
             onTranslationChanged: {
                 if (active) dragController.updateDrag(rightDrag)
             }

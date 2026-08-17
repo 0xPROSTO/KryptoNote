@@ -8,17 +8,18 @@ layout(std140, binding = 0) uniform buf {
     float qt_Opacity;
     vec2 offset;
     float viewScale;
-    float devicePixelRatio;
     float gridSize;
     float gridMain;
+    vec2 viewportSize;
     vec4 gridColor;
     vec4 backgroundColor;
 };
 
 void main() {
-    // gl_FragCoord is in physical pixels; QML item geometry is logical pixels.
-    // Normalize before subtracting the content offset to avoid high-DPI parallax.
-    vec2 logicalCoord = gl_FragCoord.xy / max(devicePixelRatio, 1.0);
+    // ShaderEffect supplies item-local logical coordinates.  Unlike raw
+    // window-fragment coordinates, qt_TexCoord0 has the same orientation on OpenGL, Vulkan,
+    // software, and Metal backends, and does not require a global Screen DPR.
+    vec2 logicalCoord = qt_TexCoord0 * viewportSize;
     vec2 pos = (logicalCoord - offset) / viewScale;
 
     // Antialiased lines calculation

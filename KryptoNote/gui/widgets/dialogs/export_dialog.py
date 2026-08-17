@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, QSize, Qt, QTimer
+from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 
 from ...theme.icons import SvgIcons
 from ...theme.style_factory import StyleFactory
+from KryptoNote.gui.widgets.frameless_window import FramelessWindowDragMixin
 
 
 class _FormatChoice(QFrame):
@@ -79,7 +80,7 @@ class _FormatChoice(QFrame):
         self.update()
 
 
-class ExportDialog(QDialog):
+class ExportDialog(FramelessWindowDragMixin, QDialog):
     FORMATS = {
         "zip": {
             "extension_label": ".zip",
@@ -126,13 +127,9 @@ class ExportDialog(QDialog):
         self._html_estimates = dict(html_estimates or {})
         self._path_was_edited = False
         self._last_generated_path = ""
-        self._dragging = False
-        self._drag_start = QPoint()
-
         self.setObjectName("export_dialog")
         self.setWindowTitle("Export")
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.configure_dialog_chrome("Export")
         self.setMinimumWidth(720)
 
         self._build_ui()
@@ -141,6 +138,7 @@ class ExportDialog(QDialog):
         self._scope_buttons["all"].setChecked(True)
         self._sync_controls(force_path=True)
         self.resize(720, self.sizeHint().height())
+        self._setup_window_drag(drag_height=64, drag_handles=[self._drag_handle])
 
     @property
     def request(self):
@@ -170,6 +168,7 @@ class ExportDialog(QDialog):
         outer.addWidget(container)
 
         header = QWidget()
+        self._drag_handle = header
         header.setObjectName("export_header")
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(0, 0, 0, 0)
@@ -540,20 +539,3 @@ class ExportDialog(QDialog):
                 return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
             value /= 1024
         return "0 B"
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton and event.position().y() <= 64:
-            self._dragging = True
-            self._drag_start = event.position().toPoint()
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):
-        if self._dragging and event.buttons() & Qt.MouseButton.LeftButton:
-            self.move(event.globalPosition().toPoint() - self._drag_start)
-            event.accept()
-            return
-        super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event):
-        self._dragging = False
-        super().mouseReleaseEvent(event)

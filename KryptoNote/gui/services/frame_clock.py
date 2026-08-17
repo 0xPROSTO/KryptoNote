@@ -32,7 +32,11 @@ class HighRefreshFrameClock(QObject):
 
     def __init__(self, update_callback=None, parent=None):
         super().__init__(parent)
-        self._update_callback = update_callback
+        # Kept as a compatibility argument for older callers, but the
+        # QQuickWidget scene schedules its own paint after QML properties
+        # change.  Calling view.update() from every tick caused redundant
+        # offscreen paints and input latency on Linux.
+        self._update_callback = None
         self._active = False
         self._refresh_rate = 60.0
         self._interval_ms = self._interval_for_rate(self._refresh_rate)
@@ -112,5 +116,3 @@ class HighRefreshFrameClock(QObject):
         fallback = self._interval_ms / 1000.0
         frame_time = fallback if elapsed_ns <= 0 else elapsed_ns / 1_000_000_000.0
         self.tick.emit(min(frame_time, 0.05))
-        if self._update_callback is not None:
-            self._update_callback()

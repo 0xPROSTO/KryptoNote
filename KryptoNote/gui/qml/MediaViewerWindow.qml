@@ -5,14 +5,20 @@ import QtQuick
 FocusScope {
     id: windowRoot
 
-    required property var appTheme
-    required property var canvasController
-    required property var viewerController
+    // Reuse the same QObject contract as the embedded canvas. This avoids
+    // QVariant-map conversion for detached QQuickView windows on Linux.
+    // qmllint disable unqualified
+    property var canvasRuntime: canvasRuntimeContext
+    // qmllint enable unqualified
+    readonly property var appTheme: canvasRuntime ? canvasRuntime.appTheme : null
+    readonly property var canvasController: canvasRuntime
+            ? canvasRuntime.canvasController : null
+    readonly property var viewerController: canvasRuntime
+            ? canvasRuntime.viewerController : null
 
     signal applicationCloseRequested()
 
     focus: true
-
     function commitPendingMediaEdits() {
         return mediaSurface.commitPendingEdits()
     }

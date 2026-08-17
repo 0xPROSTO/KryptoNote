@@ -22,10 +22,11 @@ Item {
     property bool _isDeleting: false
     property bool _deleteFinalizes: true
     property real _viewportMargin: 360 / Math.max(connectionItem.canvasRoot.contentScale, 0.12)
-    property real _visibleLeft: (-connectionItem.canvasRoot._contentLayerX / connectionItem.canvasRoot.contentScale) - _viewportMargin
-    property real _visibleTop: (-connectionItem.canvasRoot._contentLayerY / connectionItem.canvasRoot.contentScale) - _viewportMargin
-    property real _visibleRight: ((connectionItem.canvasRoot.width - connectionItem.canvasRoot._contentLayerX) / connectionItem.canvasRoot.contentScale) + _viewportMargin
-    property real _visibleBottom: ((connectionItem.canvasRoot.height - connectionItem.canvasRoot._contentLayerY) / connectionItem.canvasRoot.contentScale) + _viewportMargin
+    property var _visibleRect: connectionItem.canvasRoot.visibleCanvasRect(_viewportMargin)
+    property real _visibleLeft: _visibleRect.x
+    property real _visibleTop: _visibleRect.y
+    property real _visibleRight: _visibleRect.x + _visibleRect.width
+    property real _visibleBottom: _visibleRect.y + _visibleRect.height
     property bool isInViewport: (maxX >= _visibleLeft
                                  && minX <= _visibleRight
                                  && maxY >= _visibleTop
@@ -69,6 +70,8 @@ Item {
         anchors.fill: parent
         vendorExtensionsEnabled: true
         antialiasing: true
+        // Use native hardware curve antialiasing without forcing global MSAA.
+        preferredRendererType: Shape.CurveRenderer
 
         ShapePath {
             id: shapePath

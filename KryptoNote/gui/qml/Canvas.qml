@@ -2,19 +2,30 @@ import QtQuick
 
 Rectangle {
     id: root
-    required property var appTheme
-    required property var nodeModel
-    required property var connectionModel
-    required property var nodeViewportModel
-    required property var connectionViewportModel
-    required property var canvasController
-    required property var viewerController
-    required property var frameClock
+    // The Python side exposes one stable CanvasRuntime object through the
+    // engine root context before this component is loaded.  Keeping the
+    // individual dependencies as bindings prevents PySide QVariant-map
+    // conversion from producing null QObject references on Linux.
+    // qmllint disable unqualified
+    property var canvasRuntime: canvasRuntimeContext
+    // qmllint enable unqualified
+    readonly property var appTheme: canvasRuntime ? canvasRuntime.appTheme : null
+    readonly property var nodeModel: canvasRuntime ? canvasRuntime.nodeModel : null
+    readonly property var connectionModel: canvasRuntime ? canvasRuntime.connectionModel : null
+    readonly property var nodeViewportModel: canvasRuntime ? canvasRuntime.nodeViewportModel : null
+    readonly property var connectionViewportModel: canvasRuntime ? canvasRuntime.connectionViewportModel : null
+    readonly property var canvasController: canvasRuntime ? canvasRuntime.canvasController : null
+    readonly property var viewerController: canvasRuntime ? canvasRuntime.viewerController : null
+    readonly property var frameClock: canvasRuntime ? canvasRuntime.frameClock : null
+    readonly property bool wheelPreferAngleDelta: canvasRuntime
+            ? canvasRuntime.preferAngleDelta : false
     color: root.appTheme ? root.appTheme.bgCanvas : "#1a1a2e"
     clip: true
     focus: true
 
     property alias contentScale: viewport.contentScale
+    readonly property real cameraOffsetX: viewport.cameraOffsetX
+    readonly property real cameraOffsetY: viewport.cameraOffsetY
     property real gridSize: 100.0
     property real gridMain: 500.0
     property bool snapToGrid: root.canvasController ? root.canvasController.snap_to_grid : false
@@ -24,6 +35,7 @@ Rectangle {
     property alias isCtrlHeld: inputLayer.isCtrlHeld
     property alias isShiftHeld: inputLayer.isShiftHeld
     property alias isPanning: inputLayer.isPanning
+    property alias gestureState: inputLayer.gestureState
     property bool isEditorResizing: textEditorPanel.resizing || mediaViewerPanel.resizing
     property alias isSearchResizing: searchPanel.resizing
     property bool isTextEditorOpen: textEditorPanel.open
@@ -88,10 +100,14 @@ Rectangle {
     Component.onCompleted: {
         viewport.initialize()
         root.updateViewportModels()
-        root.frameClock.setActive(root.frameClockNeeded)
+        if (root.frameClock) root.frameClock.setActive(root.frameClockNeeded)
     }
-    Component.onDestruction: root.frameClock.setActive(false)
-    onFrameClockNeededChanged: root.frameClock.setActive(root.frameClockNeeded)
+    Component.onDestruction: {
+        if (root.frameClock) root.frameClock.setActive(false)
+    }
+    onFrameClockNeededChanged: {
+        if (root.frameClock) root.frameClock.setActive(root.frameClockNeeded)
+    }
     onIsNodeTransformingChanged: {
         if (isNodeTransforming) {
             root._connectionHitPending = false
@@ -117,8 +133,9 @@ Rectangle {
     GridLayer {
         appTheme: root.appTheme
         anchors.fill: parent
-        contentLayer: contentLayer
-        contentScale: root.contentScale
+        offset: Qt.vector2d(viewport.cameraOffsetX, viewport.cameraOffsetY)
+        viewScale: viewport.contentScale
+        viewportSize: Qt.vector2d(root.width, root.height)
         gridSize: root.gridSize
         gridMain: root.gridMain
     }
@@ -149,6 +166,7 @@ Rectangle {
         }
 
         ConnectionLayer {
+            id: connectionLayer
             z: 1
             viewportModel: root.connectionViewportModel
             canvasRoot: root
@@ -190,6 +208,7 @@ Rectangle {
     RubberBandSelection {
         nodeModel: root.nodeModel
         appTheme: root.appTheme
+        viewport: viewport
         id: rubberBand
         z: 2
     }
@@ -198,6 +217,7 @@ Rectangle {
         id: viewport
         anchors.fill: parent
         contentLayer: contentLayer
+        preferAngleDelta: root.wheelPreferAngleDelta
         onZoomChanged: function(scale) {
             if (root.canvasController) {
                 root.canvasController.report_zoom(scale)
@@ -423,7 +443,11 @@ Rectangle {
         }
         onPointChanged: {
             if (!point) return
-            var contentPos = root.mapToItem(contentLayer, point.position.x, point.position.y)
+            if (!root.canvasController || !root.connectionModel) return
+            var contentPos = viewport.screenToCanvas(
+                point.position.x,
+                point.position.y
+            )
             if (!root.isNodeTransforming) {
                 root._pendingConnectionHit = Qt.point(contentPos.x, contentPos.y)
                 root._pendingConnectionRadius = 10 / Math.max(root.contentScale, 0.12)
@@ -478,6 +502,7 @@ Rectangle {
     Connections {
         target: viewport
         function onContentScaleChanged() { root.scheduleViewportUpdate() }
+        function onCameraChanged() { root.scheduleViewportUpdate() }
     }
 
     onActiveFocusChanged: {
@@ -500,14 +525,20 @@ Rectangle {
     }
 
     function updateViewportModels() {
-        var scale = Math.max(root.contentScale, 0.12)
-        var margin = 480 / scale
-        var left = (-contentLayer.x / scale) - margin
-        var top = (-contentLayer.y / scale) - margin
-        var right = ((root.width - contentLayer.x) / scale) + margin
-        var bottom = ((root.height - contentLayer.y) / scale) + margin
-        root.nodeViewportModel.updateViewport(left, top, right, bottom)
-        root.connectionViewportModel.updateViewport(left, top, right, bottom)
+        if (!root.nodeViewportModel || !root.connectionViewportModel) return
+        var visible = viewport.visibleCanvasRect(480 / Math.max(root.contentScale, 0.12))
+        root.nodeViewportModel.updateViewport(
+            visible.x,
+            visible.y,
+            visible.x + visible.width,
+            visible.y + visible.height
+        )
+        root.connectionViewportModel.updateViewport(
+            visible.x,
+            visible.y,
+            visible.x + visible.width,
+            visible.y + visible.height
+        )
     }
 
     function scheduleViewportUpdate() {
@@ -613,6 +644,18 @@ Rectangle {
 
     function cancelPointerGesture() {
         inputLayer.cancelPointerGesture()
+    }
+
+    function screenToCanvas(screenX, screenY) {
+        return viewport.screenToCanvas(screenX, screenY)
+    }
+
+    function canvasToScreen(canvasX, canvasY) {
+        return viewport.canvasToScreen(canvasX, canvasY)
+    }
+
+    function visibleCanvasRect(margin) {
+        return viewport.visibleCanvasRect(margin)
     }
 
     function openEditorForNode(nodeId) {
@@ -782,9 +825,12 @@ Rectangle {
 
         onDropped: function(drop) {
             if (drop.hasUrls) {
-                var canvasX = (drop.x - contentLayer.x) / viewport.contentScale
-                var canvasY = (drop.y - contentLayer.y) / viewport.contentScale
-                root.canvasController.handle_dropped_files(drop.urls, canvasX, canvasY)
+                var canvasPoint = viewport.screenToCanvas(drop.x, drop.y)
+                root.canvasController.handle_dropped_files(
+                    drop.urls,
+                    canvasPoint.x,
+                    canvasPoint.y
+                )
                 drop.accept()
             }
         }

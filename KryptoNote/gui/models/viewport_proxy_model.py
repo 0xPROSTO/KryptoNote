@@ -64,6 +64,7 @@ class _ViewportProxyModel(QSortFilterProxyModel):
         )
         self._buffered_request = QRectF(requested)
         self._viewport_ready = True
+        self._filter_update_timer.stop()
         self._invalidate_filter()
 
     def _on_source_data_changed(self, _top_left, _bottom_right, roles):

@@ -479,6 +479,7 @@ Popup {
             anchors.fill: parent
             visible: propertiesPopup.sourceRect.width > 0
                      && propertiesPopup.sourceRect.height > 0
+            preferredRendererType: Shape.CurveRenderer
 
             ShapePath {
                 strokeColor: propertiesPopup.appTheme.accentMain

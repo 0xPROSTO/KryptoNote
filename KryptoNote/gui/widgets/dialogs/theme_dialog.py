@@ -1,4 +1,4 @@
-from PySide6.QtCore import QPoint, QRectF, QSize, Qt, QSignalBlocker, QTimer
+from PySide6.QtCore import QRectF, QSize, Qt, QSignalBlocker, QTimer
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -40,6 +40,7 @@ from KryptoNote.gui.theme.typography import (
     resolve_font_family,
     system_font_family,
 )
+from KryptoNote.gui.widgets.frameless_window import FramelessWindowDragMixin
 
 
 class ConnectionStyleButton(QPushButton):
@@ -139,7 +140,7 @@ class ConnectionStyleButton(QPushButton):
         )
 
 
-class ThemeDialog(QDialog):
+class ThemeDialog(FramelessWindowDragMixin, QDialog):
     def __init__(self, parent=None, manager=None, project_store=None):
         super().__init__(parent)
         self._manager = manager or get_theme_manager()
@@ -173,14 +174,11 @@ class ThemeDialog(QDialog):
         }
         self._draft = self._drafts[self._scope]
         self._applied = False
-        self._dragging = False
-        self._drag_start = QPoint()
         self._pending_color = None
 
         self.setObjectName("theme_dialog")
         self.setWindowTitle("Theme & Appearance")
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.configure_dialog_chrome("Theme & Appearance")
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.resize(780, 680)
         self.setMinimumSize(680, 560)
@@ -195,6 +193,7 @@ class ThemeDialog(QDialog):
         self._manager.preview(self._draft)
         self._sync_controls()
         self._refresh_theme()
+        self._setup_window_drag(drag_height=72, drag_handles=[self._drag_handle])
 
     def _build_ui(self):
         outer = QVBoxLayout(self)
@@ -208,6 +207,7 @@ class ThemeDialog(QDialog):
         outer.addWidget(container)
 
         header = QWidget()
+        self._drag_handle = header
         header.setObjectName("theme_header")
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(0, 0, 0, 0)
@@ -860,21 +860,3 @@ class ThemeDialog(QDialog):
             self._manager.preview(self._original_active)
             self._manager.preview_font_family(self._original_font_family)
         super().closeEvent(event)
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton and event.position().y() <= 70:
-            self._dragging = True
-            self._drag_start = event.position().toPoint()
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):
-        if self._dragging and event.buttons() & Qt.MouseButton.LeftButton:
-            self.move(event.globalPosition().toPoint() - self._drag_start)
-            event.accept()
-            return
-        super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event):
-        self._dragging = False
-        super().mouseReleaseEvent(event)
-

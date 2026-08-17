@@ -1,4 +1,4 @@
-from PySide6.QtCore import QPoint, QSize, Qt, Signal
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -15,6 +15,7 @@ from KryptoNote.gui.theme import Theme
 from KryptoNote.gui.theme.icons import SvgIcons
 from KryptoNote.gui.theme.palette import Palette
 from KryptoNote.gui.theme.style_factory import StyleFactory
+from KryptoNote.gui.widgets.frameless_window import FramelessWindowDragMixin
 from KryptoNote.core.password_policy import (
     PROJECT_PASSWORD_MAX,
     WEAK_PASSWORD_LENGTH,
@@ -22,7 +23,7 @@ from KryptoNote.core.password_policy import (
 )
 
 
-class PasswordChangeDialog(QDialog):
+class PasswordChangeDialog(FramelessWindowDragMixin, QDialog):
     passwordChangeRequested = Signal(str, str, bool)
     cancelRequested = Signal()
 
@@ -31,18 +32,16 @@ class PasswordChangeDialog(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.configure_dialog_chrome("Change Password")
         self.setModal(True)
         self.setFixedSize(420, 430)
         self.setStyleSheet(self._qss())
 
-        self._dragging = False
-        self._drag_start_pos = QPoint()
         self._changing = False
         self._cancel_requested = False
 
         self._init_ui()
+        self._setup_window_drag(drag_height=56, drag_handles=[self._drag_handle])
 
     def _init_ui(self):
         main_layout = QVBoxLayout(self)
@@ -55,7 +54,9 @@ class PasswordChangeDialog(QDialog):
         layout.setContentsMargins(24, 0, 24, 22)
         layout.setSpacing(10)
 
-        header = QHBoxLayout()
+        header_widget = QWidget(self.container)
+        self._drag_handle = header_widget
+        header = QHBoxLayout(header_widget)
         header.setContentsMargins(0, 5, 0, 0)
         header.addStretch()
         self.btn_close = QPushButton()
@@ -68,7 +69,7 @@ class PasswordChangeDialog(QDialog):
         self.btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_close.clicked.connect(self.reject)
         header.addWidget(self.btn_close)
-        layout.addLayout(header)
+        layout.addWidget(header_widget)
 
         title = QLabel("Change Password")
         title.setObjectName("app_name")
@@ -222,20 +223,6 @@ class PasswordChangeDialog(QDialog):
             event.ignore()
             return
         super().closeEvent(event)
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._dragging = True
-            self._drag_start_pos = event.position().toPoint()
-            event.accept()
-
-    def mouseMoveEvent(self, event):
-        if self._dragging and event.buttons() & Qt.MouseButton.LeftButton:
-            self.move(event.globalPosition().toPoint() - self._drag_start_pos)
-            event.accept()
-
-    def mouseReleaseEvent(self, event):
-        self._dragging = False
 
     @staticmethod
     def _password_field(placeholder):

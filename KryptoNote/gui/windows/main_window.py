@@ -39,6 +39,7 @@ from PySide6.QtQuick import QQuickView
 from .native_window import NativeWindowMixin
 from ..controllers.canvas_controller_qml import QmlCanvasController
 from ..controllers.viewer_controller import ViewerController
+from ..services.canvas_runtime import CanvasRuntime
 from ..services.frame_clock import HighRefreshFrameClock
 from ..services.qml_network_policy import RestrictedQmlNetworkAccessManagerFactory
 from ..services.window_state_service import WindowStateService
@@ -264,9 +265,6 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self._detached_dispose_scheduled = False
         self._application_close_pending = False
 
-        from PySide6.QtGui import QSurfaceFormat
-        format = QSurfaceFormat()
-        format.setSamples(8)
         self.view = QQuickWidget()
         gui_root = os.path.dirname(os.path.dirname(__file__))
         self._qml_network_factory = RestrictedQmlNetworkAccessManagerFactory(
@@ -278,7 +276,6 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self.view.engine().setNetworkAccessManagerFactory(
             self._qml_network_factory
         )
-        self.view.setFormat(format)
         self.view.setResizeMode(QQuickWidget.SizeRootObjectToView)
         self.view.setClearColor(QColor(Theme.Palette.BG_CANVAS))
 
@@ -286,8 +283,10 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         if quick_window:
             quick_window.setPersistentGraphics(True)
             quick_window.setPersistentSceneGraph(True)
-
-        self.frame_clock = HighRefreshFrameClock(self.view.update, self)
+        # QQuickWidget schedules its own paints when QML properties change.
+        # The clock is retained only for imperative camera/inertia updates;
+        # it must not pump view.update() on every timer tick.
+        self.frame_clock = HighRefreshFrameClock(parent=self)
         self.frame_clock.set_screen(self.screen())
 
         self.thumb_provider = ThumbnailProvider(
@@ -299,17 +298,22 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         )
 
         self._theme_bridge = ThemeBridge(self, manager=self._theme_manager)
-
-        self.view.setInitialProperties({
-            "appTheme": self._theme_bridge,
-            "nodeModel": self.node_model,
-            "connectionModel": self.connection_model,
-            "nodeViewportModel": self.node_viewport_model,
-            "connectionViewportModel": self.connection_viewport_model,
-            "canvasController": self.canvas_controller,
-            "viewerController": self.viewer_controller,
-            "frameClock": self.frame_clock,
-        })
+        self.canvas_runtime = CanvasRuntime(
+            app_theme=self._theme_bridge,
+            node_model=self.node_model,
+            connection_model=self.connection_model,
+            node_viewport_model=self.node_viewport_model,
+            connection_viewport_model=self.connection_viewport_model,
+            canvas_controller=self.canvas_controller,
+            viewer_controller=self.viewer_controller,
+            frame_clock=self.frame_clock,
+            parent=self,
+        )
+        # QQmlContext does not own this QObject; self.canvas_runtime is parented
+        # to the window so its lifetime covers the QML engine and root object.
+        self.view.engine().rootContext().setContextProperty(
+            "canvasRuntimeContext", self.canvas_runtime
+        )
 
         self._qml_canvas_source = resolve_canvas_qml_source()
         if self._qml_canvas_source.scheme() == "qrc":
@@ -550,13 +554,6 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             )
             detached.setIcon(self.windowIcon())
             detached.setTitle(self._detached_media_title())
-            detached.setInitialProperties(
-                {
-                    "appTheme": self._theme_bridge,
-                    "canvasController": self.canvas_controller,
-                    "viewerController": self.viewer_controller,
-                }
-            )
             detached.setSource(resolve_media_viewer_qml_source())
             if detached.status() == QQuickView.Status.Error:
                 errors = "\n".join(error.toString() for error in detached.errors())
@@ -904,7 +901,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self._suppress_canvas_mouse_sequence = False
         self._invoke_qml_root("cancelPointerGesture")
 
-    def _should_suppress_canvas_mouse_event(self, event):
+    def _should_suppress_canvas_mouse_event(self, event, watched=None):
         if not hasattr(self, "view"):
             return False
         event_type = event.type()
@@ -916,15 +913,55 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         if event_type not in mouse_events:
             return False
 
-        try:
-            global_pos = event.globalPosition().toPoint()
-        except AttributeError:
+        local_pos = None
+        if isinstance(watched, QWidget):
             try:
-                global_pos = event.globalPos()
+                watched_pos = event.position().toPoint()
             except AttributeError:
+                try:
+                    watched_pos = event.pos()
+                except AttributeError:
+                    watched_pos = None
+            if watched_pos is not None:
+                # QWidget.mapTo() only accepts an ancestor as its target.
+                # QApplication's event filter also observes menus, dialogs,
+                # and widgets from other top-level windows, so only use local
+                # coordinates when both widgets share this window hierarchy.
+                try:
+                    view_window = self.view.window()
+                    if watched.window() is view_window:
+                        window_pos = (
+                            watched_pos
+                            if watched is view_window
+                            else watched.mapTo(view_window, watched_pos)
+                        )
+                        local_pos = (
+                            window_pos
+                            if self.view is view_window
+                            else self.view.mapFrom(view_window, window_pos)
+                        )
+                except (RuntimeError, TypeError):
+                    local_pos = None
+        if local_pos is None:
+            try:
+                global_pos = event.globalPosition().toPoint()
+            except AttributeError:
+                try:
+                    global_pos = event.globalPos()
+                except AttributeError:
+                    return False
+            if global_pos is None:
                 return False
-
-        local_pos = self.view.mapFromGlobal(global_pos)
+            # Wayland may report (0,0) for a global pointer position.  Do not
+            # swallow an unrelated application event when the view is not
+            # actually located at that coordinate.
+            if global_pos == QPoint(0, 0):
+                try:
+                    if self.view.mapToGlobal(QPoint(0, 0)) != QPoint(0, 0):
+                        return False
+                except (AttributeError, RuntimeError):
+                    return False
+            local_pos = self.view.mapFromGlobal(global_pos)
         if not self.view.rect().contains(local_pos):
             return False
 
@@ -1532,7 +1569,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             and event.type() == QEvent.Type.Close
         ):
             return self._on_detached_view_closing(event)
-        if self._should_suppress_canvas_mouse_event(event):
+        if self._should_suppress_canvas_mouse_event(event, watched):
             return True
         if event.type() == QEvent.Type.ShortcutOverride:
             if self._should_claim_shortcut(event):

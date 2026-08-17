@@ -1,4 +1,4 @@
-from PySide6.QtCore import QPoint, QSize, Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import (
     QDialog,
     QFrame,
@@ -12,21 +12,19 @@ from PySide6.QtWidgets import (
 
 from KryptoNote.gui.theme import Theme
 from KryptoNote.gui.theme.icons import SvgIcons
+from KryptoNote.gui.widgets.frameless_window import FramelessWindowDragMixin
 
 
-class KeybindsDialog(QDialog):
+class KeybindsDialog(FramelessWindowDragMixin, QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.configure_dialog_chrome("All Keybinds")
         self.setFixedSize(900, 660)
         self.setStyleSheet(self._style())
 
-        self._dragging = False
-        self._drag_start_pos = QPoint()
-
         self._init_ui()
+        self._setup_window_drag(drag_height=72, drag_handles=[self._drag_handle])
 
     def _init_ui(self):
         main_layout = QVBoxLayout(self)
@@ -40,6 +38,7 @@ class KeybindsDialog(QDialog):
         container_layout.setSpacing(12)
 
         header = QWidget()
+        self._drag_handle = header
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(0, 0, 0, 0)
 
@@ -127,20 +126,6 @@ class KeybindsDialog(QDialog):
             layout.addWidget(line)
 
         return frame
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._dragging = True
-            self._drag_start_pos = event.position().toPoint()
-            event.accept()
-
-    def mouseMoveEvent(self, event):
-        if self._dragging and event.buttons() & Qt.MouseButton.LeftButton:
-            self.move(event.globalPosition().toPoint() - self._drag_start_pos)
-            event.accept()
-
-    def mouseReleaseEvent(self, event):
-        self._dragging = False
 
     @staticmethod
     def _key(text):

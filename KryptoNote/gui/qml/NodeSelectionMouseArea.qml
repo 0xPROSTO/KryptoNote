@@ -14,24 +14,28 @@ MouseArea {
     acceptedButtons: Qt.LeftButton | Qt.RightButton
     hoverEnabled: true
     preventStealing: false
-    containmentMask: QtObject {
-        function contains(point) {
-            if (point.x < 0 || point.y < 0
-                    || point.x > selector.width
-                    || point.y > selector.height) {
-                return false
-            }
-            var exclusion = selector.bottomRightExclusion
-            return exclusion <= 0
-                    || point.x < selector.width - exclusion
-                    || point.y < selector.height - exclusion
+
+    // QQuickItem containment masks require a C++/Python QObject with an
+    // invokable contains() method.  A QML QtObject function is ignored by Qt,
+    // so keep the same hit rule local to the event handlers instead.
+    function containsLocalPoint(x, y) {
+        if (x < 0 || y < 0 || x > selector.width || y > selector.height) {
+            return false
         }
+        var exclusion = selector.bottomRightExclusion
+        return exclusion <= 0
+                || x < selector.width - exclusion
+                || y < selector.height - exclusion
     }
 
     onEntered: selector.nodeModel.set_hovered(nodeId, true)
     onExited: selector.nodeModel.set_hovered(nodeId, false)
 
     onPressed: function(mouse) {
+        if (!containsLocalPoint(mouse.x, mouse.y)) {
+            mouse.accepted = false
+            return
+        }
         _pressPos = Qt.point(mouse.x, mouse.y)
         if (mouse.button === Qt.LeftButton && selector.canvasRoot.isLinkMode) {
             selector.canvasController.handle_link_click(nodeId)
@@ -40,6 +44,10 @@ MouseArea {
     }
 
     onClicked: function(mouse) {
+        if (!containsLocalPoint(mouse.x, mouse.y)) {
+            mouse.accepted = false
+            return
+        }
         if (mouse.button === Qt.LeftButton && selector.canvasRoot.isLinkMode) {
             return
         }

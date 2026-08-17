@@ -1,4 +1,4 @@
-from PySide6.QtCore import QPoint, QSize, Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QDialog,
@@ -12,22 +12,20 @@ from PySide6.QtWidgets import (
 from KryptoNote.config import Config
 from KryptoNote.gui.theme import Theme
 from KryptoNote.gui.theme.icons import SvgIcons
+from KryptoNote.gui.widgets.frameless_window import FramelessWindowDragMixin
 
 
-class AboutDialog(QDialog):
+class AboutDialog(FramelessWindowDragMixin, QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.configure_dialog_chrome("About")
 
         self.setFixedSize(306, 504)
         self.setStyleSheet(Theme.Styles.get_about_dialog_qss())
 
-        self._dragging = False
-        self._drag_start_pos = QPoint()
-
         self.init_ui()
+        self._setup_window_drag(drag_height=56, drag_handles=[self._drag_handle])
 
     def init_ui(self):
         main_layout = QVBoxLayout(self)
@@ -41,6 +39,7 @@ class AboutDialog(QDialog):
         container_layout.setSpacing(0)
 
         header = QWidget()
+        self._drag_handle = header
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(5, 5, 5, 0)
         header_layout.addStretch()
@@ -106,18 +105,3 @@ class AboutDialog(QDialog):
 
         container_layout.addWidget(content, 1)
         main_layout.addWidget(self.container)
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._dragging = True
-            self._drag_start_pos = event.position().toPoint()
-            event.accept()
-
-    def mouseMoveEvent(self, event):
-        if self._dragging and event.buttons() & Qt.MouseButton.LeftButton:
-            diff = event.globalPosition().toPoint() - self._drag_start_pos
-            self.move(diff)
-            event.accept()
-
-    def mouseReleaseEvent(self, event):
-        self._dragging = False

@@ -4,6 +4,7 @@ Rectangle {
     id: rubberBand
     required property var nodeModel
     required property var appTheme
+    required property var viewport
     visible: false
     color: "transparent"
     border.color: rubberBand.appTheme ? rubberBand.appTheme.accentMain : "#e6158b"
@@ -35,11 +36,17 @@ Rectangle {
         height = Math.abs(mouseY - start.y)
     }
 
-    function finishSelection(contentLayer, contentScale) {
-        var rx1 = (x - contentLayer.x) / contentScale
-        var ry1 = (y - contentLayer.y) / contentScale
-        var rx2 = ((x + width) - contentLayer.x) / contentScale
-        var ry2 = ((y + height) - contentLayer.y) / contentScale
+    function finishSelection() {
+        if (!rubberBand.viewport) {
+            visible = false
+            return
+        }
+        var first = rubberBand.viewport.screenToCanvas(x, y)
+        var second = rubberBand.viewport.screenToCanvas(x + width, y + height)
+        var rx1 = first.x
+        var ry1 = first.y
+        var rx2 = second.x
+        var ry2 = second.y
         var selected = rubberBand.nodeModel.get_nodes_in_rect(rx1, ry1, rx2, ry2)
         rubberBand.nodeModel.add_selection(selected)
         visible = false
