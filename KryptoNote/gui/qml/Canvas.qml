@@ -34,6 +34,13 @@ Rectangle {
     property bool isTagPickerOpen: globalTagPicker.visible || mediaViewerPanel.tagPickerOpen
     property bool isSearchPanelOpen: searchPanel.open
     property bool isMediaViewerOpen: viewerController.active && !viewerController.detached
+    readonly property bool arrayListSuppressed:
+            textEditorPanel.open
+            || frameEditor.visible
+            || nodeProperties.visible
+            || (viewerController.active && !viewerController.detached)
+            || root._arrayListHandoffActive
+            || root._pendingMediaEditorNodeId > 0
     property bool isMediaViewerExpanded: mediaViewerPanel.expanded
     property bool isMediaRenameEditing: mediaViewerPanel.renameEditing
     readonly property bool hasUnsavedEditorChanges:
@@ -57,9 +64,6 @@ Rectangle {
             || isNodeTransforming
             || viewport.frameClockNeeded
 
-    signal textEditorOpenChanged(bool open)
-    signal mediaViewerOpenChanged(bool open)
-
     property alias _contentLayerX: contentLayer.x
     property alias _contentLayerY: contentLayer.y
     property real _editorReturnX: 0
@@ -73,8 +77,13 @@ Rectangle {
     property bool _searchCameraOffsetActive: false
     property string _pendingMediaEditorAction: ""
     property int _pendingMediaEditorNodeId: 0
+    // Keep the native ArrayList outside the canvas while one surface hands
+    // focus to another. QML can otherwise expose a one-frame gap between the
+    // closing and opening panels.
+    property bool _arrayListHandoffActive: false
 
     signal applicationCloseRequested()
+    signal arrayListSuppressionChanged(bool suppressed)
 
     Component.onCompleted: {
         viewport.initialize()
@@ -98,14 +107,12 @@ Rectangle {
         root.scheduleViewportUpdate()
     }
     onIsTextEditorOpenChanged: {
-        textEditorOpenChanged(isTextEditorOpen)
         if (!isTextEditorOpen && globalTagPicker.visible) {
             globalTagPicker.close()
         }
     }
-    onIsMediaViewerOpenChanged: {
-        mediaViewerOpenChanged(isMediaViewerOpen)
-    }
+    onArrayListSuppressedChanged:
+        root.arrayListSuppressionChanged(root.arrayListSuppressed)
 
     GridLayer {
         appTheme: root.appTheme
@@ -343,23 +350,28 @@ Rectangle {
         target: root.viewerController
 
         function onSessionOpened(nodeId) {
-            if (!root.viewerController.detached)
+            if (!root.viewerController.detached) {
                 root.beginMediaViewer(nodeId)
+                root.finishArrayListHandoff()
+            }
         }
 
         function onSessionClosed() {
             root.returnFromMediaViewer()
             var pendingAction = root._pendingMediaEditorAction
             var pendingNodeId = root._pendingMediaEditorNodeId
-            root._pendingMediaEditorAction = ""
-            root._pendingMediaEditorNodeId = 0
             if (pendingNodeId > 0) {
                 Qt.callLater(function() {
                     if (pendingAction === "text")
                         root.openEditorForNode(pendingNodeId)
                     else if (pendingAction === "frame")
                         root.openFrameEditorForNode(pendingNodeId)
+                    root._pendingMediaEditorAction = ""
+                    root._pendingMediaEditorNodeId = 0
                 })
+            } else {
+                root._pendingMediaEditorAction = ""
+                root._pendingMediaEditorNodeId = 0
             }
         }
 
@@ -384,6 +396,7 @@ Rectangle {
         function onDescriptionGuardCanceled(action) {
             root._pendingMediaEditorAction = ""
             root._pendingMediaEditorNodeId = 0
+            root.finishArrayListHandoff()
         }
     }
 
@@ -553,6 +566,16 @@ Rectangle {
         root._pendingMediaEditorNodeId = 0
     }
 
+    function beginArrayListHandoff() {
+        root._arrayListHandoffActive = true
+    }
+
+    function finishArrayListHandoff() {
+        Qt.callLater(function() {
+            root._arrayListHandoffActive = false
+        })
+    }
+
     function promptDescriptionGuard(action) {
         if (action === "application-close")
             root.clearPendingMediaEditorOpen()
@@ -596,12 +619,14 @@ Rectangle {
         if (root.viewerController.active && !root.viewerController.detached) {
             if (!mediaViewerPanel.commitPendingEdits()) {
                 if (root.viewerController.descriptionDirty) {
+                    root.beginArrayListHandoff()
                     root._pendingMediaEditorAction = "text"
                     root._pendingMediaEditorNodeId = Number(nodeId)
                     mediaViewerPanel.promptDescriptionGuard("close")
                 }
                 return
             }
+            root.beginArrayListHandoff()
             if (root._hasMediaReturn && !root._hasEditorReturn) {
                 root._editorReturnX = root._mediaReturnX
                 root._editorReturnY = root._mediaReturnY
@@ -617,24 +642,32 @@ Rectangle {
             _hasEditorReturn = true
         }
         textEditorPanel.openForNode(nodeId)
+        root.finishArrayListHandoff()
     }
 
     function openFrameEditorForNode(nodeId) {
         if (root.viewerController.active && !root.viewerController.detached) {
             if (!mediaViewerPanel.commitPendingEdits()) {
                 if (root.viewerController.descriptionDirty) {
+                    root.beginArrayListHandoff()
                     root._pendingMediaEditorAction = "frame"
                     root._pendingMediaEditorNodeId = Number(nodeId)
                     mediaViewerPanel.promptDescriptionGuard("close")
                 }
                 return
             }
+            root.beginArrayListHandoff()
             root.viewerController.close_viewer()
         }
         frameEditor.openForFrame(nodeId)
+        root.finishArrayListHandoff()
     }
 
     function closeEditorsForMedia() {
+        var closingSurface = textEditorPanel.open || frameEditor.visible
+                             || nodeProperties.visible
+        if (closingSurface)
+            root.beginArrayListHandoff()
         if (textEditorPanel.open) {
             if (root._hasEditorReturn && !root._hasMediaReturn) {
                 root._mediaReturnX = root._editorReturnX

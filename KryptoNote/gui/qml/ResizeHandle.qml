@@ -16,6 +16,8 @@ Item {
     property bool _isHovered: false
     property bool revealOnHover: true
     property real revealMargin: 8
+    property real minimumNodeWidth: 100
+    property real minimumNodeHeight: 50
     readonly property bool _isActive: resizeDrag.active
     property bool _previewPending: false
     property real _pendingWidth: 0
@@ -125,12 +127,26 @@ Item {
                 centroid.position.x,
                 centroid.position.y
             );
-            var newW = Math.max(100, _startWidth + currentContentPos.x - _startContentPos.x);
-            var newH = Math.max(50, _startHeight + currentContentPos.y - _startContentPos.y);
+            var newW = Math.max(
+                handle.minimumNodeWidth,
+                _startWidth + currentContentPos.x - _startContentPos.x
+            );
+            var newH = Math.max(
+                handle.minimumNodeHeight,
+                _startHeight + currentContentPos.y - _startContentPos.y
+            );
 
             if (handle.canvasRoot.snapToGrid) {
-                newW = Math.round(newW / handle.canvasRoot.gridSize) * handle.canvasRoot.gridSize;
-                newH = Math.round(newH / handle.canvasRoot.gridSize) * handle.canvasRoot.gridSize;
+                newW = Math.max(
+                    handle.minimumNodeWidth,
+                    Math.round(newW / handle.canvasRoot.gridSize)
+                        * handle.canvasRoot.gridSize
+                );
+                newH = Math.max(
+                    handle.minimumNodeHeight,
+                    Math.round(newH / handle.canvasRoot.gridSize)
+                        * handle.canvasRoot.gridSize
+                );
             }
 
             if (handle._pendingWidth !== newW

@@ -35,7 +35,7 @@ def _decode_image_preview(db_path, crypto, node_id):
 
 
 class ViewerController(QObject):
-    """Own the active image/video session shared by every QML surface."""
+    """Own the active media and playback sessions shared by every QML surface."""
 
     activeChanged = Signal()
     detachedChanged = Signal()
@@ -191,8 +191,16 @@ class ViewerController(QObject):
         notify=sessionChanged,
     )
     title = Property(str, lambda self: self._title, notify=titleChanged)
-    tags = Property(object, lambda self: list(self._tags), notify=tagsChanged)
-    metadata = Property(object, lambda self: dict(self._metadata), notify=sessionChanged)
+    tags = Property(
+        "QVariantList",
+        lambda self: list(self._tags),
+        notify=tagsChanged,
+    )
+    metadata = Property(
+        "QVariantMap",
+        lambda self: dict(self._metadata),
+        notify=sessionChanged,
+    )
     loading = Property(bool, lambda self: self._loading, notify=sessionChanged)
     errorText = Property(str, lambda self: self._error_text, notify=sessionChanged)
     imageRevision = Property(int, lambda self: self._image_revision, notify=sessionChanged)
@@ -205,7 +213,11 @@ class ViewerController(QObject):
         ),
         notify=sessionChanged,
     )
-    imageState = Property(object, lambda self: dict(self._image_state), notify=imageStateChanged)
+    imageState = Property(
+        "QVariantMap",
+        lambda self: dict(self._image_state),
+        notify=imageStateChanged,
+    )
     playing = Property(bool, lambda self: self._playing, notify=playbackChanged)
     position = Property(float, lambda self: float(self._position), notify=playbackChanged)
     duration = Property(float, lambda self: float(self._duration), notify=playbackChanged)
@@ -478,6 +490,10 @@ class ViewerController(QObject):
         if not keep_audio_playback:
             self._dispose_backend(clear_preview=True)
         else:
+            # Inline audio is intentionally independent from viewer visibility,
+            # but an image preview is not.  Drop decrypted preview pixels while
+            # preserving only the active audio stream.
+            self._image_revision = self._preview_provider.clear()
             self._video_output = None
         self._active = False
         self._node_id = 0
@@ -863,7 +879,11 @@ class ViewerController(QObject):
             QMediaPlayer.MediaStatus.BufferedMedia,
             QMediaPlayer.MediaStatus.EndOfMedia,
         }
-        if status in ready_statuses and self._active and self._loading:
+        if (
+            status in ready_statuses
+            and self._playback_belongs_to_viewer()
+            and self._loading
+        ):
             self._loading = False
             self.sessionChanged.emit()
 

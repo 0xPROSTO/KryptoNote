@@ -228,7 +228,9 @@ Item {
     }
 
     NodeDeleteAnimation {
-        z: 3
+        // Audio controls sit above the generic selection layer.  Keep the
+        // delete transition above every node surface as well.
+        z: 5
         canvasController: delegateRoot.canvasController
         anchors.fill: nodeLoader
         targetItem: delegateRoot

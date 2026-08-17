@@ -459,7 +459,14 @@ class MediaImportWorker(QObject):
 
             job_stats = [os.stat(path) for _kind, path in self._jobs]
             job_sizes = [int(stat.st_size) for stat in job_stats]
-            total_bytes = sum(max(size, 1) for size in job_sizes)
+            # Audio performs two substantial passes: decode/analyse, then
+            # encrypted chunk writing.  Count both so progress never reaches
+            # the end during analysis and then jumps backwards for import.
+            job_work_sizes = [
+                max(size, 1) * (2 if media_type == "audio" else 1)
+                for (media_type, _path), size in zip(self._jobs, job_sizes)
+            ]
+            total_bytes = sum(job_work_sizes)
             reserve = max(
                 self.MIN_FREE_RESERVE,
                 sum(job_sizes) // 10,
@@ -488,6 +495,7 @@ class MediaImportWorker(QObject):
                 if self._is_cancelled():
                     raise OperationCancelledError("Media import cancelled")
                 file_size = job_sizes[file_index]
+                import_progress_base = completed_bytes
                 self._emit_progress(
                     "preparing",
                     completed_bytes,
@@ -540,6 +548,7 @@ class MediaImportWorker(QObject):
                             "Media import cancelled"
                         ) from exc
                     thumbnail = metadata.waveform
+                    import_progress_base += max(file_size, 1)
                 else:
                     thumbnail = create_thumbnail(path)
                     if self._is_cancelled():
@@ -568,7 +577,7 @@ class MediaImportWorker(QObject):
                     width,
                     height,
                     file_size,
-                    completed_bytes,
+                    import_progress_base,
                     total_bytes,
                     source_stat=job_stats[file_index],
                 )
@@ -587,7 +596,7 @@ class MediaImportWorker(QObject):
                     media_duration=metadata.duration,
                 )
                 imported_count += 1
-                completed_bytes += max(file_size, 1)
+                completed_bytes += job_work_sizes[file_index]
                 self.item_imported.emit(item)
 
             self.finished.emit(imported_count)

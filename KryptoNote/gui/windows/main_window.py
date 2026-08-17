@@ -258,12 +258,6 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self.viewer_controller.sessionClosed.connect(
             self._schedule_detached_view_disposal
         )
-        self.viewer_controller.activeChanged.connect(
-            self._sync_arraylist_visibility
-        )
-        self.viewer_controller.detachedChanged.connect(
-            self._sync_arraylist_visibility
-        )
         self.viewer_controller.titleChanged.connect(self._sync_detached_view_title)
         self._detached_view = None
         self._closing_detached_view = False
@@ -338,8 +332,9 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             error_text = f"QML root object is missing: {self._qml_canvas_source.toString()}"
             QMessageBox.critical(self, "QML Error", error_text)
             raise RuntimeError(error_text)
-        root.textEditorOpenChanged.connect(self._on_text_editor_open_changed)
-        root.mediaViewerOpenChanged.connect(self._on_media_viewer_open_changed)
+        root.arrayListSuppressionChanged.connect(
+            self._on_arraylist_suppression_changed
+        )
         root.applicationCloseRequested.connect(
             self._on_application_close_requested
         )
@@ -357,6 +352,16 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self._arraylist_anim = QPropertyAnimation(self.overlay, b"pos", self)
         self._arraylist_anim.setDuration(220)
         self._arraylist_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        # A surface handoff can briefly report "not suppressed" while QML
+        # closes one panel and opens the next. Delay only the reveal, never
+        # the hide, so the overlay cannot flash above an editor.
+        self._arraylist_reveal_timer = QTimer(self)
+        self._arraylist_reveal_timer.setSingleShot(True)
+        self._arraylist_reveal_timer.setInterval(260)
+        self._arraylist_reveal_timer.timeout.connect(
+            self._reveal_arraylist_if_idle
+        )
+        self._sync_arraylist_visibility(animate=False)
         self._connect_overlay_stats_updates()
         central = QWidget()
         vbox = QVBoxLayout(central)
@@ -431,21 +436,32 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         QTimer.singleShot(0, self.close)
 
     @Slot(bool)
-    def _on_text_editor_open_changed(self, opened):
-        self._sync_arraylist_visibility()
+    def _on_arraylist_suppression_changed(self, suppressed):
+        if suppressed:
+            self._arraylist_reveal_timer.stop()
+            self._set_arraylist_hidden(True, animate=False)
+            return
+        self._arraylist_reveal_timer.start()
 
-    @Slot(bool)
-    def _on_media_viewer_open_changed(self, opened):
-        self._sync_arraylist_visibility()
-
-    def _sync_arraylist_visibility(self):
+    @Slot()
+    def _reveal_arraylist_if_idle(self):
         root = self.view.rootObject() if hasattr(self, "view") else None
-        viewer = getattr(self, "viewer_controller", None)
-        hidden = bool(
-            (root and root.property("isTextEditorOpen"))
-            or (viewer and viewer.active and not viewer.detached)
-        )
-        self._set_arraylist_hidden(hidden, animate=True)
+        if root and bool(root.property("arrayListSuppressed")):
+            self._set_arraylist_hidden(True, animate=False)
+            return
+        self._set_arraylist_hidden(False, animate=True)
+
+    def _sync_arraylist_visibility(self, animate=False):
+        root = self.view.rootObject() if hasattr(self, "view") else None
+        hidden = bool(root and root.property("arrayListSuppressed"))
+        if hidden:
+            self._arraylist_reveal_timer.stop()
+            self._set_arraylist_hidden(True, animate=False)
+        elif animate:
+            self._arraylist_reveal_timer.start()
+        else:
+            self._arraylist_reveal_timer.stop()
+            self._set_arraylist_hidden(False, animate=False)
 
     def _commit_pending_media_edits(self):
         if not self.viewer_controller.active:
@@ -1541,7 +1557,18 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         if key == Qt.Key.Key_Escape and self._is_qml_tag_picker_open():
             return True
         if self._is_qml_media_viewer_open():
-            return key == Qt.Key.Key_Escape
+            modifiers = event.modifiers()
+            is_s_key = (
+                key == Qt.Key.Key_S
+                or event.nativeVirtualKey() == 0x53
+            )
+            return (
+                key == Qt.Key.Key_Escape
+                or bool(
+                    is_s_key
+                    and modifiers & Qt.KeyboardModifier.ControlModifier
+                )
+            )
         editor_open = (
             self._is_qml_text_editor_open()
             or self._is_qml_frame_editor_open()
@@ -1593,6 +1620,16 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
                     self._invoke_qml_root("cancelMediaRename")
                 else:
                     self._invoke_qml_root("collapseOrCloseMediaViewer")
+                return True
+            is_s_key = (
+                key == Qt.Key.Key_S
+                or event.nativeVirtualKey() == 0x53
+            )
+            if is_s_key and modifiers & Qt.KeyboardModifier.ControlModifier:
+                if self.viewer_controller.save_description():
+                    self._handle_status_update("Description saved", "secure")
+                    self._protect_status(2000)
+                self._defer_modifier_sync()
                 return True
             return False
 
@@ -1977,10 +2014,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self._sync_window_margins()
 
         if hasattr(self, "overlay") and hasattr(self, "statusBar"):
-            self._set_arraylist_hidden(
-                getattr(self, "_arraylist_hidden", False),
-                animate=False,
-            )
+            self._sync_arraylist_visibility(animate=False)
             self.overlay.raise_()
         self._layout_progress_bar()
 

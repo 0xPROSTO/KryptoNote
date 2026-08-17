@@ -21,12 +21,13 @@ Item {
             var ctx = getContext("2d")
             ctx.clearRect(0, 0, width, height)
             var values = waveformRoot.waveform || []
-            var count = values.length > 0 ? values.length : 96
+            var count = values.length
+            if (count <= 0) return
             var gap = Math.max(1, width / count * 0.28)
             var barWidth = Math.max(1, width / count - gap)
             var center = height / 2
             for (var index = 0; index < count; index++) {
-                var value = values.length > 0 ? Number(values[index]) : 0.12
+                var value = Number(values[index])
                 value = Math.max(0.04, Math.min(1.0, isNaN(value) ? 0.04 : value))
                 var barHeight = Math.max(3, value * (height - 8))
                 var x = index * width / count

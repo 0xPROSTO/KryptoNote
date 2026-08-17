@@ -51,8 +51,16 @@ Rectangle {
         x: 10
         y: titleText.y + titleText.contentHeight + 5
         width: parent.width - 20
-        height: Math.max(24, parent.height - y - footerLabel.contentHeight
-                         - descriptionText.height - 12)
+        height: descriptionText.visible
+                ? Math.max(
+                    0,
+                    parent.height - y - footerLabel.contentHeight
+                    - descriptionText.height - 12
+                )
+                : Math.max(
+                    24,
+                    parent.height - y - footerLabel.contentHeight - 10
+                )
         color: mediaNode.appTheme.bgPanel
         radius: 3
         border.color: mediaNode.appTheme.borderDefault

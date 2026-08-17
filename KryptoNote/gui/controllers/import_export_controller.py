@@ -103,7 +103,10 @@ class ImportExportController(QObject):
     def _add_imported_media_node(self, item):
         self._node_model.add_node(
             item.node_id, item.node_type, item.x, item.y, item.width, item.height,
-            title=item.title, thumbnail_bytes=item.thumbnail_bytes,
+            title=item.title,
+            thumbnail_bytes=(
+                item.thumbnail_bytes if item.node_type == "audio" else None
+            ),
             total_size=item.total_size,
             media_width=item.media_width, media_height=item.media_height,
             media_duration=item.media_duration,
@@ -355,9 +358,14 @@ class ImportExportController(QObject):
             "audio": ".ogg",
         }.get(mtype, ".bin")
         default_ext = original_suffix or fallback_ext
+        default_name = title or "file"
+        if Path(default_name).suffix.lower() != default_ext:
+            default_name += default_ext
 
         path, _ = QFileDialog.getSaveFileName(
-            None, "Save File", os.path.join(self._last_dir("export"), title + default_ext)
+            None,
+            "Save File",
+            os.path.join(self._last_dir("export"), default_name),
         )
         if not path:
             return

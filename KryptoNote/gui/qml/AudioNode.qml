@@ -22,6 +22,7 @@ Rectangle {
     property real nodeWidth: 260
     property real nodeHeight: 190
     property var tags: []
+    readonly property bool hasDescription: nodeContent.trim().length > 0
 
     anchors.fill: parent
     radius: 4
@@ -150,7 +151,13 @@ Rectangle {
         x: 10
         y: playerCard.y + playerCard.height + 5
         width: parent.width - 20
-        height: visible ? Math.min(58, Math.max(18, implicitHeight)) : 0
+        height: audioNode.hasDescription
+                ? Math.max(0, Math.min(
+                    58,
+                    Math.max(18, implicitHeight),
+                    (tagSummary.visible ? tagSummary.y : footerLabel.y) - y - 3
+                ))
+                : 0
         text: audioNode.nodeContent
         color: audioNode.appTheme.textMain
         font.family: audioNode.appTheme.textFontFamily
@@ -158,10 +165,11 @@ Rectangle {
         textFormat: Text.MarkdownText
         wrapMode: Text.WordWrap
         clip: true
-        visible: audioNode.nodeContent.trim().length > 0
+        visible: audioNode.hasDescription && height > 0
     }
 
     TagDots {
+        id: tagSummary
         appTheme: audioNode.appTheme
         anchors.left: parent.left
         anchors.right: parent.right
@@ -201,6 +209,8 @@ Rectangle {
         appTheme: audioNode.appTheme
         nodeId: audioNode.nodeId
         delegateItem: audioNode.delegateItem
+        minimumNodeWidth: 160
+        minimumNodeHeight: 150
         anchors.right: parent.right
         anchors.bottom: parent.bottom
     }

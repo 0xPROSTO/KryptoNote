@@ -302,7 +302,10 @@ class GraphExportService:
                         if has_thumbnail and node_type != "audio" else ""
                     )
                     mime_type = mimetypes.guess_type(media_path)[0]
-                    if not mime_type and node_type == "audio":
+                    if node_type == "audio":
+                        # ``mimetypes`` classifies shared containers such as
+                        # .mp4/.mkv as video.  The node type is authoritative:
+                        # these files were decoded and imported as audio.
                         mime_type = {
                             ".mp3": "audio/mpeg",
                             ".wav": "audio/wav",
@@ -312,7 +315,12 @@ class GraphExportService:
                             ".opus": "audio/opus",
                             ".m4a": "audio/mp4",
                             ".aac": "audio/aac",
-                        }.get(extension)
+                            ".mka": "audio/x-matroska",
+                            ".mkv": "audio/x-matroska",
+                            ".wma": "audio/x-ms-wma",
+                            ".mp4": "audio/mp4",
+                            ".mov": "audio/quicktime",
+                        }.get(extension, mime_type)
                     mime_type = mime_type or "application/octet-stream"
                     waveform = None
                     if node_type == "audio" and encrypted_thumbnail:
@@ -678,7 +686,11 @@ class GraphExportService:
             ):
                 return ".mp3"
         if data.startswith(b"\x1aE\xdf\xa3"):
-            return ".webm" if node_type == "video" else None
+            if node_type == "video":
+                return ".webm"
+            if node_type == "audio":
+                return ".mka"
+            return None
         if len(data) >= 12 and data[4:8] == b"ftyp":
             if node_type == "audio" and data[8:12] in (b"M4A ", b"M4B ", b"M4P "):
                 return ".m4a"

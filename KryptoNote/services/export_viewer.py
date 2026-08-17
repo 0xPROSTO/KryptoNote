@@ -190,6 +190,8 @@ dialog::backdrop { background:rgba(0,0,0,.72); }
 .detail-content audio { width:min(680px,100%); }
 .waveform { display:flex; align-items:center; gap:2px; width:min(680px,100%); height:64px; margin:14px auto 0; padding:8px; border:1px solid var(--border); border-radius:4px; background:var(--bg-input); }
 .waveform-bar { flex:1 1 0; min-width:1px; border-radius:2px; background:var(--accent); opacity:.8; }
+.media-frame .waveform { width:calc(100% - 12px); height:48px; margin:6px; padding:5px; gap:1px; border:0; }
+.media-frame .waveform-bar { min-width:0; }
 .detail-copy { max-width:72ch; line-height:1.55; overflow-wrap:anywhere; }
 .detail-copy h1,.detail-copy h2,.detail-copy h3 { color:var(--accent); line-height:1.25; text-wrap:balance; }
 .detail-copy pre { overflow:auto; padding:12px; border:1px solid var(--border); background:var(--bg-input); }
@@ -559,8 +561,9 @@ dialog::backdrop { background:rgba(0,0,0,.72); }
         const tags=renderTagStrip(node.tags,"text",node.size.width); if (tags) inner.appendChild(tags);
       } else {
         const frame=document.createElement("div"); frame.className="media-frame"; const source=fileSource(node,true);
-        if (source) { const image=document.createElement("img"); image.loading="lazy"; image.alt=""; image.src=source; frame.appendChild(image); }
-        else { const label=document.createElement("span"); label.textContent="No thumbnail"; frame.appendChild(label); }
+        if (node.type==="audio" && node.media && (node.media.waveform||[]).length) { const waveform=document.createElement("div"); waveform.className="waveform"; waveform.setAttribute("role","img"); waveform.setAttribute("aria-label","Audio waveform"); node.media.waveform.forEach(value => { const bar=document.createElement("span"); bar.className="waveform-bar"; bar.style.height=`${Math.max(4,Math.min(100,Number(value||0)*100))}%`; waveform.appendChild(bar); }); frame.appendChild(waveform); }
+        else if (source) { const image=document.createElement("img"); image.loading="lazy"; image.alt=""; image.src=source; frame.appendChild(image); }
+        else { const label=document.createElement("span"); label.textContent=node.type==="audio" ? "Waveform unavailable" : "No thumbnail"; frame.appendChild(label); }
         const tags=renderTagStrip(node.tags,"media",node.size.width); if (tags) frame.appendChild(tags);
         inner.appendChild(frame); const footer=document.createElement("div"); footer.className="node-footer";
         const parts=[formatTimestamp(node.created_at)];
