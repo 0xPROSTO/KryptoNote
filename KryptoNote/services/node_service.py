@@ -254,6 +254,9 @@ class NodeService:
 
         self.repo.update_media_description(item_id, new_text, text_size)
 
+    def update_media_metadata(self, item_id, metadata):
+        self.repo.update_media_metadata(item_id, metadata)
+
     def get_chunk(self, item_id, chunk_index):
         return self.repo.get_chunk(item_id, chunk_index)
 

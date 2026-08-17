@@ -232,6 +232,18 @@ Popup {
         propertiesPopup.open()
     }
 
+    function refreshForNode(targetNodeId) {
+        if (!propertiesPopup.visible || propertiesPopup.nodeId !== targetNodeId) {
+            return
+        }
+        var lines = propertiesPopup.nodeModel.get_node_metadata_lines(
+            targetNodeId
+        )
+        if (lines && lines.length > 0) {
+            propertiesPopup.metadataLines = lines
+        }
+    }
+
     function closeOverlay() {
         propertiesPopup.close()
     }
@@ -570,7 +582,7 @@ Popup {
                 anchors.fill: parent
                 acceptedButtons: Qt.LeftButton
                 hoverEnabled: true
-                preventStealing: true
+                preventStealing: false
                 cursorShape: pressed ? Qt.ClosedHandCursor : Qt.SizeAllCursor
                 drag.target: propertiesCard
                 drag.axis: Drag.XAndYAxis
@@ -586,7 +598,7 @@ Popup {
                     overlayBody.height - propertiesCard.height
                         - propertiesCard.edgeMargin
                 )
-                drag.filterChildren: true
+                drag.filterChildren: false
                 drag.smoothed: false
                 onPressed: propertiesCard.userPositioned = true
 
@@ -680,10 +692,37 @@ Popup {
                         boundsBehavior: Flickable.StopAtBounds
 
                         ScrollBar.vertical: ScrollBar {
+                            id: metadataScrollBar
+                            objectName: "nodePropertiesScrollBar"
+                            width: 10
+                            padding: 2
+                            hoverEnabled: true
+                            minimumSize: 0.08
                             policy: metadataFlickable.contentHeight
                                     > metadataFlickable.height
                                     ? ScrollBar.AsNeeded
                                     : ScrollBar.AlwaysOff
+
+                            contentItem: Rectangle {
+                                implicitWidth: 4
+                                radius: 2
+                                color: metadataScrollBar.pressed
+                                       ? propertiesPopup.appTheme.accentMain
+                                       : metadataScrollBar.hovered
+                                         ? propertiesPopup.appTheme.borderHover
+                                         : propertiesPopup.appTheme.bgControlHover
+                                opacity: metadataScrollBar.active
+                                         || metadataScrollBar.hovered
+                                         ? 1.0 : 0.82
+
+                                Behavior on opacity {
+                                    NumberAnimation { duration: 100 }
+                                }
+                            }
+
+                            background: Rectangle {
+                                color: propertiesPopup.appTheme.bgNode
+                            }
                         }
 
                         Column {
@@ -698,11 +737,27 @@ Popup {
                                     id: metadataRow
                                     required property int index
                                     required property var modelData
+                                    property bool expanded: false
+                                    readonly property bool expandable:
+                                            fullValueMeasure.lineCount > 3
+                                    readonly property real valueBlockHeight:
+                                            propertyValue.implicitHeight
+                                            + (expandable
+                                               ? expandButton.height + 2 : 0)
                                     width: metadataRows.width
+                                    clip: true
                                     implicitHeight: Math.max(
                                         propertyName.implicitHeight,
-                                        propertyValue.implicitHeight
+                                        valueBlockHeight
                                     ) + 12
+
+                                    Behavior on implicitHeight {
+                                        NumberAnimation {
+                                            duration: 160
+                                            easing.type: Easing.OutCubic
+                                        }
+                                    }
+
                                     Text {
                                         id: propertyName
                                         x: 0
@@ -727,6 +782,138 @@ Popup {
                                         font.pointSize: 9
                                         wrapMode: Text.Wrap
                                         textFormat: Text.PlainText
+                                        maximumLineCount: metadataRow.expanded
+                                                          ? 10000 : 3
+                                        elide: metadataRow.expanded
+                                               ? Text.ElideNone
+                                               : Text.ElideRight
+                                    }
+
+                                    Text {
+                                        id: fullValueMeasure
+                                        visible: false
+                                        x: propertyValue.x
+                                        width: propertyValue.width
+                                        text: metadataRow.modelData.value
+                                        font: propertyValue.font
+                                        wrapMode: Text.Wrap
+                                        textFormat: Text.PlainText
+                                    }
+
+                                    FocusScope {
+                                        id: expandButton
+                                        objectName: "metadataValueDisclosure"
+                                        visible: metadataRow.expandable
+                                        x: propertyValue.x
+                                        y: propertyValue.y
+                                           + propertyValue.implicitHeight + 2
+                                        width: disclosureContent.implicitWidth + 12
+                                        height: 24
+                                        activeFocusOnTab: true
+                                        readonly property bool hovered:
+                                                disclosureHover.hovered
+                                        readonly property bool pressed:
+                                                disclosureTap.pressed
+                                        readonly property color disclosureColor:
+                                                activeFocus || hovered
+                                                ? propertiesPopup.appTheme.accentMain
+                                                : propertiesPopup.appTheme.textDim
+
+                                        function toggle() {
+                                            metadataRow.expanded = !metadataRow.expanded
+                                        }
+
+                                        Keys.onPressed: function(event) {
+                                            if (event.key === Qt.Key_Return
+                                                    || event.key === Qt.Key_Enter
+                                                    || event.key === Qt.Key_Space) {
+                                                expandButton.toggle()
+                                                event.accepted = true
+                                            }
+                                        }
+
+                                        HoverHandler {
+                                            id: disclosureHover
+                                            cursorShape: Qt.PointingHandCursor
+                                        }
+
+                                        TapHandler {
+                                            id: disclosureTap
+                                            acceptedButtons: Qt.LeftButton
+                                            onTapped: expandButton.toggle()
+                                        }
+
+                                        Rectangle {
+                                            anchors.fill: parent
+                                            radius: 4
+                                            color: expandButton.pressed
+                                                   ? propertiesPopup.appTheme.bgControl
+                                                   : expandButton.hovered
+                                                     ? propertiesPopup.appTheme.accentLow
+                                                     : "transparent"
+                                            border.width: expandButton.activeFocus ? 1 : 0
+                                            border.color: propertiesPopup.appTheme.accentMain
+                                            Behavior on color {
+                                                ColorAnimation { duration: 100 }
+                                            }
+                                        }
+
+                                        Row {
+                                            id: disclosureContent
+                                            anchors.centerIn: parent
+                                            spacing: 4
+
+                                            Shape {
+                                                width: 10
+                                                height: 10
+                                                anchors.verticalCenter:
+                                                    parent.verticalCenter
+                                                rotation: metadataRow.expanded
+                                                          ? 180 : 0
+
+                                                ShapePath {
+                                                    fillColor: "transparent"
+                                                    strokeColor:
+                                                        expandButton.disclosureColor
+                                                    strokeWidth: 1.5
+                                                    capStyle: ShapePath.RoundCap
+                                                    joinStyle: ShapePath.RoundJoin
+                                                    startX: 1.5
+                                                    startY: 3.5
+                                                    PathLine { x: 5; y: 7 }
+                                                    PathLine { x: 8.5; y: 3.5 }
+                                                }
+
+                                                Behavior on rotation {
+                                                    NumberAnimation {
+                                                        duration: 160
+                                                        easing.type: Easing.OutCubic
+                                                    }
+                                                }
+                                            }
+
+                                            Text {
+                                                text: metadataRow.expanded
+                                                      ? "Show less"
+                                                      : "Show more"
+                                                color: expandButton.hovered
+                                                       || expandButton.activeFocus
+                                                       ? propertiesPopup.appTheme.accentMain
+                                                       : propertiesPopup.appTheme.textDim
+                                                font.family: "Segoe UI Semibold"
+                                                font.pointSize: 8
+                                                verticalAlignment:
+                                                    Text.AlignVCenter
+                                            }
+                                        }
+
+                                        Accessible.role: Accessible.Button
+                                        Accessible.name:
+                                            (metadataRow.expanded
+                                             ? "Collapse " : "Expand ")
+                                            + metadataRow.modelData.label
+                                        Accessible.onPressAction:
+                                            expandButton.toggle()
                                     }
 
                                     Rectangle {
@@ -746,7 +933,7 @@ Popup {
                 }
             }
 
-            Button {
+            FocusScope {
                 id: closeButton
                 objectName: "nodePropertiesCloseButton"
                 z: 2
@@ -756,32 +943,81 @@ Popup {
                 anchors.right: parent.right
                 anchors.topMargin: 19
                 anchors.rightMargin: 14
-                padding: 0
-                hoverEnabled: true
-                focusPolicy: Qt.TabFocus
-                onClicked: propertiesPopup.closeOverlay()
+                activeFocusOnTab: true
+                readonly property bool hovered: closeHover.hovered
+                readonly property bool pressed: closeTap.pressed
 
-                background: Rectangle {
+                function activate() {
+                    propertiesPopup.closeOverlay()
+                }
+
+                Keys.onPressed: function(event) {
+                    if (event.key === Qt.Key_Return
+                            || event.key === Qt.Key_Enter
+                            || event.key === Qt.Key_Space) {
+                        closeButton.activate()
+                        event.accepted = true
+                    }
+                }
+
+                HoverHandler {
+                    id: closeHover
+                    cursorShape: Qt.PointingHandCursor
+                }
+
+                TapHandler {
+                    id: closeTap
+                    acceptedButtons: Qt.LeftButton
+                    onTapped: closeButton.activate()
+                }
+
+                Rectangle {
+                    anchors.fill: parent
                     radius: 4
-                    color: closeButton.down
+                    color: closeButton.pressed
                            ? propertiesPopup.appTheme.bgControl
                            : closeButton.hovered
-                             ? propertiesPopup.appTheme.bgControlHover
-                             : "transparent"
-                    border.width: closeButton.visualFocus ? 1 : 0
+                              ? propertiesPopup.appTheme.bgControlHover
+                              : "transparent"
+                    border.width: closeButton.activeFocus ? 1 : 0
                     border.color: propertiesPopup.appTheme.accentMain
                 }
 
-                contentItem: Text {
-                    text: "×"
-                    color: propertiesPopup.appTheme.textDim
-                    font.family: "Segoe UI"
-                    font.pointSize: 13
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
+                Shape {
+                    width: 12
+                    height: 12
+                    anchors.centerIn: parent
+
+                    ShapePath {
+                        fillColor: "transparent"
+                        strokeColor: closeButton.hovered
+                                     || closeButton.activeFocus
+                                     ? propertiesPopup.appTheme.accentMain
+                                     : propertiesPopup.appTheme.textDim
+                        strokeWidth: 1.5
+                        capStyle: ShapePath.RoundCap
+                        startX: 2
+                        startY: 2
+                        PathLine { x: 10; y: 10 }
+                    }
+
+                    ShapePath {
+                        fillColor: "transparent"
+                        strokeColor: closeButton.hovered
+                                     || closeButton.activeFocus
+                                     ? propertiesPopup.appTheme.accentMain
+                                     : propertiesPopup.appTheme.textDim
+                        strokeWidth: 1.5
+                        capStyle: ShapePath.RoundCap
+                        startX: 10
+                        startY: 2
+                        PathLine { x: 2; y: 10 }
+                    }
                 }
 
+                Accessible.role: Accessible.Button
                 Accessible.name: "Close node properties"
+                Accessible.onPressAction: closeButton.activate()
             }
         }
 

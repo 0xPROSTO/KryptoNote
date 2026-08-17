@@ -8,7 +8,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 from mutagen import File as MutagenFile
-from PIL import Image, ImageOps
+from PIL import ExifTags, Image, ImageOps
 
 from ..core.constants import (
     AUDIO_EXTENSIONS,
@@ -321,7 +321,10 @@ def _metadata_label(raw_key, value=None):
 
 
 def _binary_metadata_descriptor(value):
-    raw = bytes(value)
+    try:
+        raw = bytes(value)
+    except (TypeError, ValueError):
+        raw = b""
     format_name = getattr(value, "imageformat", None)
     formats = {13: "JPEG", 14: "PNG"}
     try:
@@ -425,23 +428,23 @@ def _technical_metadata_values(name, value):
     return _metadata_text_values(value)
 
 
-def read_audio_embedded_metadata(file_path):
-    """Return every displayable audio tag and technical field Mutagen exposes.
+def read_mutagen_metadata(file_path):
+    """Return every displayable tag and technical field Mutagen exposes.
 
     Text is retained verbatim. Binary fields are represented by size/type
     descriptors because the complete original file is already stored encrypted.
-    Metadata errors never make an otherwise decodable audio import fail.
+    Metadata errors never make an otherwise decodable media import fail.
     """
 
     try:
-        audio = MutagenFile(file_path, easy=False)
+        media = MutagenFile(file_path, easy=False)
     except Exception:
         return ()
-    if audio is None:
+    if media is None:
         return ()
 
     entries = []
-    tags = getattr(audio, "tags", None)
+    tags = getattr(media, "tags", None)
     if tags is not None and hasattr(tags, "items"):
         try:
             tag_items = sorted(tags.items(), key=lambda item: str(item[0]).casefold())
@@ -482,7 +485,7 @@ def read_audio_embedded_metadata(file_path):
                 }
             )
 
-    info = getattr(audio, "info", None)
+    info = getattr(media, "info", None)
     if info is not None:
         for name in sorted(item for item in dir(info) if not item.startswith("_")):
             if name in {"length", "pprint"}:
@@ -508,7 +511,7 @@ def read_audio_embedded_metadata(file_path):
                 }
             )
 
-    for index, picture in enumerate(getattr(audio, "pictures", ()) or (), start=1):
+    for index, picture in enumerate(getattr(media, "pictures", ()) or (), start=1):
         parts = []
         for attribute, label in (
             ("mime", "MIME"),
@@ -530,6 +533,216 @@ def read_audio_embedded_metadata(file_path):
                 "values": [" · ".join(parts)],
                 "source": "tag",
             }
+        )
+    return tuple(entries)
+
+
+def read_audio_embedded_metadata(file_path):
+    """Compatibility wrapper for audio import callers."""
+
+    return read_mutagen_metadata(file_path)
+
+
+_IMAGE_INFO_LABELS = {
+    "background": "Background",
+    "comment": "Comment",
+    "description": "Description",
+    "dpi": "DPI",
+    "duration": "Frame duration",
+    "exif": "Exif block",
+    "gamma": "Gamma",
+    "icc_profile": "ICC profile",
+    "loop": "Animation loop count",
+    "software": "Software",
+    "transparency": "Transparency",
+    "xmp": "XMP block",
+    "xml": "XML metadata",
+}
+
+
+def _append_metadata_entry(entries, key, label, value, source):
+    values = _metadata_text_values(value)
+    if not values:
+        return
+    entries.append(
+        {
+            "key": str(key),
+            "label": str(label or key or "Metadata"),
+            "values": values,
+            "source": source,
+        }
+    )
+
+
+def _exif_label(tag_id, *, namespace=""):
+    labels = ExifTags.GPSTAGS if namespace == "GPS" else ExifTags.TAGS
+    label = labels.get(tag_id, f"Tag {tag_id}")
+    prefixes = {
+        "GPS": "GPS ",
+        "IFD1": "Thumbnail ",
+        "Interop": "Interop ",
+        "MakerNote": "Maker note ",
+    }
+    return prefixes.get(namespace, "") + str(label)
+
+
+def read_image_embedded_metadata(image):
+    """Extract Exif, XMP, textual chunks, profiles, and image properties."""
+
+    entries = []
+    _append_metadata_entry(
+        entries, "image.format", "Format", getattr(image, "format", None), "technical"
+    )
+    _append_metadata_entry(
+        entries, "image.mode", "Color mode", getattr(image, "mode", None), "technical"
+    )
+    frame_count = int(getattr(image, "n_frames", 1) or 1)
+    if frame_count > 1:
+        _append_metadata_entry(
+            entries, "image.frames", "Frames", frame_count, "technical"
+        )
+        _append_metadata_entry(
+            entries,
+            "image.animated",
+            "Animated",
+            bool(getattr(image, "is_animated", False)),
+            "technical",
+        )
+
+    try:
+        exif = image.getexif()
+    except Exception:
+        exif = None
+    if exif:
+        try:
+            root_items = sorted(exif.items(), key=lambda item: int(item[0]))
+        except Exception:
+            root_items = []
+        for tag_id, value in root_items:
+            _append_metadata_entry(
+                entries,
+                f"exif.root.{tag_id}",
+                _exif_label(tag_id),
+                value,
+                "exif",
+            )
+
+        for namespace, ifd in (
+            ("Exif", ExifTags.IFD.Exif),
+            ("GPS", ExifTags.IFD.GPSInfo),
+            ("MakerNote", ExifTags.IFD.MakerNote),
+            ("Interop", ExifTags.IFD.Interop),
+            ("IFD1", ExifTags.IFD.IFD1),
+        ):
+            try:
+                nested = exif.get_ifd(ifd)
+            except Exception:
+                continue
+            if not hasattr(nested, "items"):
+                continue
+            try:
+                nested_items = sorted(
+                    nested.items(), key=lambda item: int(item[0])
+                )
+            except Exception:
+                nested_items = []
+            for tag_id, value in nested_items:
+                _append_metadata_entry(
+                    entries,
+                    f"exif.{namespace}.{tag_id}",
+                    _exif_label(tag_id, namespace=namespace),
+                    value,
+                    "exif",
+                )
+
+    info = getattr(image, "info", {}) or {}
+    try:
+        xmp = image.getxmp() if "xmp" in info else None
+    except Exception:
+        xmp = None
+    if xmp:
+        _append_metadata_entry(entries, "image.xmp", "XMP", xmp, "xmp")
+
+    for raw_key in sorted(info, key=lambda item: str(item).casefold()):
+        label = _IMAGE_INFO_LABELS.get(str(raw_key).casefold())
+        if label is None:
+            label = str(raw_key).replace("_", " ").strip().capitalize()
+        _append_metadata_entry(
+            entries,
+            f"image.info.{raw_key}",
+            label,
+            info[raw_key],
+            "image",
+        )
+    return tuple(entries)
+
+
+def _capture_property(capture, name):
+    property_id = getattr(cv2, name, None)
+    if property_id is None:
+        return 0.0
+    try:
+        value = float(capture.get(property_id) or 0.0)
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+    return value if math.isfinite(value) else 0.0
+
+
+def _fourcc_text(value):
+    try:
+        code = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return ""
+    if code <= 0:
+        return ""
+    text = "".join(chr((code >> (8 * index)) & 0xFF) for index in range(4))
+    return text.strip() if all(character.isprintable() for character in text) else ""
+
+
+def read_video_embedded_metadata(file_path, capture, *, frames, fps):
+    """Extract container tags plus stable technical video properties."""
+
+    entries = list(read_mutagen_metadata(file_path))
+    if fps > 0:
+        _append_metadata_entry(
+            entries, "video.fps", "Frame rate", f"{fps:.3f}".rstrip("0").rstrip("."), "technical"
+        )
+    if frames > 0:
+        _append_metadata_entry(
+            entries, "video.frames", "Frame count", int(round(frames)), "technical"
+        )
+    codec = _fourcc_text(_capture_property(capture, "CAP_PROP_FOURCC"))
+    if codec:
+        _append_metadata_entry(
+            entries, "video.codec", "Video codec", codec, "technical"
+        )
+    bitrate = _capture_property(capture, "CAP_PROP_BITRATE")
+    if bitrate > 0:
+        _append_metadata_entry(
+            entries,
+            "video.bitrate",
+            "Video bitrate",
+            f"{bitrate:g} kbps",
+            "technical",
+        )
+    orientation = _capture_property(capture, "CAP_PROP_ORIENTATION_META")
+    if orientation:
+        _append_metadata_entry(
+            entries,
+            "video.orientation",
+            "Orientation",
+            f"{orientation:g}°",
+            "technical",
+        )
+    sar_num = _capture_property(capture, "CAP_PROP_SAR_NUM")
+    sar_den = _capture_property(capture, "CAP_PROP_SAR_DEN")
+    if sar_num > 0 and sar_den > 0 and (sar_num != 1 or sar_den != 1):
+        _append_metadata_entry(
+            entries,
+            "video.pixel_aspect_ratio",
+            "Pixel aspect ratio",
+            f"{sar_num:g}:{sar_den:g}",
+            "technical",
         )
     return tuple(entries)
 
@@ -946,10 +1159,21 @@ def read_media_metadata(
                 height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
                 frames = float(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
                 fps = float(cap.get(cv2.CAP_PROP_FPS) or 0)
+                embedded_metadata = read_video_embedded_metadata(
+                    file_path,
+                    cap,
+                    frames=frames,
+                    fps=fps,
+                )
             finally:
                 cap.release()
             duration = frames / fps if fps > 0 and frames > 0 else 0.0
-            return MediaMetadata(width=width, height=height, duration=duration)
+            return MediaMetadata(
+                width=width,
+                height=height,
+                duration=duration,
+                embedded_metadata=embedded_metadata,
+            )
 
         with Image.open(file_path) as img:
             width, height = img.size
@@ -962,7 +1186,11 @@ def read_media_metadata(
             pixels = width * height
             if pixels > _LARGE_IMAGE_THRESHOLD:
                 print(f"Warning: very large image ({width}x{height}, {pixels:,} pixels) — processing may be slow: {file_path}")
-            return MediaMetadata(width=width, height=height)
+            return MediaMetadata(
+                width=width,
+                height=height,
+                embedded_metadata=read_image_embedded_metadata(img),
+            )
     except Exception as e:
         print(f"Error reading media metadata: {e}")
         return MediaMetadata()

@@ -431,6 +431,9 @@ Rectangle {
         function onOpenNodePropertiesRequested(nodeId) {
             nodeProperties.openForNode(nodeId)
         }
+        function onNodePropertiesUpdated(nodeId) {
+            nodeProperties.refreshForNode(nodeId)
+        }
     }
 
     HoverHandler {

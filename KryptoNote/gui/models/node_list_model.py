@@ -260,6 +260,7 @@ class NodeListModel(QAbstractListModel):
                 dict(entry) for entry in (item.media_metadata or [])
                 if isinstance(entry, dict)
             ],
+            "media_metadata_state": "",
             "frame_locked": bool(getattr(item, "frame_locked", False)),
             "frame_color": getattr(item, "frame_color", "") or "",
             "frame_opacity": float(
@@ -323,6 +324,7 @@ class NodeListModel(QAbstractListModel):
                 dict(entry) for entry in (media_metadata or [])
                 if isinstance(entry, dict)
             ],
+            "media_metadata_state": "",
             "frame_locked": bool(frame_locked),
             "frame_color": frame_color or "",
             "frame_opacity": float(frame_opacity),
@@ -721,6 +723,36 @@ class NodeListModel(QAbstractListModel):
             NodeRoles.MetaSummaryRole,
         ]
         self.dataChanged.emit(model_idx, model_idx, roles)
+
+    @Slot(int, object)
+    def update_media_metadata(self, node_id, metadata):
+        idx = self._id_to_index.get(int(node_id))
+        if idx is None:
+            return
+        node = self._nodes[idx]
+        if node.get("type") not in MEDIA_NODE_TYPES:
+            return
+        node["media_metadata"] = [
+            dict(entry) for entry in (metadata or [])
+            if isinstance(entry, dict)
+        ]
+        node["media_metadata_state"] = ""
+        self._refresh_metadata_fields(node)
+        model_idx = self.index(idx, 0)
+        self.dataChanged.emit(
+            model_idx,
+            model_idx,
+            [NodeRoles.MetaSummaryRole],
+        )
+
+    @Slot(int, str)
+    def set_media_metadata_state(self, node_id, state):
+        idx = self._id_to_index.get(int(node_id))
+        if idx is None:
+            return
+        node = self._nodes[idx]
+        if node.get("type") in MEDIA_NODE_TYPES:
+            node["media_metadata_state"] = str(state or "")
 
     @Slot(int, object)
     def set_audio_waveform(self, node_id, peaks):
@@ -1142,6 +1174,9 @@ class NodeListModel(QAbstractListModel):
                 lines.append(f"Resolution: {node['media_width']} x {node['media_height']}")
             if node.get("media_duration"):
                 lines.append(f"Duration: {self._format_duration(node['media_duration'])}")
+            metadata_state = node.get("media_metadata_state", "")
+            if metadata_state:
+                lines.append(f"Metadata status: {metadata_state}")
             reserved_labels = {
                 "ID", "Type", "Title", "Created", "Updated", "Position",
                 "Node size", "File size", "Original file", "Resolution",

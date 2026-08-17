@@ -2028,6 +2028,30 @@ class NodeRepository:
             raise ValueError("Media item not found")
         self.conn.commit()
 
+    def update_media_metadata(self, item_id, metadata):
+        """Persist an encrypted metadata snapshot for an existing media item."""
+
+        try:
+            item_id = int(item_id)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Invalid media item id") from exc
+        if not isinstance(metadata, (list, tuple)):
+            raise TypeError("Media metadata must be a list")
+        normalized = [dict(entry) for entry in metadata if isinstance(entry, dict)]
+        payload = _encode_media_metadata(normalized) or b"[]"
+        encrypted = self.crypto.encrypt(
+            payload,
+            aad=self.crypto.item_aad(item_id, "media_metadata"),
+        )
+        self.cursor.execute(
+            "UPDATE items SET media_metadata=? "
+            "WHERE id=? AND storage_state='ready' AND type IN (?, ?, ?)",
+            (encrypted, item_id, *sorted(MEDIA_NODE_TYPES)),
+        )
+        if self.cursor.rowcount != 1:
+            raise ValueError("Media item not found")
+        self.conn.commit()
+
     def rollback_changes(self):
         self.conn.rollback()
 

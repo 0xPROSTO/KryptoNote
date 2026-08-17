@@ -1,6 +1,6 @@
 [project]
 name = "zeroxx-kryptonote"
-version = "3.6.4"
+version = "3.6.5"
 description = "Local visual knowledge base for encrypted notes, media, and connections."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -10,6 +10,7 @@ authors = [
 ]
 dependencies = [
     "cryptography==46.0.3",
+    "defusedxml==0.7.1",
     "mutagen==1.47.0",
     "numpy==2.4.1",
     "opencv-python-headless==4.13.0.90",

@@ -22,6 +22,7 @@ from ..theme.palette import Palette
 from ..services.auto_fit_service import AutoFitService
 from ..services.graph_command_service import GraphCommandService
 from ..services.graph_clone_worker import GraphCloneWorker
+from ..services.media_metadata_backfill import MediaMetadataBackfillWorker
 from ..services.operation_coordinator import OperationCoordinator
 from .delete_controller import DeleteController
 from .import_export_controller import ImportExportController
@@ -38,6 +39,7 @@ class QmlCanvasController(QObject):
     openTextEditorRequested = Signal(int)
     openFrameEditorRequested = Signal(int)
     openNodePropertiesRequested = Signal(int)
+    nodePropertiesUpdated = Signal(int)
     open_media_viewer_requested = Signal(int)  # node_id
     initial_load_failed = Signal(str)
     initial_load_finished = Signal()
@@ -74,6 +76,12 @@ class QmlCanvasController(QObject):
         self._graph_delete_token = None
         self._pending_graph_clone = None
         self._graph_delete_finished.connect(self._on_graph_delete_finished)
+        self._metadata_backfill_thread = None
+        self._metadata_backfill_worker = None
+        self._metadata_backfill_node_id = None
+        self._metadata_backfill_queue = []
+        self._metadata_backfill_attempted = set()
+        self._metadata_backfill_shutting_down = False
 
         # --- Delegate controllers ---
         self._delete_ctrl = DeleteController(
@@ -120,9 +128,142 @@ class QmlCanvasController(QObject):
 
     @Slot(int)
     def show_node_properties(self, node_id):
-        if not self._node_model.get_node_data(node_id):
+        node = self._node_model.get_node_data(node_id)
+        if not node:
             return
+        if (
+            node.get("type") in MEDIA_NODE_TYPES
+            and not node.get("media_metadata")
+        ):
+            self._queue_media_metadata_backfill(node_id)
         self.openNodePropertiesRequested.emit(node_id)
+
+    def _queue_media_metadata_backfill(self, node_id):
+        node_id = int(node_id)
+        if (
+            self._metadata_backfill_shutting_down
+            or node_id in self._metadata_backfill_attempted
+            or node_id in self._metadata_backfill_queue
+            or self._metadata_backfill_node_id == node_id
+        ):
+            return
+        node = self._node_model.get_node_data(node_id)
+        if (
+            not node
+            or node.get("type") not in MEDIA_NODE_TYPES
+            or node.get("media_metadata")
+        ):
+            return
+        self._metadata_backfill_attempted.add(node_id)
+        self._node_model.set_media_metadata_state(
+            node_id,
+            "Reading embedded metadata…",
+        )
+        self._metadata_backfill_queue.append(node_id)
+        self._start_next_media_metadata_backfill()
+
+    def _start_next_media_metadata_backfill(self):
+        if (
+            self._metadata_backfill_shutting_down
+            or self._metadata_backfill_thread is not None
+        ):
+            return
+        while self._metadata_backfill_queue:
+            node_id = self._metadata_backfill_queue.pop(0)
+            node = self._node_model.get_node_data(node_id)
+            if not node or node.get("media_metadata"):
+                continue
+            thread = None
+            try:
+                item = self._service.get_item_info(node_id)
+                db_path = self._service.get_db_path()
+                crypto = self._service.create_crypto_clone()
+                if item is None or not db_path or crypto is None:
+                    raise ValueError("Database is not ready")
+                self._service.commit_changes()
+                thread = QThread(self)
+                worker = MediaMetadataBackfillWorker(
+                    db_path,
+                    crypto,
+                    node_id,
+                    node.get("type", ""),
+                    item.total_size,
+                    item.original_filename,
+                    item.is_chunked,
+                )
+                worker.moveToThread(thread)
+                thread.started.connect(worker.run)
+                worker.finished.connect(self._on_media_metadata_backfill_finished)
+                worker.failed.connect(self._on_media_metadata_backfill_failed)
+                worker.cancelled.connect(self._on_media_metadata_backfill_cancelled)
+                worker.finished.connect(thread.quit)
+                worker.failed.connect(thread.quit)
+                worker.cancelled.connect(thread.quit)
+                worker.finished.connect(worker.deleteLater)
+                worker.failed.connect(worker.deleteLater)
+                worker.cancelled.connect(worker.deleteLater)
+                thread.finished.connect(thread.deleteLater)
+                thread.finished.connect(
+                    lambda: self._clear_active_media_metadata_backfill(thread)
+                )
+                self._metadata_backfill_thread = thread
+                self._metadata_backfill_worker = worker
+                self._metadata_backfill_node_id = node_id
+                thread.start()
+                return
+            except Exception as exc:
+                if thread is not None:
+                    thread.deleteLater()
+                self._set_media_metadata_backfill_error(node_id, str(exc))
+
+    @Slot(int, object)
+    def _on_media_metadata_backfill_finished(self, node_id, metadata):
+        normalized = [
+            dict(entry) for entry in (metadata or [])
+            if isinstance(entry, dict)
+        ]
+        try:
+            self._service.update_media_metadata(node_id, normalized)
+        except Exception as exc:
+            self._set_media_metadata_backfill_error(node_id, str(exc))
+            return
+        self._node_model.update_media_metadata(node_id, normalized)
+        if not normalized:
+            self._node_model.set_media_metadata_state(
+                node_id,
+                "No embedded metadata found",
+            )
+        self.nodePropertiesUpdated.emit(node_id)
+
+    @Slot(int, str)
+    def _on_media_metadata_backfill_failed(self, node_id, message):
+        self._set_media_metadata_backfill_error(node_id, message)
+
+    @Slot(int)
+    def _on_media_metadata_backfill_cancelled(self, node_id):
+        self._node_model.set_media_metadata_state(node_id, "")
+        self.nodePropertiesUpdated.emit(node_id)
+
+    def _set_media_metadata_backfill_error(self, node_id, message):
+        self._node_model.set_media_metadata_state(
+            node_id,
+            "Unable to read embedded metadata",
+        )
+        self.nodePropertiesUpdated.emit(node_id)
+        detail = str(message or "unknown error").strip()
+        self.status_message.emit(
+            f"Metadata indexing failed: {detail}",
+            "error",
+        )
+
+    def _clear_active_media_metadata_backfill(self, thread):
+        if self._metadata_backfill_thread is not thread:
+            return
+        self._metadata_backfill_thread = None
+        self._metadata_backfill_worker = None
+        self._metadata_backfill_node_id = None
+        if not self._metadata_backfill_shutting_down:
+            self._start_next_media_metadata_backfill()
 
     # ── Loading ─────────────────────────────────────────────────────
 
@@ -418,12 +559,27 @@ class QmlCanvasController(QObject):
         return (
             self._import_export_ctrl.has_active_background_jobs()
             or self.has_active_graph_clone()
+            or self.has_active_media_metadata_backfill()
         )
 
     def cancel_media_import(self):
         return self._import_export_ctrl.cancel_media_import()
 
     def shutdown_background_jobs(self, timeout_ms=15000):
+        self._metadata_backfill_shutting_down = True
+        self._metadata_backfill_queue.clear()
+        metadata_stopped = True
+        metadata_thread = self._metadata_backfill_thread
+        if metadata_thread is not None:
+            try:
+                if metadata_thread.isRunning():
+                    metadata_thread.requestInterruption()
+                    metadata_thread.quit()
+                    metadata_stopped = bool(metadata_thread.wait(timeout_ms))
+            except RuntimeError:
+                metadata_stopped = True
+            if metadata_stopped:
+                self._clear_active_media_metadata_backfill(metadata_thread)
         graph_stopped = True
         thread = self._graph_clone_thread
         if thread is not None:
@@ -439,7 +595,17 @@ class QmlCanvasController(QObject):
         delegated_stopped = self._import_export_ctrl.shutdown_background_jobs(
             timeout_ms
         )
-        return graph_stopped and delegated_stopped
+        return metadata_stopped and graph_stopped and delegated_stopped
+
+    def has_active_media_metadata_backfill(self):
+        thread = self._metadata_backfill_thread
+        if thread is None:
+            return bool(self._metadata_backfill_queue)
+        try:
+            return thread.isRunning() or bool(self._metadata_backfill_queue)
+        except RuntimeError:
+            self._clear_active_media_metadata_backfill(thread)
+            return bool(self._metadata_backfill_queue)
 
     def has_active_graph_clone(self):
         thread = self._graph_clone_thread
