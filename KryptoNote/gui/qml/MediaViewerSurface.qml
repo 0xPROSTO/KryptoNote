@@ -849,9 +849,12 @@ FocusScope {
                                       : surface.appTheme.borderDefault
                     }
                     Accessible.name: "Retry media loading"
-                    ToolTip.visible: hovered
-                    ToolTip.text: Accessible.name
-                    ToolTip.delay: 450
+                    ThemedToolTip {
+                        appTheme: surface.appTheme
+                        visible: retryButton.hovered
+                        text: retryButton.Accessible.name
+                        delay: 450
+                    }
                     onClicked: surface.viewerController.retry()
                 }
             }

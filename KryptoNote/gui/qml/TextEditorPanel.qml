@@ -463,9 +463,12 @@ Item {
                     border.color: editor.appTheme.accentMain
                 }
                 Accessible.name: "Manage tags"
-                ToolTip.visible: hovered
-                ToolTip.text: Accessible.name
-                ToolTip.delay: 500
+                ThemedToolTip {
+                    appTheme: editor.appTheme
+                    visible: addTagsButton.hovered
+                    text: addTagsButton.Accessible.name
+                    delay: 500
+                }
                 onClicked: editor.requestedTagPicker(editor.nodeId, addTagsButton)
             }
         }
@@ -537,9 +540,12 @@ Item {
                 Behavior on opacity { NumberAnimation { duration: 140 } }
                 Behavior on scale { NumberAnimation { duration: 80 } }
                 Accessible.name: text
-                ToolTip.visible: hovered
-                ToolTip.text: "Save: Ctrl+S / Ctrl+Enter"
-                ToolTip.delay: 450
+                ThemedToolTip {
+                    appTheme: editor.appTheme
+                    visible: saveButton.hovered
+                    text: "Save: Ctrl+S / Ctrl+Enter"
+                    delay: 450
+                }
                 onClicked: editor.saveAndClose()
             }
 
@@ -582,9 +588,12 @@ Item {
 
                 Behavior on scale { NumberAnimation { duration: 80 } }
                 Accessible.name: text
-                ToolTip.visible: hovered
-                ToolTip.text: editor.hasContent ? "Cancel: Esc" : "Delete: Esc"
-                ToolTip.delay: 450
+                ThemedToolTip {
+                    appTheme: editor.appTheme
+                    visible: cancelButton.hovered
+                    text: editor.hasContent ? "Cancel: Esc" : "Delete: Esc"
+                    delay: 450
+                }
                 onClicked: editor.cancelOrDelete()
             }
         }

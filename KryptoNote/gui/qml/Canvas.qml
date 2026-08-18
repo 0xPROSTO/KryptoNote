@@ -19,7 +19,11 @@ Rectangle {
     readonly property var frameClock: canvasRuntime ? canvasRuntime.frameClock : null
     readonly property bool wheelPreferAngleDelta: canvasRuntime
             ? canvasRuntime.preferAngleDelta : false
-    color: root.appTheme ? root.appTheme.bgCanvas : "#1a1a2e"
+    color: root.appTheme ? root.appTheme.bgCanvas : "#121212"
+    palette.toolTipBase: root.appTheme
+                         ? root.appTheme.bgPopover : "#232425"
+    palette.toolTipText: root.appTheme
+                         ? root.appTheme.textMain : "#efefef"
     clip: true
     focus: true
 

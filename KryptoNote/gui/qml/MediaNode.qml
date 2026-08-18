@@ -150,17 +150,4 @@ Rectangle {
         tags: mediaNode.tags
     }
 
-    property alias isResizeHovered: resizer._isHovered
-
-    ResizeHandle {
-        canvasRoot: mediaNode.canvasRoot
-        nodeModel: mediaNode.nodeModel
-        contentLayer: mediaNode.contentLayer
-        appTheme: mediaNode.appTheme
-        id: resizer
-        nodeId: mediaNode.nodeId
-        delegateItem: mediaNode.delegateItem
-        anchors.right: parent.right
-        anchors.bottom: parent.bottom
-    }
 }

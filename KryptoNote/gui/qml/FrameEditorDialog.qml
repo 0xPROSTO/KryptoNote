@@ -220,9 +220,12 @@ Popup {
                     border.color: editor.appTheme.accentMain
                 }
                 Accessible.name: "Close frame settings"
-                ToolTip.visible: hovered
-                ToolTip.text: Accessible.name
-                ToolTip.delay: 450
+                ThemedToolTip {
+                    appTheme: editor.appTheme
+                    visible: closeButton.hovered
+                    text: closeButton.Accessible.name
+                    delay: 450
+                }
                 onClicked: editor.close()
             }
 

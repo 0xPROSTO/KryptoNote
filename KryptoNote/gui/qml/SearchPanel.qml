@@ -263,9 +263,12 @@ Item {
                                 border.color: searchPanel.appTheme.accentMain
                             }
                             Accessible.name: "Remove @" + searchTagChip.tagName + " filter"
-                            ToolTip.visible: hovered
-                            ToolTip.text: Accessible.name
-                            ToolTip.delay: 500
+                            ThemedToolTip {
+                                appTheme: searchPanel.appTheme
+                                visible: removeChipButton.hovered
+                                text: removeChipButton.Accessible.name
+                                delay: 500
+                            }
                             onClicked: {
                                 searchPanel.removeSelectedTag(searchTagChip.tagId)
                                 searchPanel.invalidateSearch()
@@ -548,9 +551,13 @@ Item {
             Behavior on color { ColorAnimation { duration: 110 } }
         }
 
-        ToolTip.visible: toolTip.length > 0 && hovered
-        ToolTip.text: toolTip
-        ToolTip.delay: 500
+        ThemedToolTip {
+            appTheme: searchPanel.appTheme
+            visible: headerControl.toolTip.length > 0
+                     && headerControl.hovered
+            text: headerControl.toolTip
+            delay: 500
+        }
     }
 
     component ToolbarButton: ToolButton {

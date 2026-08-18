@@ -64,7 +64,7 @@ Rectangle {
         anchors.leftMargin: 10
         anchors.rightMargin: 10
         anchors.bottomMargin: 10
-        trailingInset: resizer.visible ? resizer.width : 0
+        trailingInset: 24 / Math.max(textNode.canvasScale, 0.25)
         tags: textNode.tags
         opacity: 1.0 - textNode.lodAmount
     }
@@ -105,17 +105,4 @@ Rectangle {
         elide: Text.ElideRight
     }
 
-    property alias isResizeHovered: resizer._isHovered
-
-    ResizeHandle {
-        canvasRoot: textNode.canvasRoot
-        nodeModel: textNode.nodeModel
-        contentLayer: textNode.contentLayer
-        appTheme: textNode.appTheme
-        id: resizer
-        nodeId: textNode.nodeId
-        delegateItem: textNode.delegateItem
-        anchors.right: parent.right
-        anchors.bottom: parent.bottom
-    }
 }

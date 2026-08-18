@@ -23,7 +23,19 @@ Item {
              && (isInViewport || delegateRoot.model.nodeIsDeleting)
 
     property bool _isResizing: false
-    property bool _resizeHovered: nodeLoader.itemResizeHovered
+    property bool _resizeHovered: resizer._isHovered
+    readonly property bool _visualHovered:
+            delegateRoot.model.nodeIsHovered
+            || delegateRoot._resizeHovered
+            || resizer.topEdgeExclusionHovered
+    readonly property real _minimumResizeWidth:
+            delegateRoot.model.nodeType === "audio" ? 260 : 100
+    readonly property real _minimumResizeHeight:
+            delegateRoot.model.nodeType === "audio"
+            ? 108
+              + (delegateRoot.model.nodeContent.trim().length > 0 ? 24 : 0)
+              + (delegateRoot.model.nodeTags.length > 0 ? 24 : 0)
+            : 50
     readonly property bool visuallySelected:
             delegateRoot.canvasRoot.propertiesFocusNodeId > 0
             ? delegateRoot.model.nodeId
@@ -47,8 +59,14 @@ Item {
         id: nodeLoader
         z: delegateRoot.model.nodeType === "frame"
            ? 2 : (delegateRoot.model.nodeType === "audio" ? 4 : 0)
-        property bool itemResizeHovered: false
-        onItemChanged: itemResizeHovered = false
+        property real itemTopResizeExclusionWidth: 0
+        property real itemTopResizeExclusionHeight: 0
+        onItemChanged: {
+            if (!item || delegateRoot.model.nodeType !== "frame") {
+                itemTopResizeExclusionWidth = 0
+                itemTopResizeExclusionHeight = 0
+            }
+        }
         x: 0
         y: delegateRoot.model.nodeType === "frame" ? -15 : 0
         width: parent.width
@@ -68,6 +86,7 @@ Item {
     Component {
         id: frameNodeComponent
         FrameNode {
+            id: frameNode
             canvasRoot: delegateRoot.canvasRoot
             nodeModel: delegateRoot.nodeModel
             canvasController: delegateRoot.canvasController
@@ -82,9 +101,28 @@ Item {
             frameOpacity: delegateRoot.model.nodeFrameOpacity
             tags: delegateRoot.model.nodeTags
             isSelected: delegateRoot.visuallySelected
-            isHovered: delegateRoot.model.nodeIsHovered
+            isHovered: delegateRoot._visualHovered
             resizing: delegateRoot._isResizing
-            onIsResizeHoveredChanged: nodeLoader.itemResizeHovered = isResizeHovered
+            topOverlayHoverActive: resizer.topEdgeExclusionHovered
+            topOverlayHoverPosition: frameNode.mapFromItem(
+                resizer,
+                resizer.hoverPosition.x,
+                resizer.hoverPosition.y
+            )
+            Component.onCompleted: {
+                nodeLoader.itemTopResizeExclusionWidth
+                        = frameNode.topResizeExclusionWidth
+                nodeLoader.itemTopResizeExclusionHeight
+                        = frameNode.topResizeExclusionHeight
+            }
+            onTopResizeExclusionWidthChanged: {
+                nodeLoader.itemTopResizeExclusionWidth
+                        = frameNode.topResizeExclusionWidth
+            }
+            onTopResizeExclusionHeightChanged: {
+                nodeLoader.itemTopResizeExclusionHeight
+                        = frameNode.topResizeExclusionHeight
+            }
             onContextMenuRequested: function(
                 nodeId, nodeType, sourceItem, localX, localY
             ) {
@@ -107,14 +145,13 @@ Item {
             nodeTitle: delegateRoot.model.nodeTitle
             nodeContent: delegateRoot.model.nodeContent
             isSelected: delegateRoot.visuallySelected
-            isHovered: delegateRoot.model.nodeIsHovered
+            isHovered: delegateRoot._visualHovered
             titleSize: delegateRoot.model.nodeTitleSize
             textSize: delegateRoot.model.nodeTextSize
             nodeWidth: delegateRoot.model.nodeWidth
             nodeHeight: delegateRoot.model.nodeHeight
             canvasScale: delegateRoot.canvasRoot.contentScale
             tags: delegateRoot.model.nodeTags
-            onIsResizeHoveredChanged: nodeLoader.itemResizeHovered = isResizeHovered
         }
     }
 
@@ -136,11 +173,10 @@ Item {
             audioWaveform: delegateRoot.model.audioWaveform
             mediaDuration: delegateRoot.model.nodeMediaDuration
             isSelected: delegateRoot.visuallySelected
-            isHovered: delegateRoot.model.nodeIsHovered
+            isHovered: delegateRoot._visualHovered
             nodeWidth: delegateRoot.model.nodeWidth
             nodeHeight: delegateRoot.model.nodeHeight
             tags: delegateRoot.model.nodeTags
-            onIsResizeHoveredChanged: nodeLoader.itemResizeHovered = isResizeHovered
         }
     }
 
@@ -159,11 +195,10 @@ Item {
             mediaType: delegateRoot.model.nodeMediaType
             metaSummary: delegateRoot.model.nodeMetaSummary
             isSelected: delegateRoot.visuallySelected
-            isHovered: delegateRoot.model.nodeIsHovered
+            isHovered: delegateRoot._visualHovered
             nodeWidth: delegateRoot.model.nodeWidth
             nodeHeight: delegateRoot.model.nodeHeight
             tags: delegateRoot.model.nodeTags
-            onIsResizeHoveredChanged: nodeLoader.itemResizeHovered = isResizeHovered
         }
     }
 
@@ -193,7 +228,6 @@ Item {
         anchors.fill: parent
         nodeId: delegateRoot.model.nodeId
         nodeType: delegateRoot.model.nodeType
-        bottomRightExclusion: 24
         onContextMenuRequested: function(nodeId, nodeType, sourceItem, localX, localY) {
             delegateRoot.contextMenuRequested(nodeId, nodeType, sourceItem, localX, localY)
         }
@@ -212,6 +246,23 @@ Item {
         onContextMenuRequested: function(nodeId, nodeType, sourceItem, localX, localY) {
             delegateRoot.contextMenuRequested(nodeId, nodeType, sourceItem, localX, localY)
         }
+    }
+
+    ResizeHandle {
+        id: resizer
+        z: 6
+        anchors.fill: parent
+        visible: !delegateRoot.model.nodeIsDeleting
+        canvasRoot: delegateRoot.canvasRoot
+        nodeModel: delegateRoot.nodeModel
+        appTheme: delegateRoot.appTheme
+        nodeId: delegateRoot.model.nodeId
+        delegateItem: delegateRoot
+        nodeHovered: delegateRoot.model.nodeIsHovered
+        minimumNodeWidth: delegateRoot._minimumResizeWidth
+        minimumNodeHeight: delegateRoot._minimumResizeHeight
+        topEdgeExclusionWidth: nodeLoader.itemTopResizeExclusionWidth
+        topEdgeExclusionHeight: nodeLoader.itemTopResizeExclusionHeight
     }
 
     NodeDeleteAnimation {

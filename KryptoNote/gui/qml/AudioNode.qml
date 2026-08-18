@@ -28,9 +28,6 @@ Rectangle {
     readonly property real effectiveDuration:
             playbackIsCurrent && viewerController.duration > 0
             ? viewerController.duration : mediaDuration * 1000
-    readonly property real compactMinimumHeight:
-            108 + (hasDescription ? 24 : 0)
-            + (tags && tags.length > 0 ? 24 : 0)
 
     anchors.fill: parent
     radius: 4
@@ -223,18 +220,4 @@ Rectangle {
         return minutes + ":" + String(seconds).padStart(2, "0")
     }
 
-    property alias isResizeHovered: resizer._isHovered
-    ResizeHandle {
-        id: resizer
-        canvasRoot: audioNode.canvasRoot
-        nodeModel: audioNode.nodeModel
-        contentLayer: audioNode.contentLayer
-        appTheme: audioNode.appTheme
-        nodeId: audioNode.nodeId
-        delegateItem: audioNode.delegateItem
-        minimumNodeWidth: 260
-        minimumNodeHeight: audioNode.compactMinimumHeight
-        anchors.right: parent.right
-        anchors.bottom: parent.bottom
-    }
 }

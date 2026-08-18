@@ -21,7 +21,8 @@ Item {
     property bool isSelected: false
     property bool isHovered: false
     property bool resizing: false
-    property alias isResizeHovered: resizer._isHovered
+    property bool topOverlayHoverActive: false
+    property point topOverlayHoverPosition: Qt.point(-1, -1)
     signal contextMenuRequested(
         int nodeId,
         string nodeType,
@@ -32,10 +33,27 @@ Item {
 
     readonly property color outlineColor: frame.isSelected
             ? frame.appTheme.accentMain
-            : (frame.isHovered
+            : (frame.isHovered || titleHover.hovered || frame.lockHovered
                ? frame.appTheme.borderHover
                : frame.appTheme.borderDefault)
+    readonly property bool lockHovered:
+            lockButton.hovered
+            || (frame.topOverlayHoverActive
+                && frame.topOverlayHoverPosition.x
+                   >= titleBlob.x + lockButton.x
+                && frame.topOverlayHoverPosition.x
+                   <= titleBlob.x + lockButton.x + lockButton.width
+                && frame.topOverlayHoverPosition.y
+                   >= titleBlob.y + lockButton.y
+                && frame.topOverlayHoverPosition.y
+                   <= titleBlob.y + lockButton.y + lockButton.height)
     readonly property real surfaceTopInset: 15
+    readonly property real topResizeExclusionWidth:
+            titleBlob.width + 8 / Math.max(frame.canvasRoot.contentScale, 0.25)
+    readonly property real topResizeExclusionHeight: Math.max(
+        0,
+        titleBlob.y + titleBlob.height - frame.surfaceTopInset
+    )
 
     Item {
         id: frameSurface
@@ -102,6 +120,7 @@ Item {
         }
 
         HoverHandler {
+            id: titleHover
             cursorShape: Qt.SizeAllCursor
         }
 
@@ -127,7 +146,7 @@ Item {
             id: lockButton
             z: 2
             anchors.left: parent.left
-            anchors.leftMargin: 5
+            anchors.leftMargin: (parent.height - height) / 2
             anchors.verticalCenter: parent.verticalCenter
             width: 24
             height: 24
@@ -144,7 +163,7 @@ Item {
                         : frame.appTheme.textMuted
             background: Rectangle {
                 radius: 12
-                color: lockButton.hovered
+                color: frame.lockHovered
                        ? frame.appTheme.bgControlHover
                        : "transparent"
             }
@@ -152,11 +171,14 @@ Item {
 
             Accessible.role: Accessible.Button
             Accessible.name: frame.frameLocked ? "Unlock frame" : "Lock frame"
-            ToolTip.visible: hovered
-            ToolTip.delay: 450
-            ToolTip.text: frame.frameLocked
-                          ? "Locked · moves contained nodes"
-                          : "Unlocked · moves independently"
+            ThemedToolTip {
+                appTheme: frame.appTheme
+                visible: frame.lockHovered
+                delay: 450
+                text: frame.frameLocked
+                      ? "Locked · moves contained nodes"
+                      : "Unlocked · moves independently"
+            }
         }
 
         Text {
@@ -191,17 +213,4 @@ Item {
         anchors.bottomMargin: -height / 2 + 1
     }
 
-    ResizeHandle {
-        id: resizer
-        z: 4
-        canvasRoot: frame.canvasRoot
-        nodeModel: frame.nodeModel
-        contentLayer: frame.contentLayer
-        appTheme: frame.appTheme
-        nodeId: frame.nodeId
-        delegateItem: frame.delegateItem
-        anchors.right: frameSurface.right
-        anchors.bottom: frameSurface.bottom
-        visible: true
-    }
 }

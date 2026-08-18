@@ -43,7 +43,11 @@ ToolButton {
 
     Behavior on scale { NumberAnimation { duration: 80 } }
     Accessible.name: accessibleName
-    ToolTip.visible: hovered && accessibleName.length > 0
-    ToolTip.text: accessibleName
-    ToolTip.delay: 450
+
+    ThemedToolTip {
+        appTheme: control.appTheme
+        visible: control.hovered && control.accessibleName.length > 0
+        text: control.accessibleName
+        delay: 450
+    }
 }

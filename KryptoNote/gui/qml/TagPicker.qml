@@ -310,9 +310,12 @@ Popup {
                     border.color: picker.appTheme.accentMain
                 }
                 Accessible.name: "Close tags"
-                ToolTip.visible: hovered
-                ToolTip.text: Accessible.name
-                ToolTip.delay: 500
+                ThemedToolTip {
+                    appTheme: picker.appTheme
+                    visible: closePickerButton.hovered
+                    text: closePickerButton.Accessible.name
+                    delay: 500
+                }
                 onClicked: picker.close()
             }
         }
@@ -497,9 +500,12 @@ Popup {
                                   ? picker.appTheme.accentMain : picker.appTheme.borderHover
                 }
                 Accessible.name: "Choose tag color"
-                ToolTip.visible: hovered
-                ToolTip.text: Accessible.name
-                ToolTip.delay: 500
+                ThemedToolTip {
+                    appTheme: picker.appTheme
+                    visible: tagColorButton.hovered
+                    text: tagColorButton.Accessible.name
+                    delay: 500
+                }
                 onClicked: colorPopup.openForColor(picker.pendingColor)
             }
 
@@ -549,9 +555,12 @@ Popup {
                     border.color: picker.appTheme.textMain
                 }
                 Accessible.name: picker.editingTagId > 0 ? "Save tag" : "Create tag"
-                ToolTip.visible: hovered
-                ToolTip.text: Accessible.name
-                ToolTip.delay: 500
+                ThemedToolTip {
+                    appTheme: picker.appTheme
+                    visible: saveTagButton.hovered
+                    text: saveTagButton.Accessible.name
+                    delay: 500
+                }
                 onClicked: picker.saveTag()
             }
         }
@@ -778,9 +787,12 @@ Popup {
             border.color: picker.appTheme.accentMain
         }
         Accessible.name: toolTip
-        ToolTip.visible: hovered && toolTip.length > 0
-        ToolTip.text: toolTip
-        ToolTip.delay: 500
+        ThemedToolTip {
+            appTheme: picker.appTheme
+            visible: actionButton.hovered && actionButton.toolTip.length > 0
+            text: actionButton.toolTip
+            delay: 500
+        }
     }
 
     TagColorPopup {

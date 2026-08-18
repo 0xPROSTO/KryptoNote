@@ -155,9 +155,12 @@ Popup {
                     border.color: colorPopup.appTheme.accentMain
                 }
                 Accessible.name: "Close color picker"
-                ToolTip.visible: hovered
-                ToolTip.text: Accessible.name
-                ToolTip.delay: 500
+                ThemedToolTip {
+                    appTheme: colorPopup.appTheme
+                    visible: closeColorButton.hovered
+                    text: closeColorButton.Accessible.name
+                    delay: 500
+                }
                 onClicked: colorPopup.close()
             }
 

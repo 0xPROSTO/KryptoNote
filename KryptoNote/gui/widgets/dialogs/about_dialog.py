@@ -25,7 +25,12 @@ class AboutDialog(FramelessWindowDragMixin, QDialog):
         self.setStyleSheet(Theme.Styles.get_about_dialog_qss())
 
         self.init_ui()
-        self._setup_window_drag(drag_height=56, drag_handles=[self._drag_handle])
+        self._setup_window_drag(drag_handles=[self.container])
+
+    def _window_drag_is_interactive(self, watched):
+        if watched is self.github_link:
+            return True
+        return super()._window_drag_is_interactive(watched)
 
     def init_ui(self):
         main_layout = QVBoxLayout(self)
@@ -39,7 +44,6 @@ class AboutDialog(FramelessWindowDragMixin, QDialog):
         container_layout.setSpacing(0)
 
         header = QWidget()
-        self._drag_handle = header
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(5, 5, 5, 0)
         header_layout.addStretch()

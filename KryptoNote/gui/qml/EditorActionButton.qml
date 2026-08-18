@@ -59,7 +59,11 @@ ToolButton {
     Behavior on opacity { NumberAnimation { duration: 140 } }
     Behavior on scale { NumberAnimation { duration: 80 } }
     Accessible.name: toolTipText.length > 0 ? toolTipText : text
-    ToolTip.visible: hovered && toolTipText.length > 0
-    ToolTip.text: toolTipText
-    ToolTip.delay: 450
+
+    ThemedToolTip {
+        appTheme: control.appTheme
+        visible: control.hovered && control.toolTipText.length > 0
+        text: control.toolTipText
+        delay: 450
+    }
 }
