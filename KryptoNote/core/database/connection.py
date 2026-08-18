@@ -1,5 +1,6 @@
 import os
 import sqlite3
+import time
 from contextlib import closing
 from datetime import datetime
 from pathlib import Path
@@ -266,15 +267,25 @@ def cleanup_staged_items(
     return len(selected_ids)
 
 
-def validate_database_integrity(conn):
+def validate_database_integrity(conn, timings=None):
     """Validate SQLite pages, relations, and ready chunk sequences."""
-    check_rows = conn.execute("PRAGMA quick_check").fetchall()
+    stage_started = time.perf_counter()
+    try:
+        check_rows = conn.execute("PRAGMA quick_check").fetchall()
+    finally:
+        if timings is not None:
+            timings["quick_check"] = time.perf_counter() - stage_started
     if check_rows != [("ok",)]:
         raise sqlite3.DatabaseError(
             "Database check failed after interrupted maintenance"
         )
 
-    foreign_key_errors = conn.execute("PRAGMA foreign_key_check").fetchall()
+    stage_started = time.perf_counter()
+    try:
+        foreign_key_errors = conn.execute("PRAGMA foreign_key_check").fetchall()
+    finally:
+        if timings is not None:
+            timings["foreign_key_check"] = time.perf_counter() - stage_started
     if foreign_key_errors:
         raise sqlite3.DatabaseError(
             "Interrupted operation left invalid database relations"
@@ -282,23 +293,28 @@ def validate_database_integrity(conn):
 
     from ..constants import MEDIA_CHUNK_SIZE
 
-    invalid = conn.execute(
-        """
-        SELECT items.id
-        FROM items
-        LEFT JOIN media_chunks ON media_chunks.item_id = items.id
-        WHERE items.storage_state=? AND items.is_chunked=1
-        GROUP BY items.id
-        HAVING COUNT(media_chunks.id) !=
-               CASE WHEN COALESCE(items.total_size, 0)=0 THEN 0
-                    ELSE (items.total_size + ? - 1) / ? END
-            OR (COUNT(media_chunks.id) > 0 AND
-                (MIN(media_chunks.chunk_index) != 0 OR
-                 MAX(media_chunks.chunk_index) != COUNT(media_chunks.id)-1))
-        LIMIT 1
-        """,
-        (READY_STORAGE_STATE, MEDIA_CHUNK_SIZE, MEDIA_CHUNK_SIZE),
-    ).fetchone()
+    stage_started = time.perf_counter()
+    try:
+        invalid = conn.execute(
+            """
+            SELECT items.id
+            FROM items
+            LEFT JOIN media_chunks ON media_chunks.item_id = items.id
+            WHERE items.storage_state=? AND items.is_chunked=1
+            GROUP BY items.id
+            HAVING COUNT(media_chunks.id) !=
+                   CASE WHEN COALESCE(items.total_size, 0)=0 THEN 0
+                        ELSE (items.total_size + ? - 1) / ? END
+                OR (COUNT(media_chunks.id) > 0 AND
+                    (MIN(media_chunks.chunk_index) != 0 OR
+                     MAX(media_chunks.chunk_index) != COUNT(media_chunks.id)-1))
+            LIMIT 1
+            """,
+            (READY_STORAGE_STATE, MEDIA_CHUNK_SIZE, MEDIA_CHUNK_SIZE),
+        ).fetchone()
+    finally:
+        if timings is not None:
+            timings["media_chunks"] = time.perf_counter() - stage_started
     if invalid:
         raise sqlite3.DatabaseError(
             f"Incomplete media data for item {invalid[0]}"

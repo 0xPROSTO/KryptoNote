@@ -107,6 +107,7 @@ def resolve_media_viewer_qml_source():
 class ZeroXXWindow(NativeWindowMixin, QMainWindow):
     _password_change_progress = Signal(int, int, str)
     _password_change_finished = Signal(bool, str)
+    _manual_vacuum_status = Signal(object, str)
     _manual_vacuum_finished = Signal(bool, str)
     _backup_progress = Signal(int, int, str)
     _backup_finished = Signal(bool, str)
@@ -139,7 +140,14 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self._operation_blocked_actions = []
         self._ctrl_held = False
         self._shift_held = False
-        self._manual_vacuum_finished.connect(self._on_manual_vacuum_finished)
+        self._manual_vacuum_finished.connect(
+            self._on_manual_vacuum_finished,
+            Qt.ConnectionType.QueuedConnection,
+        )
+        self._manual_vacuum_status.connect(
+            self._on_manual_vacuum_status,
+            Qt.ConnectionType.QueuedConnection,
+        )
         self._backup_progress.connect(self._on_backup_progress)
         self._backup_finished.connect(self._on_backup_finished)
         self._password_change_progress.connect(self._on_password_change_progress)
@@ -1206,33 +1214,54 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             return
         self._manual_vacuum_token = token
         self._manual_vacuum_running = True
+        terminal_lock = threading.Lock()
+        terminal_sent = False
+
+        def emit_terminal(success, message):
+            nonlocal terminal_sent
+            with terminal_lock:
+                if terminal_sent:
+                    return
+                terminal_sent = True
+            self._manual_vacuum_finished.emit(bool(success), str(message))
 
         def on_start():
-            self.operation_coordinator.update(token, "Vacuuming database...")
+            self._manual_vacuum_status.emit(token, "Vacuuming database...")
+
+        def on_phase(_phase, message):
+            self._manual_vacuum_status.emit(token, str(message))
 
         def on_waiting_lock(attempt):
             message = f"Waiting for database lock... retry {attempt}/8"
-            self.operation_coordinator.update(token, message)
+            self._manual_vacuum_status.emit(token, message)
 
         def on_success(result):
-            self._manual_vacuum_finished.emit(
+            emit_terminal(
                 True,
                 getattr(result, "message", "Database optimized."),
             )
 
         def on_error(exc):
-            self._manual_vacuum_finished.emit(False, str(exc))
+            emit_terminal(False, str(exc))
+
+        def on_finish():
+            emit_terminal(
+                False,
+                "Database VACUUM finished without a terminal result",
+            )
 
         try:
             self.service.vacuum_database(
                 on_start_vacuum=on_start,
                 on_waiting_lock=on_waiting_lock,
+                on_phase=on_phase,
+                on_finish_vacuum=on_finish,
                 on_success=on_success,
                 on_error=on_error,
             )
         except Exception as exc:
             if self.operation_coordinator.owns(token):
-                self._manual_vacuum_finished.emit(False, str(exc))
+                emit_terminal(False, str(exc))
 
     @Slot(bool, str)
     def _on_manual_vacuum_finished(self, success, message):
@@ -1246,6 +1275,11 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             self._handle_status_update(message, "secure")
         else:
             self._handle_status_update(f"VACUUM failed: {message}", "error")
+
+    @Slot(object, str)
+    def _on_manual_vacuum_status(self, token, message):
+        if self.operation_coordinator.owns(token):
+            self.operation_coordinator.update(token, message)
 
     def _on_create_backup(self):
         if getattr(self, "_backup_executor", None) is not None:

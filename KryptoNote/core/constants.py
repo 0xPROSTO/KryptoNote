@@ -8,6 +8,7 @@ different lists in each layer.
 
 
 MEDIA_CHUNK_SIZE = 4 * 1024 * 1024
+AUTO_VACUUM_THRESHOLD_BYTES = 10 * 1024 * 1024
 
 # Extensions understood without probing the platform multimedia backend.
 # ``QMediaFormat`` may expose additional formats at runtime; the importer

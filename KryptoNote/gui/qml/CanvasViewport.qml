@@ -4,8 +4,8 @@ Item {
     id: viewport
     property Item contentLayer
     // Qt documents pixelDelta as the native high-resolution path, but warns
-    // that X11 pixel deltas are driver-specific.  The Python runtime sets
-    // this only for xcb; Wayland retains pixel-first behavior.
+    // that X11 pixel deltas are driver-specific.  The runtime can force the
+    // stable angle path on platforms where those deltas are unreliable.
     property bool preferAngleDelta: false
     property real contentScale: 1.0
     property real minScale: 0.1
@@ -29,12 +29,14 @@ Item {
     property bool _inertiaRunning: false
     property bool _keyboardPanRunning: false
     property bool _zoomRunning: false
+    property bool _zoomInputPending: false
     property bool _panRunning: false
     property bool _initialized: false
     property real _lastViewportWidth: 0.0
     property real _lastViewportHeight: 0.0
     readonly property bool frameClockNeeded: _inertiaRunning
-            || _keyboardPanRunning || _zoomRunning || _panRunning
+            || _keyboardPanRunning || _zoomRunning || _zoomInputPending
+            || _panRunning
 
     property real _zoomAnchorX: 0
     property real _zoomAnchorY: 0
@@ -44,6 +46,9 @@ Item {
     property real _zoomTo: 1.0
     property real _zoomElapsed: 0.0
     property bool _zoomAnchorValid: false
+    property real _pendingZoomLog: 0.0
+    property real _pendingZoomMouseX: 0.0
+    property real _pendingZoomMouseY: 0.0
     readonly property real zoomDuration: 0.12
 
     property real _panFromX: 0.0
@@ -55,7 +60,6 @@ Item {
 
     signal zoomChanged(real scale)
     signal viewportCenterShifted(real deltaX, real deltaY)
-    signal cameraChanged()
 
     // The camera contract is deliberately kept in one place.  All canvas
     // coordinates are logical scene units, while callers pass viewport pixel
@@ -141,6 +145,7 @@ Item {
         _inertiaRunning = false
         _keyboardPanRunning = false
         _zoomRunning = false
+        _zoomInputPending = false
         _zoomAnchorValid = false
         _panRunning = false
         keyboardPanLeft = false
@@ -151,6 +156,7 @@ Item {
         velocityY = 0
         keyboardVelocityX = 0
         keyboardVelocityY = 0
+        _pendingZoomLog = 0.0
     }
 
     function panBy(dx, dy, updateVelocity) {
@@ -174,7 +180,7 @@ Item {
         zoomByFactor(mouseX, mouseY, zoomIn ? zoomFactor : (1.0 / zoomFactor))
     }
 
-    function zoomByFactor(mouseX, mouseY, factor) {
+    function zoomByFactor(mouseX, mouseY, factor, preserveAnimation) {
         if (!contentLayer) return
         factor = Number(factor)
         if (!isFinite(factor) || factor <= 0.0) return
@@ -185,9 +191,21 @@ Item {
         _zoomMouseY = mouseY
         _zoomFrom = contentScale
         _zoomTo = newScale
-        _zoomElapsed = 0.0
+        if (!preserveAnimation || !_zoomRunning) _zoomElapsed = 0.0
         _zoomAnchorValid = Math.abs(_zoomTo - _zoomFrom) > 0.0001
         _zoomRunning = _zoomAnchorValid
+    }
+
+    function queuePixelZoom(mouseX, mouseY, magnitude) {
+        magnitude = Number(magnitude)
+        if (!isFinite(magnitude) || Math.abs(magnitude) <= 0.0001) {
+            return false
+        }
+        _pendingZoomLog += magnitude * Math.log(zoomFactor)
+        _pendingZoomMouseX = Number(mouseX)
+        _pendingZoomMouseY = Number(mouseY)
+        _zoomInputPending = true
+        return true
     }
 
     function smoothCenterOn(targetX, targetY) {
@@ -279,8 +297,23 @@ Item {
         if (!isFinite(dt) || dt <= 0) return
         if (_inertiaRunning) _advanceInertia(dt)
         if (_keyboardPanRunning) _advanceKeyboardPan(dt)
+        if (_zoomInputPending) _applyPendingZoom()
         if (_zoomRunning) _advanceZoom(dt)
         if (_panRunning) _advancePan(dt)
+    }
+
+    function _applyPendingZoom() {
+        var maxStep = Math.log(zoomFactor) * 4.0
+        var step = Math.max(-maxStep, Math.min(maxStep, _pendingZoomLog))
+        _pendingZoomLog -= step
+        _zoomInputPending = Math.abs(_pendingZoomLog) > 0.0001
+        if (Math.abs(step) <= 0.0001) return
+        zoomByFactor(
+            _pendingZoomMouseX,
+            _pendingZoomMouseY,
+            Math.exp(step),
+            true
+        )
     }
 
     function _advanceInertia(dt) {
@@ -393,35 +426,43 @@ Item {
         var pixelX = _wheelHorizontalComponent(event, "pixelDelta")
         var pixelY = _wheelComponent(event, "pixelDelta")
         var hasPixels = Math.abs(pixelX) > 0.001 || Math.abs(pixelY) > 0.001
-        if (hasPixels && !viewport.preferAngleDelta) {
-            return Qt.point(pixelX, pixelY)
-        }
         var angleX = _wheelHorizontalComponent(event, "angleDelta")
         var angleY = _wheelComponent(event, "angleDelta")
-        if (Math.abs(angleX) <= 0.001 && Math.abs(angleY) <= 0.001 && hasPixels) {
-            return Qt.point(pixelX, pixelY)
+        var usePixels = _usesPixelWheel(event)
+        if (!usePixels && (Math.abs(angleX) > 0.001 || Math.abs(angleY) > 0.001)) {
+            // A normal mouse wheel remains one discrete angle step.
+            return Qt.point(angleX / 120.0 * 48.0, angleY / 120.0 * 48.0)
         }
-        // One wheel step is conventionally 120 eighths of a degree.  Keep a
-        // useful screen-space fallback for traditional mouse wheels.
-        return Qt.point(angleX / 120.0 * 48.0, angleY / 120.0 * 48.0)
+        return hasPixels ? Qt.point(pixelX, pixelY) : Qt.point(0, 0)
+    }
+
+    function _usesPixelWheel(event) {
+        if (preferAngleDelta || !event || !event.device) return false
+        var deviceType = event.device.type
+        return (deviceType & PointerDevice.TouchPad) !== 0
     }
 
     function handleWheel(event, zoom) {
         var mouseX = event && event.x !== undefined ? event.x : viewport.width / 2
         var mouseY = event && event.y !== undefined ? event.y : viewport.height / 2
-        var delta = _wheelDelta(event)
         if (zoom) {
-            var magnitude = Math.abs(delta.y) > 0.001
-                    ? delta.y / 240.0
-                    : delta.x / 240.0
-            if (Math.abs(magnitude) <= 0.0001) return false
-            viewport.zoomByFactor(
-                mouseX,
-                mouseY,
-                Math.exp(magnitude * Math.log(viewport.zoomFactor))
-            )
-            return true
+            var angleX = _wheelHorizontalComponent(event, "angleDelta")
+            var angleY = _wheelComponent(event, "angleDelta")
+            var usePixels = _usesPixelWheel(event)
+            if (!usePixels && (Math.abs(angleX) > 0.001 || Math.abs(angleY) > 0.001)) {
+                var angle = Math.abs(angleY) > 0.001 ? angleY : angleX
+                viewport.zoomAt(mouseX, mouseY, angle > 0)
+                return true
+            }
+            var pixelX = _wheelHorizontalComponent(event, "pixelDelta")
+            var pixelY = _wheelComponent(event, "pixelDelta")
+            if (usePixels || Math.abs(angleX) <= 0.001 && Math.abs(angleY) <= 0.001) {
+                var pixel = Math.abs(pixelY) > 0.001 ? pixelY : pixelX
+                return viewport.queuePixelZoom(mouseX, mouseY, pixel / 240.0)
+            }
+            return false
         }
+        var delta = _wheelDelta(event)
         if (Math.abs(delta.x) > 0.001 || Math.abs(delta.y) > 0.001) {
             // Wheel/touchpad momentum is delivered by Qt.  Do not feed it
             // into the canvas drag inertia accumulator a second time.
@@ -458,7 +499,6 @@ Item {
             contentLayer.x = _zoomMouseX - _zoomAnchorX * contentScale
             contentLayer.y = _zoomMouseY - _zoomAnchorY * contentScale
         }
-        cameraChanged()
         zoomChanged(contentScale)
     }
 

@@ -1,7 +1,9 @@
 import concurrent.futures
 import json
+import logging
 import shutil
 import sqlite3
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -17,10 +19,22 @@ from .connection import (
     open_sqlite_connection,
     validate_database_integrity,
 )
-from .operations import MaintenanceResult, read_database_space_stats
+from .operations import (
+    DeletionResult,
+    MaintenanceResult,
+    read_database_space_stats,
+)
 from ..crypto import CryptoManager
-from ..constants import MEDIA_CHUNK_SIZE, MEDIA_NODE_TYPES, PLAYABLE_NODE_TYPES
+from ..constants import (
+    AUTO_VACUUM_THRESHOLD_BYTES,
+    MEDIA_CHUNK_SIZE,
+    MEDIA_NODE_TYPES,
+    PLAYABLE_NODE_TYPES,
+)
 from ..exceptions import InsufficientDiskSpaceError, OperationCancelledError
+
+
+logger = logging.getLogger(__name__)
 
 
 # Shared chunked-media writer
@@ -179,14 +193,58 @@ class NodeRepository:
         label="operation",
     ):
         db_path = getattr(self.conn_manager, "db_path", ":memory:")
+        preflight_stats_elapsed = 0.0
+        preflight_disk_elapsed = 0.0
 
         # A pending main-connection write can lock this database's worker.
         if self.conn.in_transaction:
             self.conn.commit()
 
+        terminal_lock = threading.Lock()
+        terminal_sent = False
+
+        def _notify_success():
+            nonlocal terminal_sent
+            with terminal_lock:
+                if terminal_sent:
+                    return
+                terminal_sent = True
+            if on_success:
+                try:
+                    on_success()
+                except Exception as callback_error:
+                    logger.exception(
+                        "Database %s success callback failed: %s",
+                        label,
+                        callback_error,
+                    )
+
         def _notify_error(exc):
+            nonlocal terminal_sent
+            with terminal_lock:
+                if terminal_sent:
+                    return
+                terminal_sent = True
             if on_error:
-                on_error(exc)
+                try:
+                    on_error(exc)
+                except Exception as callback_error:
+                    logger.exception(
+                        "Database %s error callback failed: %s",
+                        label,
+                        callback_error,
+                    )
+
+        def _notify_finish():
+            if on_finish:
+                try:
+                    on_finish()
+                except Exception as callback_error:
+                    logger.exception(
+                        "Database %s finish callback failed: %s",
+                        label,
+                        callback_error,
+                    )
 
         if db_path == ":memory:":
             try:
@@ -194,15 +252,13 @@ class NodeRepository:
                     on_start()
                 operation(self.cursor, self.conn)
                 self.conn.commit()
-                if on_success:
-                    on_success()
+                _notify_success()
             except Exception as exc:
                 self.conn.rollback()
                 _notify_error(exc)
                 raise
             finally:
-                if on_finish:
-                    on_finish()
+                _notify_finish()
             return None
 
         try:
@@ -210,8 +266,7 @@ class NodeRepository:
                 on_start()
         except Exception as exc:
             _notify_error(exc)
-            if on_finish:
-                on_finish()
+            _notify_finish()
             raise
 
         def _run():
@@ -235,7 +290,14 @@ class NodeRepository:
                         if "locked" not in str(exc).lower() and "busy" not in str(exc).lower():
                             raise
                         if on_waiting_lock:
-                            on_waiting_lock(attempt)
+                            try:
+                                on_waiting_lock(attempt)
+                            except Exception as callback_error:
+                                logger.exception(
+                                    "Database %s lock callback failed: %s",
+                                    label,
+                                    callback_error,
+                                )
                         time.sleep(min(0.25 * attempt, 1.5))
                     except Exception:
                         if v_conn is not None:
@@ -245,26 +307,23 @@ class NodeRepository:
                         if v_conn is not None:
                             v_conn.close()
                     if succeeded:
-                        if on_success:
-                            on_success()
+                        _notify_success()
                         return
                 if last_error is not None:
                     raise last_error
             except Exception as exc:
-                print(f"Background {label} Error: {exc}")
+                logger.exception("Background %s error: %s", label, exc)
                 _notify_error(exc)
                 raise
             finally:
-                if on_finish:
-                    on_finish()
+                _notify_finish()
 
         try:
             return self._background_executor.submit(_run)
         except Exception as exc:
-            print(f"CRASH IN {label}: {exc}")
+            logger.exception("Crash submitting %s: %s", label, exc)
             _notify_error(exc)
-            if on_finish:
-                on_finish()
+            _notify_finish()
             raise
 
     # CRUD
@@ -2060,64 +2119,142 @@ class NodeRepository:
         on_start_vacuum=None,
         on_finish_vacuum=None,
         on_waiting_lock=None,
+        on_phase=None,
         on_success=None,
         on_error=None,
     ):
-        self.conn.commit()
-
+        started_at = time.perf_counter()
+        preflight_started = started_at
         db_path = getattr(self.conn_manager, "db_path", ":memory:")
-        before = read_database_space_stats(db_path)
-        if db_path != ":memory:":
-            free_bytes = shutil.disk_usage(
-                Path(db_path).resolve().parent
-            ).free
-            required_bytes = int(before.main_bytes * 1.10)
-            if free_bytes < required_bytes:
-                error = InsufficientDiskSpaceError(
-                    "Database optimization requires "
-                    f"{required_bytes} free bytes; {free_bytes} available"
+        preflight_stats_elapsed = 0.0
+        preflight_disk_elapsed = 0.0
+
+        def notify_preflight(callback, *args):
+            if not callback:
+                return
+            try:
+                callback(*args)
+            except Exception as callback_error:
+                logger.exception(
+                    "VACUUM preflight callback failed: %s",
+                    callback_error,
                 )
-                if on_error:
-                    on_error(error)
-                    return None
-                raise error
+
+        try:
+            self.conn.commit()
+            stats_started = time.perf_counter()
+            before = read_database_space_stats(db_path)
+            preflight_stats_elapsed = time.perf_counter() - stats_started
+            if db_path != ":memory:":
+                disk_started = time.perf_counter()
+                free_bytes = shutil.disk_usage(
+                    Path(db_path).resolve().parent
+                ).free
+                preflight_disk_elapsed = time.perf_counter() - disk_started
+                required_bytes = int(before.main_bytes * 1.10)
+                if free_bytes < required_bytes:
+                    raise InsufficientDiskSpaceError(
+                        "Database optimization requires "
+                        f"{required_bytes} free bytes; {free_bytes} available"
+                    )
+        except Exception as exc:
+            notify_preflight(on_error, exc)
+            notify_preflight(on_finish_vacuum)
+            if on_error:
+                return None
+            raise
+
+        timings = {
+            "preflight": time.perf_counter() - preflight_started,
+            "preflight_stats": preflight_stats_elapsed,
+            "preflight_disk_space": preflight_disk_elapsed,
+        }
+
+        def report_phase(phase, message):
+            if not on_phase:
+                return
+            try:
+                on_phase(phase, message)
+            except Exception as callback_error:
+                logger.exception(
+                    "VACUUM phase callback failed (%s): %s",
+                    phase,
+                    callback_error,
+                )
 
         result_box = {}
 
         def do_vacuum(cursor, conn):
+            stage_started = time.perf_counter()
             if db_path != ":memory:":
+                stats_started = time.perf_counter()
                 current = read_database_space_stats(db_path, conn)
+                worker_stats_elapsed = time.perf_counter() - stats_started
+                disk_started = time.perf_counter()
                 free_bytes = shutil.disk_usage(
                     Path(db_path).resolve().parent
                 ).free
+                worker_disk_elapsed = time.perf_counter() - disk_started
+                timings["worker_preflight_stats"] = worker_stats_elapsed
+                timings["worker_preflight_disk_space"] = worker_disk_elapsed
                 required_bytes = int(current.main_bytes * 1.10)
                 if free_bytes < required_bytes:
                     raise InsufficientDiskSpaceError(
                         "Database optimization requires "
                         f"{required_bytes} free bytes; {free_bytes} available"
                     )
+            timings["worker_preflight"] = time.perf_counter() - stage_started
             cursor.execute(
                 "INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)",
                 ("db_maintenance_state", "vacuum"),
             )
             conn.commit()
             try:
+                report_phase("vacuum", "Rebuilding database...")
+                stage_started = time.perf_counter()
                 conn.execute("VACUUM")
-                validate_database_integrity(conn)
+                timings["vacuum"] = time.perf_counter() - stage_started
+
+                report_phase("verify", "Verifying database integrity...")
+                stage_started = time.perf_counter()
+                validate_database_integrity(conn, timings)
+                timings["integrity"] = time.perf_counter() - stage_started
+
+                report_phase("finalize", "Finalizing database maintenance...")
+                stage_started = time.perf_counter()
                 cursor.execute(
                     "DELETE FROM metadata WHERE key='db_maintenance_state'"
                 )
                 conn.commit()
-                checkpoint = conn.execute(
-                    "PRAGMA wal_checkpoint(TRUNCATE)"
-                ).fetchone()
-                wal_busy = bool(
-                    checkpoint and int(checkpoint[0] or 0) != 0
-                )
+                timings["marker_cleanup"] = time.perf_counter() - stage_started
+
+                report_phase("checkpoint", "Cleaning up database journal...")
+                stage_started = time.perf_counter()
+                wal_busy = False
+                try:
+                    checkpoint = conn.execute(
+                        "PRAGMA wal_checkpoint(TRUNCATE)"
+                    ).fetchone()
+                    wal_busy = bool(
+                        checkpoint and int(checkpoint[0] or 0) != 0
+                    )
+                except sqlite3.OperationalError as checkpoint_error:
+                    # The database is already vacuumed.  A reader may keep the
+                    # WAL busy; report that state instead of turning a bounded
+                    # cleanup attempt into a second failure path.
+                    wal_busy = True
+                    logger.info(
+                        "VACUUM WAL checkpoint deferred: %s",
+                        checkpoint_error,
+                    )
+                timings["checkpoint"] = time.perf_counter() - stage_started
             except Exception:
                 # Keep the marker: startup recovery must revalidate the DB.
                 raise
+            report_phase("stats", "Collecting database statistics...")
+            stage_started = time.perf_counter()
             after = read_database_space_stats(db_path, conn)
+            timings["post_stats"] = time.perf_counter() - stage_started
             result_box["result"] = MaintenanceResult(
                 status="completed",
                 before=before,
@@ -2129,12 +2266,19 @@ class NodeRepository:
                 ),
             )
 
+        def run_vacuum(cursor, conn):
+            try:
+                do_vacuum(cursor, conn)
+            finally:
+                timings["total"] = time.perf_counter() - started_at
+                logger.info("VACUUM timings: %s", timings)
+
         def report_success():
             if on_success:
                 on_success(result_box.get("result"))
 
         return self._execute_on_separate_connection(
-            do_vacuum,
+            run_vacuum,
             on_start=on_start_vacuum,
             on_finish=on_finish_vacuum,
             on_waiting_lock=on_waiting_lock,
@@ -2192,6 +2336,18 @@ class NodeRepository:
         self.cursor.execute("DELETE FROM connections WHERE id=?", (conn_id,))
         self.conn.commit()
 
+    @staticmethod
+    def _requires_vacuum_for_item(item_type, total_size):
+        """Apply the auto-vacuum policy to authoritative DB metadata."""
+
+        normalized_type = str(item_type or "").strip().lower()
+        if normalized_type == "text":
+            return False
+        return (
+            normalized_type in PLAYABLE_NODE_TYPES
+            or int(total_size or 0) >= AUTO_VACUUM_THRESHOLD_BYTES
+        )
+
     def delete_node_cascade(
         self,
         item_id,
@@ -2208,6 +2364,14 @@ class NodeRepository:
             (item_id,),
         )
         row = self.cursor.fetchone()
+
+        item_type = str(row[0]) if row else ""
+        total_size = int(row[1] or 0) if row else 0
+        requires_vacuum = self._requires_vacuum_for_item(
+            item_type,
+            total_size,
+        )
+        result_box = {}
 
         if row:
             item_type, total_size = row
@@ -2227,6 +2391,7 @@ class NodeRepository:
                 ).fetchone()
             total_chunks = int(total_chunks or 0)
             total_bytes = int(total_bytes or 0)
+            result_box["deleted_bytes"] = total_bytes
             removed = 0
             removed_bytes = 0
             while True:
@@ -2262,12 +2427,22 @@ class NodeRepository:
                     "Committing deletion..."
                 )
 
+        def report_success():
+            result = DeletionResult(
+                item_ids=(int(item_id),),
+                item_types=(item_type,) if row else (),
+                deleted_bytes=int(result_box.get("deleted_bytes", 0)),
+                requires_vacuum=requires_vacuum,
+            )
+            if on_success:
+                on_success(result)
+
         return self._execute_on_separate_connection(
             do_delete,
             on_start=on_start_vacuum,
             on_finish=on_finish_vacuum,
             on_waiting_lock=on_waiting_lock,
-            on_success=on_success,
+            on_success=report_success,
             on_error=on_error,
             label="DELETE_NODE_CASCADE",
         )
@@ -2292,8 +2467,19 @@ class NodeRepository:
             dict.fromkeys(int(item_id) for item_id in item_ids)
         )
         if not item_ids:
-            if on_finish_vacuum:
-                on_finish_vacuum()
+            try:
+                if on_success:
+                    on_success(
+                        DeletionResult(
+                            item_ids=(),
+                            item_types=(),
+                            deleted_bytes=0,
+                            requires_vacuum=False,
+                        )
+                    )
+            finally:
+                if on_finish_vacuum:
+                    on_finish_vacuum()
             return
 
         rows = []
@@ -2306,6 +2492,21 @@ class NodeRepository:
                 in_params,
             )
             rows.extend(self.cursor.fetchall())
+
+        row_by_id = {
+            int(item_id): (str(item_type or ""), int(total_size or 0))
+            for item_id, item_type, total_size in rows
+        }
+        item_types = tuple(
+            metadata[0]
+            for item_id in item_ids
+            if (metadata := row_by_id.get(int(item_id))) is not None
+        )
+        requires_vacuum = any(
+            self._requires_vacuum_for_item(item_type, total_size)
+            for item_type, total_size in row_by_id.values()
+        )
+        result_box = {}
 
         try:
             from ..io.stream import close_streams_for_item
@@ -2331,6 +2532,7 @@ class NodeRepository:
                     ).fetchone()
                 total_chunks += int(chunk_count or 0)
                 total_bytes += int(chunk_bytes or 0)
+            result_box["deleted_bytes"] = total_bytes
             removed = 0
             removed_bytes = 0
             for start in range(0, len(item_ids), 900):
@@ -2381,12 +2583,22 @@ class NodeRepository:
                     "Committing deletion..."
                 )
 
+        def report_success():
+            result = DeletionResult(
+                item_ids=tuple(int(item_id) for item_id in item_ids),
+                item_types=item_types,
+                deleted_bytes=int(result_box.get("deleted_bytes", 0)),
+                requires_vacuum=requires_vacuum,
+            )
+            if on_success:
+                on_success(result)
+
         return self._execute_on_separate_connection(
             do_delete,
             on_start=on_start_vacuum,
             on_finish=on_finish_vacuum,
             on_waiting_lock=on_waiting_lock,
-            on_success=on_success,
+            on_success=report_success,
             on_error=on_error,
             label="DELETE_NODES_CASCADE",
         )

@@ -76,9 +76,9 @@ Rectangle {
     property bool _connectionHitPending: false
     property bool _viewportUpdatePending: false
     readonly property bool frameClockNeeded: _connectionHitPending
-            || _viewportUpdatePending
             || isNodeTransforming
             || viewport.frameClockNeeded
+    property int _lastReportedZoomPercent: -1
 
     property alias _contentLayerX: contentLayer.x
     property alias _contentLayerY: contentLayer.y
@@ -104,6 +104,7 @@ Rectangle {
     Component.onCompleted: {
         viewport.initialize()
         root.updateViewportModels()
+        root._lastReportedZoomPercent = Math.round(root.contentScale * 100)
         if (root.frameClock) root.frameClock.setActive(root.frameClockNeeded)
     }
     Component.onDestruction: {
@@ -223,6 +224,9 @@ Rectangle {
         contentLayer: contentLayer
         preferAngleDelta: root.wheelPreferAngleDelta
         onZoomChanged: function(scale) {
+            var percent = Math.round(scale * 100)
+            if (percent === root._lastReportedZoomPercent) return
+            root._lastReportedZoomPercent = percent
             if (root.canvasController) {
                 root.canvasController.report_zoom(scale)
             }
@@ -477,10 +481,6 @@ Rectangle {
                 root.activeNodeResizeController.advanceResizeFrame()
             }
             viewport.advanceFrame(frameTime)
-            if (root._viewportUpdatePending) {
-                root._viewportUpdatePending = false
-                root.updateViewportModels()
-            }
             if (root._connectionHitPending && !root.isNodeTransforming) {
                 root._connectionHitPending = false
                 if (globalHover.hovered) {
@@ -500,6 +500,17 @@ Rectangle {
         repeat: false
     }
 
+    Timer {
+        id: viewportUpdateTimer
+        interval: 16
+        repeat: false
+        onTriggered: {
+            if (!root._viewportUpdatePending) return
+            root._viewportUpdatePending = false
+            root.updateViewportModels()
+        }
+    }
+
     Connections {
         target: contentLayer
         function onXChanged() { root.scheduleViewportUpdate() }
@@ -509,7 +520,6 @@ Rectangle {
     Connections {
         target: viewport
         function onContentScaleChanged() { root.scheduleViewportUpdate() }
-        function onCameraChanged() { root.scheduleViewportUpdate() }
     }
 
     onActiveFocusChanged: {
@@ -549,9 +559,11 @@ Rectangle {
     }
 
     function scheduleViewportUpdate() {
-        // Coalesce changes and apply them on the next rendered frame. Unlike a
-        // fixed 16 ms timer, this follows the actual display refresh rate.
+        // Viewport virtualization does not need to run at 144/240 Hz.  Keep
+        // camera motion smooth while limiting Python model/filter work to a
+        // predictable 60 Hz cadence.
         root._viewportUpdatePending = true
+        if (!viewportUpdateTimer.running) viewportUpdateTimer.start()
     }
 
     function openTagPickerForNode(nodeId, anchorItem) {

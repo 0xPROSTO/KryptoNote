@@ -27,6 +27,16 @@ class DatabaseOperationProgress:
 
 
 @dataclass(frozen=True, slots=True)
+class DeletionResult:
+    """Authoritative result of a node deletion read from the database."""
+
+    item_ids: tuple[int, ...]
+    item_types: tuple[str, ...]
+    deleted_bytes: int = 0
+    requires_vacuum: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class DatabaseSpaceStats:
     main_bytes: int = 0
     wal_bytes: int = 0

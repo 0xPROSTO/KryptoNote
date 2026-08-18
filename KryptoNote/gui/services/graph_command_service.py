@@ -60,12 +60,16 @@ class GraphCommandService:
         self,
         on_start=None,
         on_waiting_lock=None,
+        on_phase=None,
+        on_finish=None,
         on_success=None,
         on_error=None,
     ):
         return self._node_service.vacuum_database(
             on_start_vacuum=on_start,
+            on_finish_vacuum=on_finish,
             on_waiting_lock=on_waiting_lock,
+            on_phase=on_phase,
             on_success=on_success,
             on_error=on_error,
         )

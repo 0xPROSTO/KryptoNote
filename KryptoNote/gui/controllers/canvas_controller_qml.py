@@ -648,7 +648,10 @@ class QmlCanvasController(QObject):
     @Slot(int)
     def delete_node(self, node_id):
         """Legacy direct delete (no animation)."""
-        self._delete_ctrl.perform_delete(node_id)
+        # The delete controller now starts the database operation before the
+        # visual transition.  Keep this legacy entry point functional without
+        # making the animation callback responsible for correctness.
+        self._delete_ctrl.request_animated_delete(node_id)
 
     @Slot()
     def delete_selected_nodes(self):
@@ -1085,7 +1088,7 @@ class QmlCanvasController(QObject):
         try:
             self._service.delete_nodes_cascade(
                 entry["created_ids"],
-                on_success=lambda: self._graph_delete_finished.emit(
+                on_success=lambda _result=None: self._graph_delete_finished.emit(
                     entry, None, "undo"
                 ),
                 on_error=lambda error: self._graph_delete_finished.emit(

@@ -446,6 +446,7 @@ class NodeService:
             on_start_vacuum=None,
             on_finish_vacuum=None,
             on_waiting_lock=None,
+            on_phase=None,
             on_success=None,
             on_error=None,
     ):
@@ -453,6 +454,7 @@ class NodeService:
             on_start_vacuum=on_start_vacuum,
             on_finish_vacuum=on_finish_vacuum,
             on_waiting_lock=on_waiting_lock,
+            on_phase=on_phase,
             on_success=on_success,
             on_error=on_error,
         )

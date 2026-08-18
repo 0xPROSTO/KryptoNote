@@ -28,6 +28,7 @@ class DimOverlay(QFrame):
         self.anim.setDuration(300)
         self.anim.setEasingCurve(QEasingCurve.Type.OutQuad)
         self._delete_on_finished_connected = False
+        self._hide_on_finished_connected = False
 
         if auto_show:
             self.show()
@@ -36,6 +37,7 @@ class DimOverlay(QFrame):
             self.hide()
 
     def fade_in(self):
+        self.set_input_blocked(True)
         self.show()
         self.raise_()
         self.anim.stop()
@@ -56,6 +58,9 @@ class DimOverlay(QFrame):
         self.anim.start()
 
     def fade_out(self, delete_on_finish=True):
+        # The visual fade is not allowed to keep the application input-blocked
+        # after the owner has released the overlay.
+        self.set_input_blocked(False)
         self.anim.stop()
         self.anim.setStartValue(self.opacity_effect.opacity())
         self.anim.setEndValue(0.0)
@@ -81,6 +86,12 @@ class DimOverlay(QFrame):
                 self._hide_on_finished_connected = True
 
         self.anim.start()
+
+    def set_input_blocked(self, blocked):
+        self.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents,
+            not bool(blocked),
+        )
 
     def eventFilter(self, obj, event):
         if obj == self.parent() and event.type() == event.Type.Resize:
@@ -108,6 +119,12 @@ class WindowOverlayManager(QObject):
     def active(self):
         return bool(self._owners)
 
+    @property
+    def owners(self):
+        """Return a snapshot useful for diagnosing stale overlay owners."""
+
+        return dict(self._owners)
+
     def acquire(self, owner, alpha=Palette.OVERLAY_DIM_ALPHA):
         if not owner:
             raise ValueError("Overlay owner cannot be empty")
@@ -133,7 +150,10 @@ class WindowOverlayManager(QObject):
                 f"background-color: {Palette.overlay_rgba(alpha)}; "
                 "}"
             )
+            self._overlay.set_input_blocked(True)
             self._overlay.fade_in()
             return
         if self._overlay.isVisible():
             self._overlay.fade_out(delete_on_finish=False)
+        else:
+            self._overlay.set_input_blocked(False)
