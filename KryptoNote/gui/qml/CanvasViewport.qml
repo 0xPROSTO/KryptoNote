@@ -47,6 +47,8 @@ Item {
     property real _zoomFrom: 1.0
     property real _zoomTo: 1.0
     property real _zoomElapsed: 0.0
+    property real _zoomStartVelocity: 0.0
+    property real _zoomVelocity: 0.0
     property bool _zoomAnchorValid: false
     property real _pendingZoomLog: 0.0
     property real _pendingZoomMouseX: 0.0
@@ -171,6 +173,8 @@ Item {
         _zoomFrom = contentScale
         _zoomTo = contentScale
         _zoomElapsed = 0.0
+        _zoomStartVelocity = 0.0
+        _zoomVelocity = 0.0
     }
 
     function panBy(dx, dy, updateVelocity) {
@@ -201,6 +205,7 @@ Item {
 
         // A wheel burst arrives faster than the tween can advance.  Accumulate
         // each notch from the previous target so no discrete step is lost.
+        var previousVelocity = _zoomRunning ? _zoomVelocity : 0.0
         var pendingFactor = Math.exp(_pendingZoomLog)
         var baseScale = _zoomRunning
                 ? _zoomTo
@@ -213,8 +218,14 @@ Item {
         _zoomFrom = contentScale
         _zoomTo = newScale
         _zoomElapsed = 0.0
+        _zoomStartVelocity = previousVelocity
+        _zoomVelocity = previousVelocity
         _zoomAnchorValid = Math.abs(_zoomTo - _zoomFrom) > 0.0001
         _zoomRunning = _zoomAnchorValid
+        if (!_zoomRunning) {
+            _zoomStartVelocity = 0.0
+            _zoomVelocity = 0.0
+        }
 
         // Switch input modes without producing an intermediate terminal
         // state.  Any pending continuous delta was folded into baseScale.
@@ -239,6 +250,8 @@ Item {
             _zoomFrom = contentScale
             _zoomTo = contentScale
             _zoomElapsed = 0.0
+            _zoomStartVelocity = 0.0
+            _zoomVelocity = 0.0
         }
 
         var maximumPendingLog = Math.log(maxScale / minScale)
@@ -375,6 +388,8 @@ Item {
         _zoomAnchorValid = false
         _zoomFrom = contentScale
         _zoomTo = contentScale
+        _zoomStartVelocity = 0.0
+        _zoomVelocity = 0.0
         return true
     }
 
@@ -454,10 +469,38 @@ Item {
     function _advanceZoom(dt) {
         _zoomElapsed = Math.min(zoomDuration, _zoomElapsed + dt)
         var progress = zoomDuration > 0 ? _zoomElapsed / zoomDuration : 1.0
-        var eased = 1.0 - Math.pow(1.0 - progress, 2)
-        contentScale = _zoomFrom + (_zoomTo - _zoomFrom) * eased
+        var progress2 = progress * progress
+        var progress3 = progress2 * progress
+        var fromLog = Math.log(Math.max(_zoomFrom, 0.0001))
+        var toLog = Math.log(Math.max(_zoomTo, 0.0001))
+        var distance = toLog - fromLog
+        var tangent = _zoomStartVelocity * zoomDuration
+
+        // Match SmoothedAnimation's useful property without falling back to
+        // QQuickWidget's 60 Hz animation driver: splice a new target onto the
+        // current logarithmic velocity. Limiting the tangent keeps reversals
+        // and scale-limit retargets monotonic enough to avoid overshoot spikes.
+        if (Math.abs(distance) > 0.0000001) {
+            var normalizedTangent = tangent / distance
+            normalizedTangent = Math.max(-1.0, Math.min(3.0, normalizedTangent))
+            tangent = normalizedTangent * distance
+        } else {
+            tangent = 0.0
+        }
+
+        var h00 = 2.0 * progress3 - 3.0 * progress2 + 1.0
+        var h10 = progress3 - 2.0 * progress2 + progress
+        var h01 = -2.0 * progress3 + 3.0 * progress2
+        var nextLog = h00 * fromLog + h10 * tangent + h01 * toLog
+        var derivative = ((6.0 * progress2 - 6.0 * progress) * fromLog
+                          + (3.0 * progress2 - 4.0 * progress + 1.0) * tangent
+                          + (-6.0 * progress2 + 6.0 * progress) * toLog)
+        _zoomVelocity = zoomDuration > 0 ? derivative / zoomDuration : 0.0
+        contentScale = Math.exp(nextLog)
         if (progress >= 1.0) {
             contentScale = _zoomTo
+            _zoomStartVelocity = 0.0
+            _zoomVelocity = 0.0
             _zoomAnchorValid = false
             _zoomRunning = false
         }

@@ -223,16 +223,19 @@ Rectangle {
         anchors.fill: parent
         contentLayer: contentLayer
         preferAngleDelta: root.wheelPreferAngleDelta
-        onZoomChanged: function(scale) {
-            var percent = Math.round(scale * 100)
-            if (percent === root._lastReportedZoomPercent) return
-            root._lastReportedZoomPercent = percent
-            if (root.canvasController) {
-                root.canvasController.report_zoom(scale)
-            }
-        }
         onZoomFinished: function(scale) {
+            var percent = Math.round(scale * 100)
+            if (percent !== root._lastReportedZoomPercent) {
+                root._lastReportedZoomPercent = percent
+                if (root.canvasController) {
+                    root.canvasController.report_zoom(scale)
+                }
+            }
             root._visualDetailScale = scale
+            root.scheduleViewportUpdate()
+        }
+        onZoomActiveChanged: {
+            if (viewport.zoomActive) viewportUpdateTimer.stop()
         }
         onViewportCenterShifted: function(deltaX, deltaY) {
             if (root._hasEditorReturn) {
@@ -525,7 +528,7 @@ Rectangle {
         interval: 16
         repeat: false
         onTriggered: {
-            if (!root._viewportUpdatePending) return
+            if (!root._viewportUpdatePending || viewport.zoomActive) return
             root._viewportUpdatePending = false
             root.updateViewportModels()
         }
@@ -579,10 +582,14 @@ Rectangle {
     }
 
     function scheduleViewportUpdate() {
-        // Viewport virtualization does not need to run at 144/240 Hz.  Keep
-        // camera motion smooth while limiting Python model/filter work to a
-        // predictable 60 Hz cadence.
+        // Keep the zoom tween inside QML; crossing into the Python proxy on
+        // every scale frame causes an O(N) filter rebuild. Pan remains
+        // coalesced to 60 Hz, while zoom gets one terminal flush.
         root._viewportUpdatePending = true
+        if (viewport.zoomActive) {
+            viewportUpdateTimer.stop()
+            return
+        }
         if (!viewportUpdateTimer.running) viewportUpdateTimer.start()
     }
 

@@ -20,16 +20,6 @@ Item {
     property bool showHighlight: isHighlighted || curveHovered
     property bool _isDeleting: false
     property bool _deleteFinalizes: true
-    property real _viewportMargin: 360 / Math.max(connectionItem.canvasRoot.contentScale, 0.12)
-    property var _visibleRect: connectionItem.canvasRoot.visibleCanvasRect(_viewportMargin)
-    property real _visibleLeft: _visibleRect.x
-    property real _visibleTop: _visibleRect.y
-    property real _visibleRight: _visibleRect.x + _visibleRect.width
-    property real _visibleBottom: _visibleRect.y + _visibleRect.height
-    property bool isInViewport: (maxX >= _visibleLeft
-                                 && minX <= _visibleRight
-                                 && maxY >= _visibleTop
-                                 && minY <= _visibleBottom)
     property real lodLineAmount: Math.max(
         0.0,
         Math.min(
@@ -61,8 +51,9 @@ Item {
     property real renderPadding: curveOverflow
             + (maximumStrokeWidth / 2.0 + 2.0)
               / Math.max(connectionItem.canvasRoot.minimumScale, 0.01)
+    // The viewport proxy already limits delegates. A scale-bound visibility
+    // check here would dirty every remaining connection on every zoom frame.
     property var pathGeometry: buildPathGeometry()
-    visible: isInViewport || _isDeleting
 
     x: minX - renderPadding
     y: minY - renderPadding

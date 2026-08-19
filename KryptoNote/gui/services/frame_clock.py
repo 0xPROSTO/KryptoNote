@@ -99,10 +99,11 @@ class HighRefreshFrameClock(QObject):
     @classmethod
     def _interval_for_rate(cls, refresh_rate):
         # QQuickWidget renders through an extra offscreen pass.  Driving its
-        # GUI thread above 120 Hz only queues work on high-refresh displays.
-        # Measured delta time keeps motion speed stable at the capped rate.
-        minimum_interval = math.ceil(1000.0 / cls.MAX_REFRESH_RATE)
-        return max(minimum_interval, int(1000.0 / float(refresh_rate)))
+        # GUI thread far above 120 Hz only queues work.  Use the nearest fast
+        # integer cadence below the requested period: at the 120 Hz cap this
+        # is 8 ms instead of a visibly uneven 9 ms (~111 Hz). Measured delta
+        # time keeps motion speed stable despite millisecond timer precision.
+        return max(1, int(1000.0 / float(refresh_rate)))
 
     @Slot()
     def _on_timeout(self):
