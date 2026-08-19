@@ -29,14 +29,16 @@ Item {
     property bool _inertiaRunning: false
     property bool _keyboardPanRunning: false
     property bool _zoomRunning: false
-    property bool _zoomInputPending: false
+    property bool _continuousZoomPending: false
+    property bool _continuousZoomGestureActive: false
     property bool _panRunning: false
     property bool _initialized: false
     property real _lastViewportWidth: 0.0
     property real _lastViewportHeight: 0.0
+    readonly property bool zoomActive: _zoomRunning
+            || _continuousZoomPending || _continuousZoomGestureActive
     readonly property bool frameClockNeeded: _inertiaRunning
-            || _keyboardPanRunning || _zoomRunning || _zoomInputPending
-            || _panRunning
+            || _keyboardPanRunning || zoomActive || _panRunning
 
     property real _zoomAnchorX: 0
     property real _zoomAnchorY: 0
@@ -49,7 +51,9 @@ Item {
     property real _pendingZoomLog: 0.0
     property real _pendingZoomMouseX: 0.0
     property real _pendingZoomMouseY: 0.0
+    property real _continuousZoomIdleElapsed: 0.0
     readonly property real zoomDuration: 0.12
+    readonly property real continuousZoomIdleDuration: 0.08
 
     property real _panFromX: 0.0
     property real _panFromY: 0.0
@@ -59,6 +63,7 @@ Item {
     readonly property real panDuration: 0.20
 
     signal zoomChanged(real scale)
+    signal zoomFinished(real scale)
     signal viewportCenterShifted(real deltaX, real deltaY)
 
     // The camera contract is deliberately kept in one place.  All canvas
@@ -138,6 +143,10 @@ Item {
             _zoomMouseX += deltaX
             _zoomMouseY += deltaY
         }
+        if (_continuousZoomPending) {
+            _pendingZoomMouseX += deltaX
+            _pendingZoomMouseY += deltaY
+        }
         viewportCenterShifted(deltaX, deltaY)
     }
 
@@ -145,7 +154,8 @@ Item {
         _inertiaRunning = false
         _keyboardPanRunning = false
         _zoomRunning = false
-        _zoomInputPending = false
+        _continuousZoomPending = false
+        _continuousZoomGestureActive = false
         _zoomAnchorValid = false
         _panRunning = false
         keyboardPanLeft = false
@@ -157,6 +167,10 @@ Item {
         keyboardVelocityX = 0
         keyboardVelocityY = 0
         _pendingZoomLog = 0.0
+        _continuousZoomIdleElapsed = 0.0
+        _zoomFrom = contentScale
+        _zoomTo = contentScale
+        _zoomElapsed = 0.0
     }
 
     function panBy(dx, dy, updateVelocity) {
@@ -180,31 +194,65 @@ Item {
         zoomByFactor(mouseX, mouseY, zoomIn ? zoomFactor : (1.0 / zoomFactor))
     }
 
-    function zoomByFactor(mouseX, mouseY, factor, preserveAnimation) {
+    function zoomByFactor(mouseX, mouseY, factor) {
         if (!contentLayer) return
         factor = Number(factor)
         if (!isFinite(factor) || factor <= 0.0) return
-        var newScale = Math.max(minScale, Math.min(maxScale, contentScale * factor))
+
+        // A wheel burst arrives faster than the tween can advance.  Accumulate
+        // each notch from the previous target so no discrete step is lost.
+        var pendingFactor = Math.exp(_pendingZoomLog)
+        var baseScale = _zoomRunning
+                ? _zoomTo
+                : contentScale * pendingFactor
+        var newScale = Math.max(minScale, Math.min(maxScale, baseScale * factor))
         _zoomAnchorX = (Number(mouseX) - contentLayer.x) / safeScale
         _zoomAnchorY = (Number(mouseY) - contentLayer.y) / safeScale
-        _zoomMouseX = mouseX
-        _zoomMouseY = mouseY
+        _zoomMouseX = Number(mouseX)
+        _zoomMouseY = Number(mouseY)
         _zoomFrom = contentScale
         _zoomTo = newScale
-        if (!preserveAnimation || !_zoomRunning) _zoomElapsed = 0.0
+        _zoomElapsed = 0.0
         _zoomAnchorValid = Math.abs(_zoomTo - _zoomFrom) > 0.0001
         _zoomRunning = _zoomAnchorValid
+
+        // Switch input modes without producing an intermediate terminal
+        // state.  Any pending continuous delta was folded into baseScale.
+        _continuousZoomPending = false
+        _continuousZoomGestureActive = false
+        _continuousZoomIdleElapsed = 0.0
+        _pendingZoomLog = 0.0
     }
 
-    function queuePixelZoom(mouseX, mouseY, magnitude) {
-        magnitude = Number(magnitude)
-        if (!isFinite(magnitude) || Math.abs(magnitude) <= 0.0001) {
+    function queueContinuousZoom(mouseX, mouseY, steps) {
+        steps = Number(steps)
+        if (!isFinite(steps) || Math.abs(steps) <= 0.0001) {
             return false
         }
-        _pendingZoomLog += magnitude * Math.log(zoomFactor)
+
+        // Mark the continuous gesture first so canceling an in-flight mouse
+        // tween cannot briefly emit zoomFinished between input modes.
+        _continuousZoomGestureActive = true
+        if (_zoomRunning) {
+            _zoomRunning = false
+            _zoomAnchorValid = false
+            _zoomFrom = contentScale
+            _zoomTo = contentScale
+            _zoomElapsed = 0.0
+        }
+
+        var maximumPendingLog = Math.log(maxScale / minScale)
+        _pendingZoomLog = Math.max(
+            -maximumPendingLog,
+            Math.min(
+                maximumPendingLog,
+                _pendingZoomLog + steps * Math.log(zoomFactor)
+            )
+        )
         _pendingZoomMouseX = Number(mouseX)
         _pendingZoomMouseY = Number(mouseY)
-        _zoomInputPending = true
+        _continuousZoomIdleElapsed = 0.0
+        _continuousZoomPending = true
         return true
     }
 
@@ -297,23 +345,49 @@ Item {
         if (!isFinite(dt) || dt <= 0) return
         if (_inertiaRunning) _advanceInertia(dt)
         if (_keyboardPanRunning) _advanceKeyboardPan(dt)
-        if (_zoomInputPending) _applyPendingZoom()
+        var continuousZoomApplied = false
+        if (_continuousZoomPending) {
+            continuousZoomApplied = _applyPendingContinuousZoom()
+        }
         if (_zoomRunning) _advanceZoom(dt)
+        if (_continuousZoomGestureActive) {
+            _advanceContinuousZoomGesture(dt, continuousZoomApplied)
+        }
         if (_panRunning) _advancePan(dt)
     }
 
-    function _applyPendingZoom() {
-        var maxStep = Math.log(zoomFactor) * 4.0
-        var step = Math.max(-maxStep, Math.min(maxStep, _pendingZoomLog))
-        _pendingZoomLog -= step
-        _zoomInputPending = Math.abs(_pendingZoomLog) > 0.0001
-        if (Math.abs(step) <= 0.0001) return
-        zoomByFactor(
-            _pendingZoomMouseX,
-            _pendingZoomMouseY,
-            Math.exp(step),
-            true
+    function _applyPendingContinuousZoom() {
+        var step = _pendingZoomLog
+        _pendingZoomLog = 0.0
+        _continuousZoomPending = false
+        if (Math.abs(step) <= 0.0001 || !contentLayer) return false
+
+        _zoomAnchorX = (_pendingZoomMouseX - contentLayer.x) / safeScale
+        _zoomAnchorY = (_pendingZoomMouseY - contentLayer.y) / safeScale
+        _zoomMouseX = _pendingZoomMouseX
+        _zoomMouseY = _pendingZoomMouseY
+        var newScale = Math.max(
+            minScale,
+            Math.min(maxScale, contentScale * Math.exp(step))
         )
+        _zoomAnchorValid = Math.abs(newScale - contentScale) > 0.0001
+        if (_zoomAnchorValid) contentScale = newScale
+        _zoomAnchorValid = false
+        _zoomFrom = contentScale
+        _zoomTo = contentScale
+        return true
+    }
+
+    function _advanceContinuousZoomGesture(dt, inputApplied) {
+        if (inputApplied) {
+            _continuousZoomIdleElapsed = 0.0
+            return
+        }
+        _continuousZoomIdleElapsed += dt
+        if (_continuousZoomIdleElapsed >= continuousZoomIdleDuration) {
+            _continuousZoomIdleElapsed = 0.0
+            _continuousZoomGestureActive = false
+        }
     }
 
     function _advanceInertia(dt) {
@@ -384,8 +458,8 @@ Item {
         contentScale = _zoomFrom + (_zoomTo - _zoomFrom) * eased
         if (progress >= 1.0) {
             contentScale = _zoomTo
-            _zoomRunning = false
             _zoomAnchorValid = false
+            _zoomRunning = false
         }
     }
 
@@ -442,23 +516,51 @@ Item {
         return (deviceType & PointerDevice.TouchPad) !== 0
     }
 
+    function _dominantWheelComponent(event, propertyName) {
+        var horizontal = _wheelHorizontalComponent(event, propertyName)
+        var vertical = _wheelComponent(event, propertyName)
+        return Math.abs(vertical) > 0.001 ? vertical : horizontal
+    }
+
+    function _usesContinuousZoomInput(event) {
+        var angle = _dominantWheelComponent(event, "angleDelta")
+        if (event && event.device
+                && (event.device.type & PointerDevice.TouchPad) !== 0) {
+            return true
+        }
+        if (Math.abs(angle) > 0.001 && Math.abs(angle) < 120.0) {
+            return true
+        }
+        var pixel = _dominantWheelComponent(event, "pixelDelta")
+        return !preferAngleDelta
+                && Math.abs(angle) <= 0.001
+                && Math.abs(pixel) > 0.001
+    }
+
+    function _continuousZoomSteps(event) {
+        var angle = _dominantWheelComponent(event, "angleDelta")
+        if (Math.abs(angle) > 0.001) return angle / 120.0
+        if (preferAngleDelta) return 0.0
+        return _dominantWheelComponent(event, "pixelDelta") / 120.0
+    }
+
     function handleWheel(event, zoom) {
         var mouseX = event && event.x !== undefined ? event.x : viewport.width / 2
         var mouseY = event && event.y !== undefined ? event.y : viewport.height / 2
         if (zoom) {
             var angleX = _wheelHorizontalComponent(event, "angleDelta")
             var angleY = _wheelComponent(event, "angleDelta")
-            var usePixels = _usesPixelWheel(event)
-            if (!usePixels && (Math.abs(angleX) > 0.001 || Math.abs(angleY) > 0.001)) {
+            if (_usesContinuousZoomInput(event)) {
+                return viewport.queueContinuousZoom(
+                    mouseX,
+                    mouseY,
+                    _continuousZoomSteps(event)
+                )
+            }
+            if (Math.abs(angleX) > 0.001 || Math.abs(angleY) > 0.001) {
                 var angle = Math.abs(angleY) > 0.001 ? angleY : angleX
                 viewport.zoomAt(mouseX, mouseY, angle > 0)
                 return true
-            }
-            var pixelX = _wheelHorizontalComponent(event, "pixelDelta")
-            var pixelY = _wheelComponent(event, "pixelDelta")
-            if (usePixels || Math.abs(angleX) <= 0.001 && Math.abs(angleY) <= 0.001) {
-                var pixel = Math.abs(pixelY) > 0.001 ? pixelY : pixelX
-                return viewport.queuePixelZoom(mouseX, mouseY, pixel / 240.0)
             }
             return false
         }
@@ -495,11 +597,15 @@ Item {
 
     onContentScaleChanged: {
         if (!contentLayer) return
-        if (_zoomRunning || _zoomAnchorValid) {
+        if (_zoomAnchorValid) {
             contentLayer.x = _zoomMouseX - _zoomAnchorX * contentScale
             contentLayer.y = _zoomMouseY - _zoomAnchorY * contentScale
         }
         zoomChanged(contentScale)
+    }
+
+    onZoomActiveChanged: {
+        if (!zoomActive) zoomFinished(contentScale)
     }
 
 }

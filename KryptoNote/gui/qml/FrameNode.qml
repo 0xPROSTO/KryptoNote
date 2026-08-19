@@ -49,7 +49,8 @@ Item {
                    <= titleBlob.y + lockButton.y + lockButton.height)
     readonly property real surfaceTopInset: 15
     readonly property real topResizeExclusionWidth:
-            titleBlob.width + 8 / Math.max(frame.canvasRoot.contentScale, 0.25)
+            titleBlob.width
+            + 8 / Math.max(frame.canvasRoot.visualDetailScale, 0.25)
     readonly property real topResizeExclusionHeight: Math.max(
         0,
         titleBlob.y + titleBlob.height - frame.surfaceTopInset

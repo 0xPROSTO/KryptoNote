@@ -28,15 +28,10 @@ class HighRefreshFrameClock(QObject):
     intervalMsChanged = Signal()
 
     MIN_REFRESH_RATE = 30.0
-    MAX_REFRESH_RATE = 240.0
+    MAX_REFRESH_RATE = 120.0
 
-    def __init__(self, update_callback=None, parent=None):
+    def __init__(self, parent=None):
         super().__init__(parent)
-        # Kept as a compatibility argument for older callers, but the
-        # QQuickWidget scene schedules its own paint after QML properties
-        # change.  Calling view.update() from every tick caused redundant
-        # offscreen paints and input latency on Linux.
-        self._update_callback = None
         self._active = False
         self._refresh_rate = 60.0
         self._interval_ms = self._interval_for_rate(self._refresh_rate)
@@ -103,9 +98,11 @@ class HighRefreshFrameClock(QObject):
 
     @classmethod
     def _interval_for_rate(cls, refresh_rate):
-        # Run at least as often as the display so DWM/compositor always has a
-        # fresh canvas frame. Measured delta time keeps motion speed stable.
-        return max(1, int(1000.0 / float(refresh_rate)))
+        # QQuickWidget renders through an extra offscreen pass.  Driving its
+        # GUI thread above 120 Hz only queues work on high-refresh displays.
+        # Measured delta time keeps motion speed stable at the capped rate.
+        minimum_interval = math.ceil(1000.0 / cls.MAX_REFRESH_RATE)
+        return max(minimum_interval, int(1000.0 / float(refresh_rate)))
 
     @Slot()
     def _on_timeout(self):

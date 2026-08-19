@@ -17,7 +17,7 @@ Item {
     property real topEdgeExclusionHeight: 0
 
     readonly property real _inverseCanvasScale:
-            1 / Math.max(handle.canvasRoot.contentScale, 0.25)
+            1 / Math.max(handle.canvasRoot.visualDetailScale, 0.25)
     readonly property real _edgeHitSize: Math.min(
         Math.min(width, height) / 3,
         8 * _inverseCanvasScale

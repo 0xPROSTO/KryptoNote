@@ -7,7 +7,6 @@ Item {
     required property var canvasRoot
     required property var canvasController
     required property var appTheme
-    signal contextMenuRequested(int connId, var sourceItem, real localX, real localY)
     z: showHighlight ? 1 : 0
 
     property real minX: Math.min(connectionItem.model.connStartEdgeX, connectionItem.model.connEndEdgeX)
@@ -31,12 +30,20 @@ Item {
                                  && minX <= _visibleRight
                                  && maxY >= _visibleTop
                                  && minY <= _visibleBottom)
-    property real lodLineAmount: Math.max(0.0, Math.min(1.0, (0.45 - connectionItem.canvasRoot.contentScale) / 0.25))
+    property real lodLineAmount: Math.max(
+        0.0,
+        Math.min(
+            1.0,
+            (0.45 - connectionItem.canvasRoot.visualDetailScale) / 0.25
+        )
+    )
     property real screenStrokeWidth: showHighlight
             ? connectionItem.appTheme.connectionHighlightWidth
             : (connectionItem.appTheme.connectionStrokeWidth - lodLineAmount * 0.2)
-    property real effectiveStrokeWidth: screenStrokeWidth / Math.max(connectionItem.canvasRoot.contentScale, 0.12)
-    property real hitRadius: Math.max(10.0 / Math.max(connectionItem.canvasRoot.contentScale, 0.12), effectiveStrokeWidth * 2.0)
+    property real effectiveStrokeWidth: screenStrokeWidth / Math.max(
+        connectionItem.canvasRoot.visualDetailScale,
+        0.12
+    )
     property real endpointDistance: Math.sqrt(
         Math.pow(connectionItem.model.connEndEdgeX - connectionItem.model.connStartEdgeX, 2)
         + Math.pow(connectionItem.model.connEndEdgeY - connectionItem.model.connStartEdgeY, 2)
@@ -47,14 +54,20 @@ Item {
                ? Math.min(80, endpointDistance * 0.22)
                : (connectionItem.appTheme.connectionCurveFormula === "s_curve"
                   ? Math.min(64, endpointDistance * 0.18) : 0))
-    property real hitPadding: hitRadius + 8.0 + curveOverflow
+    property real maximumStrokeWidth: Math.max(
+        connectionItem.appTheme.connectionStrokeWidth,
+        connectionItem.appTheme.connectionHighlightWidth
+    )
+    property real renderPadding: curveOverflow
+            + (maximumStrokeWidth / 2.0 + 2.0)
+              / Math.max(connectionItem.canvasRoot.minimumScale, 0.01)
     property var pathGeometry: buildPathGeometry()
     visible: isInViewport || _isDeleting
 
-    x: minX - hitPadding
-    y: minY - hitPadding
-    width: maxX - minX + hitPadding * 2
-    height: Math.max(1, maxY - minY + hitPadding * 2)
+    x: minX - renderPadding
+    y: minY - renderPadding
+    width: maxX - minX + renderPadding * 2
+    height: Math.max(1, maxY - minY + renderPadding * 2)
 
     onIsDeletingChanged: {
         if (isDeleting) {
@@ -87,50 +100,11 @@ Item {
                          ? [1, 2.4] : [5, 3]
 
             Behavior on strokeColor { ColorAnimation { duration: 120 } }
-            Behavior on strokeWidth { NumberAnimation { duration: 120 } }
 
             PathSvg {
                 path: connectionItem.pathGeometry.path
             }
         }
-    }
-
-    MouseArea {
-        id: connectionHover
-        anchors.fill: parent
-        hoverEnabled: false
-        acceptedButtons: Qt.RightButton
-        enabled: connectionItem.visible
-
-        onPressed: function(mouse) {
-            if (!connectionItem.checkDistance(mouse.x, mouse.y)) {
-                mouse.accepted = false;
-                return;
-            }
-        }
-
-        onClicked: function(mouse) {
-            if (!connectionItem.checkDistance(mouse.x, mouse.y)) {
-                mouse.accepted = false;
-                return;
-            }
-            if (mouse.button === Qt.RightButton) {
-                connectionItem.contextMenuRequested(connectionItem.model.connId, connectionHover, mouse.x, mouse.y)
-            }
-        }
-    }
-
-    function checkDistance(px, py) {
-        var minDSq = 1000000;
-        var segments = connectionItem.pathGeometry.segments;
-        for (var i = 0; i < segments.length; i++) {
-            var segment = segments[i];
-            var dsq = distanceToSegmentSquared(
-                px, py, segment[0], segment[1], segment[2], segment[3]
-            );
-            if (dsq < minDSq) minDSq = dsq;
-        }
-        return minDSq <= connectionItem.hitRadius * connectionItem.hitRadius;
     }
 
     function buildPathGeometry() {
@@ -416,21 +390,6 @@ Item {
             segments.push([start[0], start[1], end[0], end[1]]);
         }
     }
-
-    function distanceToSegmentSquared(px, py, x1, y1, x2, y2) {
-        var dx = x2 - x1;
-        var dy = y2 - y1;
-        var lengthSq = dx * dx + dy * dy;
-        if (lengthSq <= 0.0001) {
-            return (px - x1) * (px - x1) + (py - y1) * (py - y1);
-        }
-        var t = ((px - x1) * dx + (py - y1) * dy) / lengthSq;
-        t = Math.max(0.0, Math.min(1.0, t));
-        var cx = x1 + t * dx;
-        var cy = y1 + t * dy;
-        return (px - cx) * (px - cx) + (py - cy) * (py - cy);
-    }
-
 
     function animateDeletion(finalizeAfterAnimation) {
         if (_isDeleting) return;

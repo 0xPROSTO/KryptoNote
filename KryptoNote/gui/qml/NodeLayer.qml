@@ -15,16 +15,31 @@ Item {
 
     Repeater {
         model: nodeLayer.viewportModel
-        delegate: NodeDelegate {
-            canvasRoot: nodeLayer.canvasRoot
-            nodeModel: nodeLayer.nodeModel
-            canvasController: nodeLayer.canvasController
-            viewerController: nodeLayer.viewerController
-            contentLayer: nodeLayer.contentLayer
-            appTheme: nodeLayer.appTheme
-            renderFrames: nodeLayer.framesOnly
-            onContextMenuRequested: function(nodeId, nodeType, sourceItem, localX, localY) {
-                nodeLayer.contextMenuRequested(nodeId, nodeType, sourceItem, localX, localY)
+        delegate: Loader {
+            id: delegateLoader
+            required property var model
+            active: nodeLayer.framesOnly
+                    ? delegateLoader.model.nodeType === "frame"
+                    : delegateLoader.model.nodeType !== "frame"
+
+            sourceComponent: Component {
+                NodeDelegate {
+                    model: delegateLoader.model
+                    canvasRoot: nodeLayer.canvasRoot
+                    nodeModel: nodeLayer.nodeModel
+                    canvasController: nodeLayer.canvasController
+                    viewerController: nodeLayer.viewerController
+                    contentLayer: nodeLayer.contentLayer
+                    appTheme: nodeLayer.appTheme
+                    renderFrames: nodeLayer.framesOnly
+                    onContextMenuRequested: function(
+                        nodeId, nodeType, sourceItem, localX, localY
+                    ) {
+                        nodeLayer.contextMenuRequested(
+                            nodeId, nodeType, sourceItem, localX, localY
+                        )
+                    }
+                }
             }
         }
     }

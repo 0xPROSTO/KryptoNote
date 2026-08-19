@@ -7,7 +7,6 @@ Item {
     required property var canvasRoot
     required property var canvasController
     required property var appTheme
-    signal contextMenuRequested(int connId, var sourceItem, real localX, real localY)
 
     Repeater {
         model: connectionLayer.viewportModel
@@ -15,9 +14,6 @@ Item {
             canvasRoot: connectionLayer.canvasRoot
             canvasController: connectionLayer.canvasController
             appTheme: connectionLayer.appTheme
-            onContextMenuRequested: function(connId, sourceItem, localX, localY) {
-                connectionLayer.contextMenuRequested(connId, sourceItem, localX, localY)
-            }
         }
     }
 }

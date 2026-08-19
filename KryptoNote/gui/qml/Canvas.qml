@@ -28,6 +28,9 @@ Rectangle {
     focus: true
 
     property alias contentScale: viewport.contentScale
+    readonly property real minimumScale: viewport.minScale
+    property real _visualDetailScale: 1.0
+    readonly property real visualDetailScale: _visualDetailScale
     readonly property real cameraOffsetX: viewport.cameraOffsetX
     readonly property real cameraOffsetY: viewport.cameraOffsetY
     property real gridSize: 100.0
@@ -103,6 +106,7 @@ Rectangle {
 
     Component.onCompleted: {
         viewport.initialize()
+        root._visualDetailScale = root.contentScale
         root.updateViewportModels()
         root._lastReportedZoomPercent = Math.round(root.contentScale * 100)
         if (root.frameClock) root.frameClock.setActive(root.frameClockNeeded)
@@ -171,16 +175,12 @@ Rectangle {
         }
 
         ConnectionLayer {
-            id: connectionLayer
             z: 1
             viewportModel: root.connectionViewportModel
             canvasRoot: root
             canvasController: root.canvasController
             appTheme: root.appTheme
             anchors.fill: parent
-            onContextMenuRequested: function(connId, sourceItem, localX, localY) {
-                canvasContextMenu.openForConnection(connId, sourceItem, localX, localY)
-            }
         }
 
         NodeLayer {
@@ -231,6 +231,9 @@ Rectangle {
                 root.canvasController.report_zoom(scale)
             }
         }
+        onZoomFinished: function(scale) {
+            root._visualDetailScale = scale
+        }
         onViewportCenterShifted: function(deltaX, deltaY) {
             if (root._hasEditorReturn) {
                 root._editorReturnX += deltaX
@@ -260,6 +263,23 @@ Rectangle {
         onContextMenuRequested: function(
             sourceItem, localX, localY, contentX, contentY
         ) {
+            var connectionId = 0
+            if (root.connectionModel) {
+                connectionId = root.connectionModel.hit_test_connection(
+                    contentX,
+                    contentY,
+                    10 / Math.max(root.contentScale, 0.12)
+                )
+            }
+            if (connectionId > 0) {
+                canvasContextMenu.openForConnection(
+                    connectionId,
+                    sourceItem,
+                    localX,
+                    localY
+                )
+                return
+            }
             canvasContextMenu.openForCanvas(
                 sourceItem,
                 localX,

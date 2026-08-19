@@ -23,11 +23,14 @@ Item {
              && (isInViewport || delegateRoot.model.nodeIsDeleting)
 
     property bool _isResizing: false
-    property bool _resizeHovered: resizer._isHovered
+    readonly property var _resizer: resizeLoader.item
+    readonly property bool _resizeHovered:
+            delegateRoot._resizer ? delegateRoot._resizer._isHovered : false
     readonly property bool _visualHovered:
             delegateRoot.model.nodeIsHovered
             || delegateRoot._resizeHovered
-            || resizer.topEdgeExclusionHovered
+            || (delegateRoot._resizer
+                ? delegateRoot._resizer.topEdgeExclusionHovered : false)
     readonly property real _minimumResizeWidth:
             delegateRoot.model.nodeType === "audio" ? 260 : 100
     readonly property real _minimumResizeHeight:
@@ -103,12 +106,15 @@ Item {
             isSelected: delegateRoot.visuallySelected
             isHovered: delegateRoot._visualHovered
             resizing: delegateRoot._isResizing
-            topOverlayHoverActive: resizer.topEdgeExclusionHovered
-            topOverlayHoverPosition: frameNode.mapFromItem(
-                resizer,
-                resizer.hoverPosition.x,
-                resizer.hoverPosition.y
-            )
+            topOverlayHoverActive: delegateRoot._resizer
+                    ? delegateRoot._resizer.topEdgeExclusionHovered : false
+            topOverlayHoverPosition: delegateRoot._resizer
+                    ? frameNode.mapFromItem(
+                        delegateRoot._resizer,
+                        delegateRoot._resizer.hoverPosition.x,
+                        delegateRoot._resizer.hoverPosition.y
+                    )
+                    : Qt.point(-1, -1)
             Component.onCompleted: {
                 nodeLoader.itemTopResizeExclusionWidth
                         = frameNode.topResizeExclusionWidth
@@ -150,7 +156,7 @@ Item {
             textSize: delegateRoot.model.nodeTextSize
             nodeWidth: delegateRoot.model.nodeWidth
             nodeHeight: delegateRoot.model.nodeHeight
-            canvasScale: delegateRoot.canvasRoot.contentScale
+            canvasScale: delegateRoot.canvasRoot.visualDetailScale
             tags: delegateRoot.model.nodeTags
         }
     }
@@ -248,21 +254,33 @@ Item {
         }
     }
 
-    ResizeHandle {
-        id: resizer
+    Loader {
+        id: resizeLoader
         z: 6
         anchors.fill: parent
-        visible: !delegateRoot.model.nodeIsDeleting
-        canvasRoot: delegateRoot.canvasRoot
-        nodeModel: delegateRoot.nodeModel
-        appTheme: delegateRoot.appTheme
-        nodeId: delegateRoot.model.nodeId
-        delegateItem: delegateRoot
-        nodeHovered: delegateRoot.model.nodeIsHovered
-        minimumNodeWidth: delegateRoot._minimumResizeWidth
-        minimumNodeHeight: delegateRoot._minimumResizeHeight
-        topEdgeExclusionWidth: nodeLoader.itemTopResizeExclusionWidth
-        topEdgeExclusionHeight: nodeLoader.itemTopResizeExclusionHeight
+        active: delegateRoot.matchesLayer
+                && !delegateRoot.model.nodeIsDeleting
+                && ((delegateRoot.isInViewport
+                     && delegateRoot.model.nodeIsHovered)
+                    || delegateRoot._resizeHovered
+                    || delegateRoot._isResizing)
+        sourceComponent: resizeHandleComponent
+    }
+
+    Component {
+        id: resizeHandleComponent
+        ResizeHandle {
+            canvasRoot: delegateRoot.canvasRoot
+            nodeModel: delegateRoot.nodeModel
+            appTheme: delegateRoot.appTheme
+            nodeId: delegateRoot.model.nodeId
+            delegateItem: delegateRoot
+            nodeHovered: delegateRoot.model.nodeIsHovered
+            minimumNodeWidth: delegateRoot._minimumResizeWidth
+            minimumNodeHeight: delegateRoot._minimumResizeHeight
+            topEdgeExclusionWidth: nodeLoader.itemTopResizeExclusionWidth
+            topEdgeExclusionHeight: nodeLoader.itemTopResizeExclusionHeight
+        }
     }
 
     NodeDeleteAnimation {
