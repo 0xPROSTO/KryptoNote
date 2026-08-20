@@ -272,6 +272,19 @@ Item {
 
     HoverHandler {
         id: nodeHover
+
+        onHoveredChanged: {
+            if (!hovered) {
+                handle.nodeModel.set_hovered(handle.nodeId, false)
+                return
+            }
+
+            Qt.callLater(function() {
+                if (nodeHover.hovered) {
+                    handle.nodeModel.set_hovered(handle.nodeId, true)
+                }
+            })
+        }
     }
 
     Item {

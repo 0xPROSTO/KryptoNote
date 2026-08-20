@@ -28,8 +28,13 @@ MouseArea {
                 || y < selector.height - exclusion
     }
 
-    onEntered: selector.nodeModel.set_hovered(nodeId, true)
-    onExited: selector.nodeModel.set_hovered(nodeId, false)
+    HoverHandler {
+        id: selectionHover
+        onHoveredChanged: selector.nodeModel.set_hovered(
+            selector.nodeId,
+            hovered
+        )
+    }
 
     onPressed: function(mouse) {
         if (!containsLocalPoint(mouse.x, mouse.y)) {
@@ -64,7 +69,6 @@ MouseArea {
             if (selector.canvasRoot.isCtrlHeld) {
                 selector.nodeModel.toggle_selected(nodeId)
             } else {
-                selector.nodeModel.clear_hovered()
                 selector.nodeModel.set_selection([nodeId])
             }
         }
