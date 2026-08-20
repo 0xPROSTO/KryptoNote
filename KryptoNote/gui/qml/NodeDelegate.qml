@@ -26,9 +26,12 @@ Item {
     readonly property var _resizer: resizeLoader.item
     readonly property bool _resizeHovered:
             delegateRoot._resizer ? delegateRoot._resizer._isHovered : false
+    readonly property bool _resizePointerHovered:
+            delegateRoot._resizer
+            ? delegateRoot._resizer._pointerHovered : false
     readonly property bool _visualHovered:
             delegateRoot.model.nodeIsHovered
-            || delegateRoot._resizeHovered
+            || delegateRoot._resizePointerHovered
             || (delegateRoot._resizer
                 ? delegateRoot._resizer.topEdgeExclusionHovered : false)
     readonly property real _minimumResizeWidth:
@@ -262,7 +265,7 @@ Item {
                 && !delegateRoot.model.nodeIsDeleting
                 && ((delegateRoot.isInViewport
                      && delegateRoot.model.nodeIsHovered)
-                    || delegateRoot._resizeHovered
+                    || delegateRoot._resizePointerHovered
                     || delegateRoot._isResizing)
         sourceComponent: resizeHandleComponent
     }

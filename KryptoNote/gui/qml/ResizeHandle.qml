@@ -34,6 +34,10 @@ Item {
         _primaryCornerHitSize,
         20 * _inverseCanvasScale
     )
+    readonly property real _iconGeometryScale: Math.min(
+        _inverseCanvasScale,
+        _iconSize / 20
+    )
     readonly property real _topEdgeStart: _cornerHitSize
     readonly property real _topEdgeEnd: Math.max(
         _topEdgeStart,
@@ -76,9 +80,11 @@ Item {
             || leftEdge.hovered || rightEdge.hovered
             || bottomLeft.hovered || bottomEdge.hovered
             || bottomRight.hovered
+    readonly property bool _pointerHovered:
+            nodeHover.hovered || _isHovered
     readonly property bool _isActive: _resizing
     readonly property bool _showIcon:
-            nodeHovered || nodeHover.hovered || _isHovered || _isActive
+            nodeHovered || _pointerHovered || _isActive
     readonly property bool _canResize:
             !handle.canvasRoot.isLinkMode
             && !handle.canvasRoot.isPanning
@@ -275,8 +281,6 @@ Item {
         height: handle._iconSize
         anchors.right: parent.right
         anchors.bottom: parent.bottom
-        anchors.rightMargin: -handle._inverseCanvasScale
-        anchors.bottomMargin: -handle._inverseCanvasScale
         opacity: handle._showIcon ? 0.95 : 0
         Accessible.ignored: true
 
@@ -284,13 +288,14 @@ Item {
                 handle._isHovered || handle._isActive
                 ? handle.appTheme.accentMain
                 : handle.appTheme.resizeHandle
-        readonly property real barThickness: 2 * handle._inverseCanvasScale
+        readonly property real barThickness:
+                2 * handle._iconGeometryScale
 
         Rectangle {
-            width: 16 * handle._inverseCanvasScale
+            width: 16 * handle._iconGeometryScale
             height: gripIcon.barThickness
-            x: 11 * handle._inverseCanvasScale - width / 2
-            y: 11 * handle._inverseCanvasScale - height / 2
+            x: 11 * handle._iconGeometryScale - width / 2
+            y: 11 * handle._iconGeometryScale - height / 2
             radius: height / 2
             rotation: -45
             transformOrigin: Item.Center
@@ -299,10 +304,10 @@ Item {
         }
 
         Rectangle {
-            width: 8 * handle._inverseCanvasScale
+            width: 8 * handle._iconGeometryScale
             height: gripIcon.barThickness
-            x: 14 * handle._inverseCanvasScale - width / 2
-            y: 14 * handle._inverseCanvasScale - height / 2
+            x: 14 * handle._iconGeometryScale - width / 2
+            y: 14 * handle._iconGeometryScale - height / 2
             radius: height / 2
             rotation: -45
             transformOrigin: Item.Center
