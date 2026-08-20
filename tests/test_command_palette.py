@@ -210,6 +210,9 @@ def test_double_right_shift_requires_release_and_rejects_left_or_repeat():
     assert RightShiftDoublePressDetector.is_right_shift_event(
         _FakeKeyEvent(virtual=0xFFE2), "linux"
     )
+    assert RightShiftDoublePressDetector.is_right_shift_event(
+        _FakeKeyEvent(virtual=0x3C), "darwin"
+    )
 
 
 def _load_palette():

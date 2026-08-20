@@ -63,6 +63,8 @@ class RightShiftDoublePressDetector:
             return virtual_key == 0xA1 or (scan_code & 0xFF) == 0x36
         if platform_name.startswith("linux") or platform_name in {"xcb", "wayland"}:
             return virtual_key == 0xFFE2 or scan_code in {54, 62}
+        if platform_name in {"darwin", "macos", "cocoa"}:
+            return virtual_key == 0x3C
         return virtual_key in {0xA1, 0xFFE2}
 
     def handle_press(self, event, platform_name: str | None = None) -> bool:

@@ -903,7 +903,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             ("add-video", act_vid, "Add video node", "Ctrl+Shift+M", "video", ("import video",), ("create", "media"), True, False),
             ("add-audio", act_audio, "Add audio node", "", "play", ("import audio",), ("create", "media", "sound"), True, False),
             ("add-frame", act_frame, "Add frame", "", "frame", ("new frame",), ("create", "group"), True, False),
-            ("search", act_search, "Open search panel", "Ctrl+F", "search", ("search", "find node"), ("notes", "content", "tags"), True, True),
+            ("search", act_search, "Open search panel", "Ctrl+F", "search", ("search", "find node"), ("notes", "content", "tags"), True, False),
             ("snap-grid", self.act_snap, "Toggle snap to grid", "G", "grid", ("snap to grid",), ("align", "canvas"), False, False),
             ("keybinds", act_keybinds, "Show all keybinds", "", "keyboard", ("keyboard shortcuts", "hotkeys"), ("help", "keys"), True, True),
             ("about", act_about, "About KryptoNote", "", "info", ("about",), ("version", "help"), True, True),
