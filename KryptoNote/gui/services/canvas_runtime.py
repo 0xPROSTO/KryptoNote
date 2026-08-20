@@ -24,6 +24,7 @@ class CanvasRuntime(QObject):
         node_viewport_model,
         connection_viewport_model,
         canvas_controller,
+        command_palette_controller,
         viewer_controller,
         frame_clock,
         parent=None,
@@ -35,6 +36,7 @@ class CanvasRuntime(QObject):
         self._node_viewport_model = node_viewport_model
         self._connection_viewport_model = connection_viewport_model
         self._canvas_controller = canvas_controller
+        self._command_palette_controller = command_palette_controller
         self._viewer_controller = viewer_controller
         self._frame_clock = frame_clock
         try:
@@ -72,6 +74,10 @@ class CanvasRuntime(QObject):
     @Property(QObject, constant=True)
     def canvasController(self):
         return self._canvas_controller
+
+    @Property(QObject, constant=True)
+    def commandPaletteController(self):
+        return self._command_palette_controller
 
     @Property(QObject, constant=True)
     def viewerController(self):

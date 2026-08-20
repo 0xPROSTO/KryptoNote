@@ -15,6 +15,8 @@ Rectangle {
     readonly property var nodeViewportModel: canvasRuntime ? canvasRuntime.nodeViewportModel : null
     readonly property var connectionViewportModel: canvasRuntime ? canvasRuntime.connectionViewportModel : null
     readonly property var canvasController: canvasRuntime ? canvasRuntime.canvasController : null
+    readonly property var commandPaletteController: canvasRuntime
+            ? canvasRuntime.commandPaletteController : null
     readonly property var viewerController: canvasRuntime ? canvasRuntime.viewerController : null
     readonly property var frameClock: canvasRuntime ? canvasRuntime.frameClock : null
     readonly property bool wheelPreferAngleDelta: canvasRuntime
@@ -52,6 +54,7 @@ Rectangle {
             nodeProperties.visible ? nodeProperties.nodeId : 0
     property bool isTagPickerOpen: globalTagPicker.visible || mediaViewerPanel.tagPickerOpen
     property bool isSearchPanelOpen: searchPanel.open
+    readonly property bool isCommandPaletteOpen: commandPalette.visible
     property bool isMediaViewerOpen: viewerController.active && !viewerController.detached
     readonly property bool arrayListSuppressed:
             textEditorPanel.open
@@ -314,6 +317,21 @@ Rectangle {
         }
     }
 
+    CommandPalette {
+        id: commandPalette
+        appTheme: root.appTheme
+        commandController: root.commandPaletteController
+        nodeModel: root.nodeModel
+
+        onRequestedCenter: function(nodeId) {
+            root.centerOnNodeFromSearch(nodeId)
+        }
+        onRequestedFullSearch: function(query) {
+            searchPanel.openPanelWithQuery(query)
+        }
+        onRestoreFocusRequested: root.forceActiveFocus()
+    }
+
     TextEditorPanel {
         canvasController: root.canvasController
         appTheme: root.appTheme
@@ -464,6 +482,16 @@ Rectangle {
         }
         function onNodePropertiesUpdated(nodeId) {
             nodeProperties.refreshForNode(nodeId)
+        }
+    }
+
+    Connections {
+        target: root.commandPaletteController
+
+        function onTagsRequested(nodeId) {
+            Qt.callLater(function() {
+                globalTagPicker.openForNodeAt(nodeId, null)
+            })
         }
     }
 
@@ -674,6 +702,20 @@ Rectangle {
 
     function closeSearchPanel() {
         searchPanel.closePanel()
+    }
+
+    function openCommandPalette() {
+        root.resetModifiers()
+        commandPalette.openPalette()
+    }
+
+    function closeCommandPalette() {
+        commandPalette.closePalette()
+    }
+
+    function toggleCommandPalette() {
+        root.resetModifiers()
+        commandPalette.togglePalette()
     }
 
     function setKeyboardPanKey(keyName, pressed) {

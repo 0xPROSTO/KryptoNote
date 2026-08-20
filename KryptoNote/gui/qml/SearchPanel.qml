@@ -17,6 +17,7 @@ Item {
     property real slideOffset: open ? 0 : -width
     property int currentIndex: -1
     property string lastQuery: ""
+    property string activeQuery: ""
     property string sortKey: "relevance"
     property string sortLabel: "Relevance"
     property bool convertingTags: false
@@ -347,17 +348,20 @@ Item {
                 x: 11; y: 9; width: parent.width - 22; spacing: 5
                 Text {
                     width: parent.width
-                    text: resultCard.title.length > 0 ? resultCard.title : "(untitled)"
+                    text: searchPanel.highlighted(
+                              resultCard.title.length > 0 ? resultCard.title : "(untitled)"
+                          )
+                    textFormat: Text.RichText
                     color: searchPanel.appTheme.accentMain
                     font.family: "Segoe UI Semibold"; font.pointSize: 10
                     elide: Text.ElideRight; maximumLineCount: 1
                 }
                 Text {
                     width: parent.width
-                    text: resultCard.preview
+                    text: searchPanel.highlighted(resultCard.preview)
                     color: searchPanel.appTheme.textMain
                     font.family: "Segoe UI"; font.pointSize: 9
-                    textFormat: Text.MarkdownText
+                    textFormat: Text.RichText
                     wrapMode: Text.WordWrap; elide: Text.ElideRight
                     maximumLineCount: 7
                 }
@@ -805,6 +809,7 @@ Item {
         resultModel.clear()
         currentIndex = -1
         lastQuery = ""
+        activeQuery = ""
         statusChanged("Ready")
     }
 
@@ -821,6 +826,15 @@ Item {
 
     function openPanel() {
         open = true; focusSearchInput(); publishStatus()
+    }
+    function openPanelWithQuery(query) {
+        searchDebounce.stop()
+        open = true
+        searchInput.text = String(query || "")
+        searchInput.cursorPosition = searchInput.text.length
+        searchDebounce.stop()
+        performSearch(searchInput.text.trim())
+        focusSearchInput()
     }
     function closePanel() {
         if (open) requestedCloseCompensation(width)
@@ -859,6 +873,7 @@ Item {
 
     function performSearch(textQuery) {
         lastQuery = searchSignature()
+        activeQuery = String(textQuery || "").trim()
         resultModel.clear()
         var results = searchPanel.nodeModel.search_nodes_by_filters(
             textQuery,
@@ -874,6 +889,38 @@ Item {
         currentIndex = resultModel.count > 0 ? 0 : -1
         if (currentIndex >= 0) activateResult(currentIndex)
         else publishStatus()
+    }
+
+    function escapeHtml(value) {
+        return String(value || "")
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/\"/g, "&quot;")
+            .replace(/'/g, "&#39;")
+    }
+
+    function highlighted(value) {
+        var source = String(value || "")
+        var needle = activeQuery
+        if (needle.length <= 0) {
+            return escapeHtml(source).replace(/\r\n|\r|\n/g, "<br/>")
+        }
+        var foldedSource = source.toLocaleLowerCase()
+        var foldedNeedle = needle.toLocaleLowerCase()
+        var result = ""
+        var offset = 0
+        while (offset < source.length) {
+            var index = foldedSource.indexOf(foldedNeedle, offset)
+            if (index < 0) break
+            result += escapeHtml(source.substring(offset, index))
+            result += "<b>" + escapeHtml(
+                source.substring(index, index + needle.length)
+            ) + "</b>"
+            offset = index + needle.length
+        }
+        return (result + escapeHtml(source.substring(offset)))
+            .replace(/\r\n|\r|\n/g, "<br/>")
     }
 
     function activateResult(index) {

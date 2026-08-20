@@ -38,6 +38,10 @@ from PySide6.QtQuick import QQuickView
 
 from .native_window import NativeWindowMixin
 from ..controllers.canvas_controller_qml import QmlCanvasController
+from ..controllers.command_palette_controller import (
+    CommandPaletteController,
+    RightShiftDoublePressDetector,
+)
 from ..controllers.viewer_controller import ViewerController
 from ..services.canvas_runtime import CanvasRuntime
 from ..services.frame_clock import HighRefreshFrameClock
@@ -140,6 +144,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self._operation_blocked_actions = []
         self._ctrl_held = False
         self._shift_held = False
+        self._right_shift_detector = RightShiftDoublePressDetector()
         self._manual_vacuum_finished.connect(
             self._on_manual_vacuum_finished,
             Qt.ConnectionType.QueuedConnection,
@@ -250,6 +255,13 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self.canvas_controller.initial_load_failed.connect(
             self._on_initial_load_failed
         )
+        self.command_palette_controller = CommandPaletteController(
+            self.node_model,
+            self.canvas_controller,
+            self.operation_coordinator,
+            self,
+            parent=self,
+        )
 
         self.media_preview_provider = MediaPreviewProvider()
         self.viewer_controller = ViewerController(
@@ -313,6 +325,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             node_viewport_model=self.node_viewport_model,
             connection_viewport_model=self.connection_viewport_model,
             canvas_controller=self.canvas_controller,
+            command_palette_controller=self.command_palette_controller,
             viewer_controller=self.viewer_controller,
             frame_clock=self.frame_clock,
             parent=self,
@@ -876,6 +889,49 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             self.act_snap,
         ]
 
+        palette_actions = (
+            ("save", act_save, "Save project", "Ctrl+S", "save", (), ("commit",), False, False),
+            ("select-all", act_select_all, "Select all nodes", "Ctrl+A", "select-all", ("select all",), ("selection", "canvas"), True, False),
+            ("vacuum", act_vacuum, "Vacuum database", "", "database", ("optimize database",), ("compact", "cleanup"), False, False),
+            ("backup", act_backup, "Create backup", "", "backup", ("backup project",), ("database", "copy"), False, False),
+            ("export", act_export, "Export project", "", "export", ("export",), ("markdown", "html", "pdf", "archive"), False, False),
+            ("change-password", act_change_pwd, "Change project password", "", "lock", ("change password",), ("security", "encryption"), False, False),
+            ("theme", self._theme_action, "Change theme", "", "palette", ("appearance",), ("colors", "font"), False, False),
+            ("exit", act_close, "Exit KryptoNote", "", "exit", ("close application", "quit"), ("window",), False, False),
+            ("add-text", act_note, "Add text node", "Ctrl+N", "note", ("add note", "new note"), ("create", "text"), True, False),
+            ("add-image", act_img, "Add photo node", "Ctrl+M", "image", ("add image", "import image"), ("create", "media", "picture"), True, False),
+            ("add-video", act_vid, "Add video node", "Ctrl+Shift+M", "video", ("import video",), ("create", "media"), True, False),
+            ("add-audio", act_audio, "Add audio node", "", "play", ("import audio",), ("create", "media", "sound"), True, False),
+            ("add-frame", act_frame, "Add frame", "", "frame", ("new frame",), ("create", "group"), True, False),
+            ("search", act_search, "Open search panel", "Ctrl+F", "search", ("search", "find node"), ("notes", "content", "tags"), True, True),
+            ("snap-grid", self.act_snap, "Toggle snap to grid", "G", "grid", ("snap to grid",), ("align", "canvas"), False, False),
+            ("keybinds", act_keybinds, "Show all keybinds", "", "keyboard", ("keyboard shortcuts", "hotkeys"), ("help", "keys"), True, True),
+            ("about", act_about, "About KryptoNote", "", "info", ("about",), ("version", "help"), True, True),
+        )
+        for (
+            command_id,
+            action,
+            label,
+            shortcut,
+            icon,
+            aliases,
+            keywords,
+            favorite,
+            safe_while_surface_open,
+        ) in palette_actions:
+            self.command_palette_controller.register_action(
+                command_id,
+                action,
+                label=label,
+                shortcut=shortcut,
+                icon=icon,
+                aliases=aliases,
+                keywords=keywords,
+                favorite=favorite,
+                safe_while_surface_open=safe_while_surface_open,
+            )
+        self.command_palette_controller.register_context_commands()
+
         self._register_menu_canvas_guard(file_menu, add_menu, tools_menu, help_menu)
 
         self.status_label = QLabel(self.default_status)
@@ -1047,6 +1103,8 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
     @Slot(bool, str, str, bool)
     def _on_operation_state_changed(self, active, kind, message, blocking):
         enabled = not active
+        if active and self._is_qml_command_palette_open():
+            self.close_command_palette()
         if hasattr(self, "_cancel_operation_action"):
             self._cancel_operation_action.setEnabled(
                 active
@@ -1609,10 +1667,17 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             if self._should_claim_shortcut(event):
                 event.accept()
         if event.type() == QEvent.Type.KeyPress:
+            if self._handle_command_palette_key_press(event):
+                return True
+            if self._is_qml_command_palette_open():
+                return super().eventFilter(watched, event)
             self._handle_global_modifier_press(event)
             if self._handle_global_key_press(event):
                 return True
         if event.type() == QEvent.Type.KeyRelease:
+            self._right_shift_detector.handle_release(event, sys.platform)
+            if self._is_qml_command_palette_open():
+                return super().eventFilter(watched, event)
             self._handle_global_modifier_release(event)
             if self._handle_global_key_release(event):
                 return True
@@ -1622,6 +1687,12 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         """Return True for shortcuts we want to handle in Python, not QML."""
         if not self.isActiveWindow():
             return False
+        if self._is_command_palette_shortcut(event):
+            return self._can_toggle_command_palette()
+        if self._is_qml_command_palette_open():
+            # Keep QAction/window shortcuts behind the modal palette while
+            # still letting the focused QML TextField handle editing keys.
+            return True
         key = event.key()
         if self._is_qml_node_properties_open():
             return True
@@ -1812,6 +1883,77 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
 
         return False
 
+    def _handle_command_palette_key_press(self, event):
+        if not self.isActiveWindow():
+            self._right_shift_detector.reset()
+            return False
+
+        if self._is_command_palette_shortcut(event):
+            self._right_shift_detector.reset()
+            if not self._can_toggle_command_palette():
+                return False
+            self.toggle_command_palette()
+            return True
+
+        double_right_shift = self._right_shift_detector.handle_press(
+            event,
+            sys.platform,
+        )
+        if not double_right_shift or not self._can_toggle_command_palette():
+            return False
+        self.toggle_command_palette()
+        return True
+
+    @staticmethod
+    def _is_command_palette_shortcut(event):
+        modifiers = event.modifiers()
+        if not (modifiers & Qt.KeyboardModifier.ControlModifier):
+            return False
+        if modifiers & (
+            Qt.KeyboardModifier.ShiftModifier
+            | Qt.KeyboardModifier.AltModifier
+            | Qt.KeyboardModifier.MetaModifier
+        ):
+            return False
+        return event.key() == Qt.Key.Key_Space
+
+    def _can_toggle_command_palette(self):
+        if self._is_qml_command_palette_open():
+            return True
+        if self.operation_coordinator.is_busy:
+            return False
+        if QApplication.activeModalWidget() is not None:
+            return False
+        return not (
+            self._is_qml_tag_picker_open()
+            or self._is_qml_frame_editor_open()
+            or self._is_qml_node_properties_open()
+        )
+
+    def open_command_palette(self):
+        if not self._can_toggle_command_palette():
+            return False
+        if self._is_qml_command_palette_open():
+            return True
+        self.view.setFocus(Qt.FocusReason.ShortcutFocusReason)
+        self._invoke_qml_root("openCommandPalette")
+        self._ctrl_held = False
+        self._shift_held = False
+        self._defer_modifier_sync()
+        return True
+
+    def close_command_palette(self):
+        if not self._is_qml_command_palette_open():
+            return False
+        self._invoke_qml_root("closeCommandPalette")
+        self._defer_modifier_sync()
+        return True
+
+    def toggle_command_palette(self):
+        if self._is_qml_command_palette_open():
+            return self.close_command_palette()
+        return self.open_command_palette()
+
     def _is_snap_key(self, event):
         if event.key() == Qt.Key.Key_G:
             return True
@@ -1963,6 +2105,12 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             return False
         root = self.view.rootObject()
         return bool(root and root.property("isSearchPanelOpen"))
+
+    def _is_qml_command_palette_open(self):
+        if not hasattr(self, "view"):
+            return False
+        root = self.view.rootObject()
+        return bool(root and root.property("isCommandPaletteOpen"))
 
     def _is_qml_media_viewer_open(self):
         if not hasattr(self, "view"):
