@@ -7,7 +7,11 @@ from pathlib import Path
 from cryptography.exceptions import InvalidTag
 
 from ..core.crypto import CryptoManager
-from ..core.database import DatabaseConnection, NodeRepository
+from ..core.database import (
+    DatabaseConnection,
+    NodeRepository,
+    acquire_database_session_lock,
+)
 from ..core.exceptions import (
     AuthError,
     CryptoError,
@@ -33,31 +37,35 @@ class AuthService:
         crypto = CryptoManager()
         db_name = os.path.basename(db_path)
         db_conn = None
-        if mode == "open":
-            try:
-                salt = DatabaseConnection.read_metadata_readonly(
-                    db_path, "auth_salt"
-                )
-            except Exception as exc:
-                raise AuthError(
-                    "Corrupted database: unreadable metadata"
-                ) from exc
-            if not salt:
-                raise AuthError(
-                    "Corrupted database: missing authentication salt"
-                )
-            db_conn = DatabaseConnection(
-                db_path,
-                initialize=False,
-                must_exist=True,
-                writable=False,
-            )
-        else:
-            password = AuthService._request_new_password(
-                db_name, password_provider
-            )
-            db_conn = DatabaseConnection(db_path)
+        session_lock = None
         try:
+            if mode == "open":
+                session_lock = acquire_database_session_lock(db_path)
+                try:
+                    salt = DatabaseConnection.read_metadata_readonly(
+                        db_path, "auth_salt"
+                    )
+                except Exception as exc:
+                    raise AuthError(
+                        "Corrupted database: unreadable metadata"
+                    ) from exc
+                if not salt:
+                    raise AuthError(
+                        "Corrupted database: missing authentication salt"
+                    )
+                db_conn = DatabaseConnection(
+                    db_path,
+                    initialize=False,
+                    must_exist=True,
+                    writable=False,
+                )
+            else:
+                password = AuthService._request_new_password(
+                    db_name, password_provider
+                )
+                session_lock = acquire_database_session_lock(db_path)
+                db_conn = DatabaseConnection(db_path)
+
             if mode == "create":
                 AuthService.initialize_v3_project(
                     db_conn, crypto, password
@@ -68,14 +76,19 @@ class AuthService:
                 )
 
             db_conn.recover_interrupted_operations()
+            db_conn.adopt_session_lock(session_lock)
+            session_lock = None
 
             repo = NodeRepository(db_conn, crypto)
             return db_conn, crypto, repo, NodeService(repo)
         except Exception:
-            try:
-                db_conn.close()
-            except Exception:
-                pass
+            if db_conn is not None:
+                try:
+                    db_conn.close()
+                except Exception:
+                    pass
+            if session_lock is not None:
+                session_lock.release()
             raise
 
     @staticmethod
@@ -248,6 +261,38 @@ class AuthService:
                 progress_callback=progress_callback,
                 backup_already_created=backup_created,
             )
+        AuthService._verify_auth_check(crypto, db_conn, version=3)
+
+    @staticmethod
+    def reopen_authenticated_database(db_path, crypto, session_lock):
+        """Reopen the worker-authenticated file without trusting its path alone."""
+        if session_lock is None or not session_lock.acquired:
+            raise AuthError("Project session lock is not held")
+
+        db_conn = DatabaseConnection(
+            db_path,
+            initialize=False,
+            must_exist=True,
+            writable=False,
+        )
+        try:
+            AuthService._verify_unlocked_v3_database(db_conn, crypto)
+            db_conn.promote_to_writable()
+            AuthService._verify_unlocked_v3_database(db_conn, crypto)
+            db_conn.initialize_schema()
+            db_conn.adopt_session_lock(session_lock)
+            return db_conn
+        except Exception:
+            try:
+                db_conn.close()
+            except Exception:
+                pass
+            raise
+
+    @staticmethod
+    def _verify_unlocked_v3_database(db_conn, crypto):
+        if AuthService.crypto_version(db_conn) != 3:
+            raise AuthError("Database changed after authentication")
         AuthService._verify_auth_check(crypto, db_conn, version=3)
 
     @staticmethod

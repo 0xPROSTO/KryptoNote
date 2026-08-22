@@ -20,7 +20,7 @@ from ...core.constants import (
     VIDEO_EXTENSIONS,
 )
 from ..services.media_import_service import MediaImportService, MediaImportWorker
-from ..services.media_export_service import MediaExportService
+from ..services.media_export_service import MediaExportWorker
 from ..services.graph_export_worker import GraphExportWorker
 from ..services.operation_coordinator import OperationCoordinator
 from ...utils.media_proc import supported_audio_extensions
@@ -46,10 +46,12 @@ class ImportExportController(QObject):
         self._service = service
         self._auto_fit_callback = auto_fit_callback
         self._media_import_service = MediaImportService(service)
-        self._media_export_service = MediaExportService(service)
         self._active_media_import_thread = None
         self._active_media_import_worker = None
         self._media_import_token = None
+        self._active_media_export_thread = None
+        self._active_media_export_worker = None
+        self._media_export_token = None
         self._active_graph_export_thread = None
         self._active_graph_export_worker = None
         self._graph_export_token = None
@@ -285,18 +287,23 @@ class ImportExportController(QObject):
     def has_active_background_jobs(self):
         active = False
         for kind, thread in (
-            ("media", self._active_media_import_thread),
-            ("export", self._active_graph_export_thread),
+            ("media_import", self._active_media_import_thread),
+            ("media_export", self._active_media_export_thread),
+            ("graph_export", self._active_graph_export_thread),
         ):
             if thread is None:
                 continue
             try:
                 active = thread.isRunning() or active
             except RuntimeError:
-                if kind == "media":
+                if kind == "media_import":
                     self._active_media_import_thread = None
                     self._active_media_import_worker = None
                     self._finish_media_import()
+                elif kind == "media_export":
+                    self._active_media_export_thread = None
+                    self._active_media_export_worker = None
+                    self._finish_media_export()
                 else:
                     self._active_graph_export_thread = None
                     self._active_graph_export_worker = None
@@ -318,6 +325,7 @@ class ImportExportController(QObject):
         threads = [
             thread for thread in (
                 self._active_media_import_thread,
+                self._active_media_export_thread,
                 self._active_graph_export_thread,
             ) if thread is not None
         ]
@@ -336,11 +344,17 @@ class ImportExportController(QObject):
             QApplication.processEvents()
             for thread in threads:
                 self._clear_active_media_import(thread)
+                self._clear_active_media_export(thread)
                 self._clear_active_graph_export(thread)
         return stopped
 
     @Slot(int)
     def export_node_to_disk(self, node_id):
+        if self._operations.is_busy or self.has_active_background_jobs():
+            QMessageBox.information(
+                None, "Export", "Another database operation is active."
+            )
+            return
         node = self._node_model.get_node_data(node_id)
         if not node:
             return
@@ -372,14 +386,107 @@ class ImportExportController(QObject):
         if not path:
             return
         self._save_last_dir("export", path)
+        self._start_media_export(node_id, path)
 
+    def _start_media_export(self, node_id, path):
+        db_path = self._service.get_db_path()
+        crypto = self._service.create_crypto_clone()
+        if not db_path or not crypto:
+            QMessageBox.critical(None, "Export Error", "Database is not ready.")
+            return
+        token = self._operations.begin(
+            "media_export", "Preparing media export...", blocking=True
+        )
+        if token is None:
+            QMessageBox.information(
+                None, "Export", "Another database operation is active."
+            )
+            return
+        self._media_export_token = token
+        thread = None
         try:
-            self._media_export_service.export_node(node_id, path)
-            self.status_message.emit(f"Exported to {os.path.basename(path)}", "normal")
-        except ValueError as e:
-            QMessageBox.warning(None, "Export", str(e))
-        except Exception as e:
-            QMessageBox.critical(None, "Export Error", f"Failed to export:\n{e}")
+            self._service.commit_changes()
+            thread = QThread(self)
+            worker = MediaExportWorker(db_path, crypto, node_id, path)
+            worker.moveToThread(thread)
+            thread.started.connect(worker.run)
+            worker.progress.connect(self._on_media_export_progress)
+            worker.finished.connect(self._on_media_export_finished)
+            worker.cancelled.connect(self._on_media_export_cancelled)
+            worker.failed.connect(self._on_media_export_failed)
+            worker.finished.connect(thread.quit)
+            worker.cancelled.connect(thread.quit)
+            worker.failed.connect(thread.quit)
+            worker.finished.connect(worker.deleteLater)
+            worker.cancelled.connect(worker.deleteLater)
+            worker.failed.connect(worker.deleteLater)
+            thread.finished.connect(thread.deleteLater)
+            thread.finished.connect(
+                lambda: self._clear_active_media_export(thread)
+            )
+            self._active_media_export_thread = thread
+            self._active_media_export_worker = worker
+            thread.start()
+        except Exception as exc:
+            self._active_media_export_thread = None
+            self._active_media_export_worker = None
+            self._finish_media_export()
+            if thread is not None:
+                thread.deleteLater()
+            QMessageBox.critical(None, "Export Error", str(exc))
+
+    @Slot(float, str)
+    def _on_media_export_progress(self, value, message):
+        self._operations.update(self._media_export_token, message)
+        self.progress_updated.emit(value, message)
+
+    @Slot(str)
+    def _on_media_export_finished(self, path):
+        self._finish_media_export()
+        self.progress_finished.emit("Ready")
+        self.status_message.emit(
+            f"Exported to {os.path.basename(path)}", "normal"
+        )
+
+    @Slot()
+    def _on_media_export_cancelled(self):
+        self._finish_media_export()
+        self.progress_finished.emit("Export cancelled")
+        self.status_message.emit("Media export cancelled.", "warning")
+
+    @Slot(str)
+    def _on_media_export_failed(self, message):
+        self._finish_media_export()
+        self.progress_finished.emit("Export failed")
+        self.status_message.emit(f"Export failed: {message}", "error")
+        QMessageBox.critical(None, "Export Error", message)
+
+    def cancel_media_export(self):
+        thread = self._active_media_export_thread
+        if thread is None:
+            return False
+        try:
+            if not thread.isRunning():
+                return False
+            thread.requestInterruption()
+            self._operations.update(
+                self._media_export_token, "Cancelling media export safely..."
+            )
+            return True
+        except RuntimeError:
+            return False
+
+    def _clear_active_media_export(self, thread):
+        if self._active_media_export_thread is thread:
+            self._active_media_export_thread = None
+            self._active_media_export_worker = None
+            self._finish_media_export()
+
+    def _finish_media_export(self):
+        token = self._media_export_token
+        self._media_export_token = None
+        if token is not None:
+            self._operations.finish(token)
 
     def export_to_markdown(
         self,
@@ -434,7 +541,12 @@ class ImportExportController(QObject):
             QApplication.processEvents()
             from ...services.export_service import MarkdownExportService
             exporter = MarkdownExportService()
-            exporter.export(items, connections, path)
+            exporter.export(
+                items,
+                connections,
+                path,
+                database_path=self._service.get_db_path(),
+            )
 
             self.progress_finished.emit("Ready")
             QMessageBox.information(

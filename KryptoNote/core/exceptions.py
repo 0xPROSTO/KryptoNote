@@ -23,6 +23,11 @@ class DatabaseError(KryptoNoteError):
     pass
 
 
+class ProjectInUseError(DatabaseError):
+    """Raised when another application instance owns the project session."""
+    pass
+
+
 class OperationCancelledError(KryptoNoteError):
     """Raised when a cooperative background operation is cancelled."""
     pass

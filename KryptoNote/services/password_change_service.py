@@ -79,14 +79,16 @@ class PasswordChangeService:
 
             PasswordChangeService._raise_if_cancelled(cancel_check)
             new_salt = os.urandom(16)
-            new_password_key = CryptoManager.derive_password_key(new_password, new_salt)
+            new_password_key = CryptoManager.derive_password_key(
+                new_password, new_salt, **kdf_params
+            )
             PasswordChangeService._raise_if_cancelled(cancel_check)
             new_wrapped_data_key = CryptoManager.wrap_data_key(data_key, new_password_key)
 
             conn.execute("BEGIN IMMEDIATE")
             PasswordChangeService._set_metadata(cursor, "auth_salt", new_salt)
             PasswordChangeService._set_metadata(cursor, "wrapped_data_key", new_wrapped_data_key)
-            PasswordChangeService._set_kdf_metadata(cursor)
+            PasswordChangeService._set_kdf_metadata(cursor, kdf_params)
             conn.commit()
             if db_path != ":memory:":
                 try:
@@ -164,12 +166,14 @@ class PasswordChangeService:
         )
 
     @staticmethod
-    def _set_kdf_metadata(cursor):
+    def _set_kdf_metadata(cursor, kdf_params):
         PasswordChangeService._set_metadata(cursor, "kdf_name", CryptoManager.KDF_NAME)
         PasswordChangeService._set_metadata(
-            cursor, "kdf_iterations", str(CryptoManager.KDF_ITERATIONS)
+            cursor, "kdf_iterations", str(kdf_params["iterations"])
         )
         PasswordChangeService._set_metadata(
-            cursor, "kdf_memory_cost", str(CryptoManager.KDF_MEMORY_COST)
+            cursor, "kdf_memory_cost", str(kdf_params["memory_cost"])
         )
-        PasswordChangeService._set_metadata(cursor, "kdf_lanes", str(CryptoManager.KDF_LANES))
+        PasswordChangeService._set_metadata(
+            cursor, "kdf_lanes", str(kdf_params["lanes"])
+        )

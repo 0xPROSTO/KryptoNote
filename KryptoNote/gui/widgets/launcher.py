@@ -329,16 +329,23 @@ class ProjectLauncher(QDialog):
         self._populate_directory_combo()
         self.refresh_list()
 
-    def _remove_project_files(self, db_path):
+    @staticmethod
+    def _remove_project_files(db_path):
+        from KryptoNote.core.database import acquire_database_session_lock
+
+        session_lock = acquire_database_session_lock(db_path)
         first_error = None
-        for candidate in (db_path, db_path + "-wal", db_path + "-shm"):
-            if not os.path.exists(candidate):
-                continue
-            try:
-                os.remove(candidate)
-            except Exception as exc:
-                if first_error is None:
-                    first_error = exc
+        try:
+            for candidate in (db_path, db_path + "-wal", db_path + "-shm"):
+                if not os.path.exists(candidate):
+                    continue
+                try:
+                    os.remove(candidate)
+                except Exception as exc:
+                    if first_error is None:
+                        first_error = exc
+        finally:
+            session_lock.release()
         if first_error:
             raise first_error
 
@@ -530,10 +537,14 @@ class ProjectLauncher(QDialog):
         from cryptography.exceptions import InvalidTag
 
         from KryptoNote.core.crypto import CryptoManager
-        from KryptoNote.core.database import DatabaseConnection
+        from KryptoNote.core.database import (
+            DatabaseConnection,
+            acquire_database_session_lock,
+        )
         from KryptoNote.core.exceptions import (
             AuthError,
             OperationCancelledError,
+            ProjectInUseError,
             UnverifiableLegacyPassword,
         )
         from KryptoNote.services.auth_service import AuthService
@@ -563,7 +574,11 @@ class ProjectLauncher(QDialog):
 
         def authenticate_in_worker():
             db_conn = None
+            session_lock = None
             try:
+                session_lock = acquire_database_session_lock(
+                    context["db_path"]
+                )
                 if context["is_new"]:
                     db_conn = DatabaseConnection(context["db_path"])
                 else:
@@ -595,7 +610,14 @@ class ProjectLauncher(QDialog):
                 )
                 if cancel_check():
                     raise OperationCancelledError("Operation cancelled")
-                result = {"status": "success", "crypto": crypto}
+                result = {
+                    "status": "success",
+                    "crypto": crypto,
+                    "session_lock": session_lock,
+                }
+                session_lock = None
+            except ProjectInUseError as exc:
+                result = {"status": "project_in_use", "message": str(exc)}
             except InvalidTag:
                 result = {"status": "wrong_password", "message": "Incorrect password"}
             except UnverifiableLegacyPassword as exc:
@@ -613,6 +635,8 @@ class ProjectLauncher(QDialog):
             finally:
                 if db_conn is not None:
                     db_conn.close()
+                if session_lock is not None:
+                    session_lock.release()
             finished_signal.emit(result)
 
         try:
@@ -644,15 +668,19 @@ class ProjectLauncher(QDialog):
 
     @Slot(object)
     def _on_auth_finished(self, result):
-        from KryptoNote.core.database import DatabaseConnection, NodeRepository
+        from KryptoNote.core.database import NodeRepository
+        from KryptoNote.services.auth_service import AuthService
         from KryptoNote.services.node_service import NodeService
 
         context = self._auth_context
+        session_lock = result.pop("session_lock", None)
         was_cancelled = bool(
             self._auth_cancel_event is not None and self._auth_cancel_event.is_set()
         )
         self._finish_auth_operation()
         if context is None:
+            if session_lock is not None:
+                session_lock.release()
             return
 
         status = result.get("status")
@@ -660,11 +688,12 @@ class ProjectLauncher(QDialog):
             db_conn = None
             repo = None
             try:
-                db_conn = DatabaseConnection(
+                db_conn = AuthService.reopen_authenticated_database(
                     context["db_path"],
-                    initialize=False,
-                    must_exist=True,
+                    result["crypto"],
+                    session_lock,
                 )
+                session_lock = None
                 repo = NodeRepository(db_conn, result["crypto"])
                 service = NodeService(repo)
                 self.auth_data = (
@@ -675,6 +704,8 @@ class ProjectLauncher(QDialog):
                     repo.close(wait=False)
                 if db_conn is not None:
                     db_conn.close()
+                if session_lock is not None:
+                    session_lock.release()
                 QMessageBox.critical(
                     self,
                     "Database Error",
@@ -691,6 +722,9 @@ class ProjectLauncher(QDialog):
             )
             self.launcher_overlay.fade_out()
             return
+
+        if session_lock is not None:
+            session_lock.release()
 
         if status == "wrong_password" and not context["is_new"] and not was_cancelled:
             self._overlay_callback = self._on_password_input

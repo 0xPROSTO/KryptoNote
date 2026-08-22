@@ -8,9 +8,14 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 from .models import NodeItemDTO, ConnectionDTO, TagDTO
+from .legacy_media import (
+    iter_decrypted_legacy_full_data,
+    legacy_full_data_plain_size,
+)
 from .connection import (
     READY_STORAGE_STATE,
     STAGED_STORAGE_STATE,
@@ -31,7 +36,11 @@ from ..constants import (
     MEDIA_NODE_TYPES,
     PLAYABLE_NODE_TYPES,
 )
-from ..exceptions import InsufficientDiskSpaceError, OperationCancelledError
+from ..exceptions import (
+    CryptoError,
+    InsufficientDiskSpaceError,
+    OperationCancelledError,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -67,6 +76,10 @@ def write_chunked_media(
     media_width=0, media_height=0, media_duration=0.0,
     cancel_check=None, original_filename="", media_metadata=None,
 ):
+    if chunk_size != MEDIA_CHUNK_SIZE:
+        raise ValueError(
+            f"chunk_size must be MEDIA_CHUNK_SIZE ({MEDIA_CHUNK_SIZE})"
+        )
     with open(file_path, "rb") as f:
         f.seek(0, 2)
         file_size = f.tell()
@@ -599,21 +612,44 @@ class NodeRepository:
 
     # Tags
 
+    def _decode_tag_row(self, tag_id, encrypted_name, color):
+        if not encrypted_name or self.crypto is None:
+            logger.error("Encrypted tag %s has no readable payload", tag_id)
+            raise sqlite3.DatabaseError(
+                f"Tag {tag_id} failed encrypted integrity validation"
+            )
+        try:
+            name = self.crypto.decrypt(
+                encrypted_name,
+                aad=self.crypto.tag_aad(tag_id),
+            ).decode("utf-8")
+        except (
+            InvalidTag,
+            CryptoError,
+            UnicodeDecodeError,
+            TypeError,
+            ValueError,
+        ) as exc:
+            logger.error(
+                "Encrypted tag %s failed integrity validation",
+                tag_id,
+                exc_info=True,
+            )
+            raise sqlite3.DatabaseError(
+                f"Tag {tag_id} failed encrypted integrity validation"
+            ) from exc
+        if not name:
+            logger.error("Encrypted tag %s decrypted to an empty name", tag_id)
+            raise sqlite3.DatabaseError(
+                f"Tag {tag_id} failed encrypted integrity validation"
+            )
+        return TagDTO(int(tag_id), name, color)
+
     def get_all_tags(self):
         self.cursor.execute("SELECT id, name, color FROM tags ORDER BY id")
         tags = []
         for tag_id, encrypted_name, color in self.cursor.fetchall():
-            try:
-                name = (
-                    self.crypto.decrypt(
-                        encrypted_name, aad=self.crypto.tag_aad(tag_id)
-                    ).decode()
-                    if encrypted_name else ""
-                )
-            except Exception:
-                continue
-            if name:
-                tags.append(TagDTO(tag_id, name, color))
+            tags.append(self._decode_tag_row(tag_id, encrypted_name, color))
         return sorted(tags, key=lambda tag: tag.name.casefold())
 
     def ensure_tag(self, name, color):
@@ -704,19 +740,7 @@ class NodeRepository:
         )
         tags = []
         for tag_id, encrypted_name, color in self.cursor.fetchall():
-            try:
-                name = (
-                    self.crypto.decrypt(
-                        encrypted_name,
-                        aad=self.crypto.tag_aad(tag_id),
-                    ).decode()
-                    if encrypted_name
-                    else ""
-                )
-            except Exception:
-                continue
-            if name:
-                tags.append(TagDTO(tag_id, name, color))
+            tags.append(self._decode_tag_row(tag_id, encrypted_name, color))
         return tags
 
     def set_item_tag(self, item_id, tag_id, enabled):
@@ -757,6 +781,17 @@ class NodeRepository:
                 row[0], aad=self.crypto.item_aad(item_id, "full_data")
             )
         return None
+
+    def get_legacy_full_data_size(self, item_id):
+        return legacy_full_data_plain_size(self.conn, item_id)
+
+    def iter_legacy_full_data(self, item_id, *, cancel_check=None):
+        return iter_decrypted_legacy_full_data(
+            self.conn,
+            self.crypto,
+            item_id,
+            cancel_check=cancel_check,
+        )
 
     def get_item_info(self, item_id):
         self.cursor.execute(
@@ -920,22 +955,12 @@ class NodeRepository:
                 in_params,
             )
             for item_id, tag_id, encrypted_name, color, priority in self.cursor.fetchall():
-                if not encrypted_name or not self.crypto:
-                    continue
-                try:
-                    name = self.crypto.decrypt(
-                        encrypted_name,
-                        aad=self.crypto.tag_aad(tag_id),
-                    ).decode()
-                except Exception:
-                    continue
-                if not name:
-                    continue
+                tag = self._decode_tag_row(tag_id, encrypted_name, color)
                 tags_by_item.setdefault(int(item_id), []).append(
                     {
                         "source_tag_id": int(tag_id),
-                        "name": name,
-                        "color": color or "",
+                        "name": tag.name,
+                        "color": tag.color or "",
                         "priority": int(priority or 0),
                     }
                 )
@@ -1290,20 +1315,12 @@ class NodeRepository:
 
     @staticmethod
     def _legacy_full_data_plain_size(source_conn, source_id):
-        blobopen = getattr(source_conn, "blobopen", None)
-        if blobopen is None:
-            raise RuntimeError(
-                "Streaming legacy media requires sqlite3.Connection.blobopen"
-            )
-        with blobopen(
-            "items", "full_data", int(source_id), readonly=True
-        ) as blob:
-            encrypted_size = len(blob)
-        if encrypted_size < 28:
+        plain_size = legacy_full_data_plain_size(source_conn, source_id)
+        if plain_size is None:
             raise ValueError(
-                f"Invalid encrypted full_data for source node {source_id}"
+                f"No encrypted full_data for source node {source_id}"
             )
-        return encrypted_size - 28
+        return plain_size
 
     def _copy_legacy_full_data_as_chunks(
         self,

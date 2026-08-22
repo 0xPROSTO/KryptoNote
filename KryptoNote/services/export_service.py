@@ -4,12 +4,20 @@ from datetime import datetime
 
 from ..core.constants import MEDIA_NODE_TYPES
 from ..core.database.models import NodeItemDTO, ConnectionDTO
+from .atomic_output import atomic_output_path, database_related_paths
 
 
 class MarkdownExportService:
     """Export text and media descriptions with attachment metadata."""
 
-    def export(self, items: list[NodeItemDTO], connections: list[ConnectionDTO], output_path: str):
+    def export(
+        self,
+        items: list[NodeItemDTO],
+        connections: list[ConnectionDTO],
+        output_path: str,
+        *,
+        database_path=None,
+    ):
         export_nodes = [
             n for n in items if n.type == "text" or n.type in MEDIA_NODE_TYPES
         ]
@@ -27,9 +35,14 @@ class MarkdownExportService:
             lines.append("")
 
         content = "\n".join(lines)
-        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write(content)
+        with atomic_output_path(
+            output_path,
+            forbidden_paths=database_related_paths(database_path),
+        ) as temp_path:
+            with open(temp_path, "w", encoding="utf-8") as f:
+                f.write(content)
+                f.flush()
+                os.fsync(f.fileno())
 
         return output_path
 

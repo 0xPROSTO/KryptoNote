@@ -263,6 +263,14 @@ class NodeService:
     def get_full_data(self, item_id):
         return self.repo.get_full_data(item_id)
 
+    def get_legacy_full_data_size(self, item_id):
+        return self.repo.get_legacy_full_data_size(item_id)
+
+    def iter_legacy_full_data(self, item_id, *, cancel_check=None):
+        return self.repo.iter_legacy_full_data(
+            item_id, cancel_check=cancel_check
+        )
+
     def get_item_info(self, item_id):
         return self.repo.get_item_info(item_id)
 

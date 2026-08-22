@@ -565,6 +565,9 @@ class QmlCanvasController(QObject):
     def cancel_media_import(self):
         return self._import_export_ctrl.cancel_media_import()
 
+    def cancel_media_export(self):
+        return self._import_export_ctrl.cancel_media_export()
+
     def shutdown_background_jobs(self, timeout_ms=15000):
         self._metadata_backfill_shutting_down = True
         self._metadata_backfill_queue.clear()

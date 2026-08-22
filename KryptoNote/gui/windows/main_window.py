@@ -1115,6 +1115,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
                     "graph_export",
                     "graph_clone",
                     "media_import",
+                    "media_export",
                 }
             )
         for action in self._operation_blocked_actions:
@@ -1423,6 +1424,8 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             self.canvas_controller.cancel_initial_load()
         elif kind == "graph_export":
             self.canvas_controller.cancel_graph_export()
+        elif kind == "media_export":
+            self.canvas_controller.cancel_media_export()
         elif kind == "graph_clone":
             self.canvas_controller.cancel_graph_clone()
         elif kind == "media_import":
@@ -2347,9 +2350,16 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         if operation_kind == "initial_load":
             self.canvas_controller.cancel_initial_load()
             operation_kind = self.operation_coordinator.active_kind
+        cancellable_background_operations = {
+            "media_import",
+            "video_import",
+            "media_export",
+            "graph_export",
+            "graph_clone",
+        }
         if (
             self.operation_coordinator.is_busy
-            and operation_kind not in {"media_import", "video_import"}
+            and operation_kind not in cancellable_background_operations
         ):
             event.ignore()
             if operation_kind == "vacuum":
@@ -2374,14 +2384,16 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             canvas_controller is not None
             and canvas_controller.has_active_background_jobs()
         ):
-            self._handle_status_update("Stopping media import...", "warning")
+            self._handle_status_update(
+                "Stopping background operation...", "warning"
+            )
             QApplication.processEvents()
             if not canvas_controller.shutdown_background_jobs():
                 event.ignore()
                 QMessageBox.warning(
                     self,
-                    "Import Still Running",
-                    "The current media chunk is still being processed. "
+                    "Operation Still Running",
+                    "The current data block is still being processed. "
                     "Wait a moment and close the application again.",
                 )
                 return

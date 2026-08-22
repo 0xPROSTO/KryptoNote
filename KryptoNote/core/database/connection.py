@@ -12,6 +12,7 @@ READY_STORAGE_STATE = "ready"
 RECOVERY_METADATA_KEY = "db_maintenance_state"
 STAGED_CLEANUP_BATCH_SIZE = 128
 OPERATION_LOCK_SUFFIX = ".operations.lock"
+SESSION_LOCK_SUFFIX = ".session.lock"
 
 
 class DatabaseOperationLock:
@@ -21,6 +22,10 @@ class DatabaseOperationLock:
         self._db_path = db_path
         self._handle = None
         self._acquired = False
+
+    @property
+    def acquired(self):
+        return self._acquired
 
     @property
     def lock_path(self):
@@ -98,6 +103,26 @@ class DatabaseOperationLock:
         return False
 
 
+class DatabaseSessionLock(DatabaseOperationLock):
+    """Cross-process lock held for the lifetime of one open project."""
+
+    @property
+    def lock_path(self):
+        if not self._db_path or self._db_path == ":memory:":
+            return None
+        path = Path(self._db_path).resolve()
+        return Path(f"{path}{SESSION_LOCK_SUFFIX}")
+
+    def __enter__(self):
+        if not self.acquire():
+            from ..exceptions import ProjectInUseError
+
+            raise ProjectInUseError(
+                "This project is already open in another application instance"
+            )
+        return self
+
+
 def try_acquire_database_operation_lock(db_path):
     operation_lock = DatabaseOperationLock(db_path)
     return operation_lock if operation_lock.acquire() else None
@@ -110,6 +135,22 @@ def acquire_database_operation_lock(db_path):
             "Another media import or graph copy is already active"
         )
     return operation_lock
+
+
+def try_acquire_database_session_lock(db_path):
+    session_lock = DatabaseSessionLock(db_path)
+    return session_lock if session_lock.acquire() else None
+
+
+def acquire_database_session_lock(db_path):
+    from ..exceptions import ProjectInUseError
+
+    session_lock = try_acquire_database_session_lock(db_path)
+    if session_lock is None:
+        raise ProjectInUseError(
+            "This project is already open in another application instance"
+        )
+    return session_lock
 
 
 def configure_sqlite_connection(
@@ -358,6 +399,7 @@ class DatabaseConnection:
         )
         self._closed = False
         self._initialized = False
+        self._session_lock = None
         self.cursor = self.conn.cursor()
         try:
             if initialize:
@@ -608,10 +650,34 @@ class DatabaseConnection:
         if self._closed:
             return
         self._closed = True
+        cursor_error = None
         try:
             self.cursor.close()
-        finally:
+        except Exception as exc:
+            cursor_error = exc
+        try:
             self.conn.close()
+        except Exception:
+            self._closed = False
+            raise
+        session_lock, self._session_lock = self._session_lock, None
+        if session_lock is not None:
+            session_lock.release()
+        if cursor_error is not None:
+            raise cursor_error
+
+    def adopt_session_lock(self, session_lock):
+        """Transfer an already acquired project-session lock to this connection."""
+        if self._closed:
+            raise RuntimeError("Cannot attach a session lock to a closed database")
+        if self._session_lock is not None:
+            raise RuntimeError("Database connection already owns a session lock")
+        if session_lock is None or not session_lock.acquired:
+            raise ValueError("Session lock must be acquired before adoption")
+        expected_path = DatabaseSessionLock(self.db_path).lock_path
+        if session_lock.lock_path != expected_path:
+            raise ValueError("Session lock belongs to a different database")
+        self._session_lock = session_lock
 
     def _apply_schema(self, from_version):
         self.cursor.execute("CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value BLOB)")

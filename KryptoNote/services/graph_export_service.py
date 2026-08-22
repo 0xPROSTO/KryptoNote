@@ -1,7 +1,7 @@
 import base64
 import json
+import logging
 import mimetypes
-import os
 import re
 import sqlite3
 import zipfile
@@ -10,15 +10,26 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from cryptography.exceptions import InvalidTag
+
 from ..config import Config
 from ..core.constants import AUDIO_EXTENSIONS, MEDIA_NODE_TYPES
-from ..core.exceptions import OperationCancelledError
+from ..core.database import (
+    iter_decrypted_legacy_full_data,
+    legacy_full_data_plain_size,
+    read_decrypted_legacy_prefix,
+)
+from ..core.exceptions import CryptoError, OperationCancelledError
 from ..utils.media_proc import decode_audio_waveform
+from .atomic_output import atomic_output_path, database_related_paths
 from .export_viewer import render_viewer, render_viewer_parts
 
 
 EXPORT_SCHEMA = "zeroxx-kryptonote-export/v2"
 STANDALONE_WARNING_BYTES = 256 * 1024 * 1024
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -112,11 +123,10 @@ class GraphExportService:
 
     def export(self, output_path, export_format, password=None):
         output_path = Path(output_path)
-        part_path = output_path.with_name(output_path.name + ".part")
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        if part_path.exists():
-            part_path.unlink()
-        try:
+        with atomic_output_path(
+            output_path,
+            forbidden_paths=database_related_paths(self.db_path),
+        ) as part_path:
             self._check_cancelled()
             self._progress(0.0, "Reading graph snapshot...")
             with self._connect_readonly(self.db_path) as connection:
@@ -150,15 +160,8 @@ class GraphExportService:
                 finally:
                     connection.rollback()
             self._check_cancelled()
-            os.replace(part_path, output_path)
-            self._progress(1.0, "Export complete")
-            return str(output_path)
-        except Exception:
-            try:
-                part_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-            raise
+        self._progress(1.0, "Export complete")
+        return str(output_path)
 
     def build_graph(self, connection=None):
         if connection is None:
@@ -531,19 +534,25 @@ class GraphExportService:
                     ),
                 )
             return
-        row = connection.execute(
-            "SELECT full_data FROM items "
-            "WHERE id=? AND storage_state='ready'", (media.node_id,)
-        ).fetchone()
-        if not row or not row[0]:
+        plain_size = legacy_full_data_plain_size(
+            connection, media.node_id
+        )
+        if plain_size is None:
             if media.total_size == 0:
                 return
             raise ValueError(
                 f"No media data found for node {media.node_id}"
             )
-        yield self.crypto.decrypt(
-            row[0],
-            aad=self.crypto.item_aad(media.node_id, "full_data"),
+        if plain_size != media.total_size:
+            raise ValueError(
+                f"Invalid media size for node {media.node_id}: "
+                f"expected {media.total_size}, got {plain_size}"
+            )
+        yield from iter_decrypted_legacy_full_data(
+            connection,
+            self.crypto,
+            media.node_id,
+            cancel_check=self.cancel_check,
         )
 
     @staticmethod
@@ -563,14 +572,44 @@ class GraphExportService:
         for tag_id, encrypted_name, color in connection.execute(
             "SELECT id, name, color FROM tags ORDER BY id"
         ):
-            name = self._decrypt_text(
-                encrypted_name, self.crypto.tag_aad(tag_id)
-            )
-            if name:
-                result[int(tag_id)] = {
-                    "id": int(tag_id), "name": name, "color": color,
-                }
+            name = self._decrypt_tag_name(tag_id, encrypted_name)
+            result[int(tag_id)] = {
+                "id": int(tag_id), "name": name, "color": color,
+            }
         return result
+
+    def _decrypt_tag_name(self, tag_id, encrypted_name):
+        if not encrypted_name:
+            logger.error("Encrypted tag %s has no readable payload", tag_id)
+            raise sqlite3.DatabaseError(
+                f"Tag {tag_id} failed encrypted integrity validation"
+            )
+        try:
+            name = self.crypto.decrypt(
+                encrypted_name,
+                aad=self.crypto.tag_aad(tag_id),
+            ).decode("utf-8")
+        except (
+            InvalidTag,
+            CryptoError,
+            UnicodeDecodeError,
+            TypeError,
+            ValueError,
+        ) as exc:
+            logger.error(
+                "Encrypted tag %s failed integrity validation",
+                tag_id,
+                exc_info=True,
+            )
+            raise sqlite3.DatabaseError(
+                f"Tag {tag_id} failed encrypted integrity validation"
+            ) from exc
+        if not name:
+            logger.error("Encrypted tag %s decrypted to an empty name", tag_id)
+            raise sqlite3.DatabaseError(
+                f"Tag {tag_id} failed encrypted integrity validation"
+            )
+        return name
 
     @staticmethod
     def _read_node_tags(connection, tags):
@@ -615,32 +654,23 @@ class GraphExportService:
                 (node_id,),
             ).fetchone()
         else:
-            row = connection.execute(
-                "SELECT full_data FROM items "
-                "WHERE id=? AND storage_state='ready'", (node_id,)
-            ).fetchone()
+            prefix = read_decrypted_legacy_prefix(
+                connection,
+                self.crypto,
+                node_id,
+                limit=64,
+                cancel_check=self.cancel_check,
+            )
+            return prefix or b""
         if not row or not row[0]:
             return b""
-        aad = (
-            self.crypto.chunk_aad(node_id, 0)
-            if is_chunked
-            else self.crypto.item_aad(node_id, "full_data")
-        )
-        return self.crypto.decrypt(row[0], aad=aad)[:64]
+        return self.crypto.decrypt(
+            row[0], aad=self.crypto.chunk_aad(node_id, 0)
+        )[:64]
 
     def _read_non_chunked_media_size(self, connection, node_id):
-        row = connection.execute(
-            "SELECT full_data FROM items "
-            "WHERE id=? AND storage_state='ready'", (node_id,)
-        ).fetchone()
-        if not row or not row[0]:
-            return 0
-        return len(
-            self.crypto.decrypt(
-                row[0],
-                aad=self.crypto.item_aad(node_id, "full_data"),
-            )
-        )
+        size = legacy_full_data_plain_size(connection, node_id)
+        return int(size or 0)
 
     @staticmethod
     def _extension_from_signature(data, node_type):
