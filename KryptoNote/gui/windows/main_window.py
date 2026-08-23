@@ -1133,6 +1133,11 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         else:
             self._window_overlay_manager.release("operation")
         if active:
+            if kind == "password_change":
+                self.progress_bar.cancel()
+                self.progress_label.setVisible(False)
+                self.status_label.setVisible(True)
+                return
             if kind == "connection_delete":
                 self.progress_label.setVisible(False)
                 self.status_label.setVisible(True)
