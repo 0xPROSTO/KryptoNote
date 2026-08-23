@@ -6,7 +6,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QPushButton,
     QScrollArea,
     QSizePolicy,
     QVBoxLayout,
@@ -15,6 +14,7 @@ from PySide6.QtWidgets import (
 
 from KryptoNote.gui.theme import Theme
 from KryptoNote.gui.theme.icons import SvgIcons
+from KryptoNote.gui.widgets.dialog_close_button import DialogCloseButton
 from KryptoNote.gui.widgets.frameless_window import FramelessWindowDragMixin
 
 
@@ -68,14 +68,12 @@ class KeybindsDialog(FramelessWindowDragMixin, QDialog):
         title_layout.addWidget(subtitle)
         header_layout.addWidget(title_block, 1)
 
-        btn_close = QPushButton()
-        btn_close.setIcon(SvgIcons.get_icon("close"))
+        btn_close = DialogCloseButton()
         btn_close.setIconSize(QSize(16, 16))
         btn_close.setToolTip("Close")
         btn_close.setAccessibleName("Close keyboard shortcuts")
         btn_close.setObjectName("btn_close")
         btn_close.setFixedSize(34, 34)
-        btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_close.clicked.connect(self.close)
         header_layout.addWidget(btn_close, 0, Qt.AlignmentFlag.AlignTop)
         container_layout.addWidget(header)

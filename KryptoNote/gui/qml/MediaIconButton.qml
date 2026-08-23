@@ -27,7 +27,7 @@ ToolButton {
                   ? control.appTheme.textMain
                 : control.appTheme.textDim
     opacity: enabled ? 1.0 : 0.48
-    scale: down ? 0.96 : 1.0
+    scale: down ? 0.97 : 1.0
 
     background: Rectangle {
         radius: 7
@@ -41,7 +41,12 @@ ToolButton {
         Behavior on color { ColorAnimation { duration: 120 } }
     }
 
-    Behavior on scale { NumberAnimation { duration: 80 } }
+    Behavior on scale {
+        NumberAnimation {
+            duration: control.appTheme.motionEnabled ? 80 : 0
+            easing.type: Easing.OutCubic
+        }
+    }
     Accessible.name: accessibleName
 
     ThemedToolTip {

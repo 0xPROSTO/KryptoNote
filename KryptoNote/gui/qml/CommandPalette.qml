@@ -309,9 +309,27 @@ Popup {
             model: ListModel { id: combinedModel }
             currentIndex: commandPalette.selectedIndex
             boundsBehavior: Flickable.StopAtBounds
-            highlightMoveDuration: 80
+            highlightMoveVelocity: -1
+            highlightMoveDuration: commandPalette.appTheme.motionEnabled ? 80 : 0
+            highlightResizeVelocity: -1
+            highlightResizeDuration: commandPalette.appTheme.motionEnabled ? 80 : 0
             Accessible.role: Accessible.List
             Accessible.name: "Commands and search results"
+
+            highlight: Item {
+                width: resultList.width
+                height: commandPalette.rowHeight
+
+                Rectangle {
+                    anchors.fill: parent
+                    anchors.leftMargin: 2
+                    anchors.rightMargin: 2
+                    radius: 6
+                    color: commandPalette.appTheme.accentLow
+                    border.width: 1
+                    border.color: commandPalette.appTheme.accentMain
+                }
+            }
 
             ScrollBar.vertical: ScrollBar {
                 policy: resultList.contentHeight > resultList.height
@@ -342,13 +360,10 @@ Popup {
                     anchors.rightMargin: 2
                     radius: 6
                     visible: resultRow.kind !== "header"
-                    color: resultRow.index === commandPalette.selectedIndex
-                           ? commandPalette.appTheme.accentLow
-                           : rowHover.hovered
-                             ? commandPalette.appTheme.bgControlHover
-                             : "transparent"
-                    border.width: resultRow.index === commandPalette.selectedIndex ? 1 : 0
-                    border.color: commandPalette.appTheme.accentMain
+                    color: rowHover.hovered
+                           && resultRow.index !== commandPalette.selectedIndex
+                           ? commandPalette.appTheme.bgControlHover
+                           : "transparent"
                 }
 
                 Text {

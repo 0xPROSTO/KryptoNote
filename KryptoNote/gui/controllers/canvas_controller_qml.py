@@ -40,6 +40,7 @@ class QmlCanvasController(QObject):
     openFrameEditorRequested = Signal(int)
     openNodePropertiesRequested = Signal(int)
     nodePropertiesUpdated = Signal(int)
+    connectionRevealRequested = Signal(int)
     open_media_viewer_requested = Signal(int)  # node_id
     initial_load_failed = Signal(str)
     initial_load_finished = Signal()
@@ -52,7 +53,12 @@ class QmlCanvasController(QObject):
         self._conn_model = connection_model
         self._service = service
         self._auto_fit_service = AutoFitService()
-        self._graph_commands = GraphCommandService(node_model, connection_model, service)
+        self._graph_commands = GraphCommandService(
+            node_model,
+            connection_model,
+            service,
+            on_connection_created=self.connectionRevealRequested.emit,
+        )
         self._operations = operation_coordinator or OperationCoordinator(self)
         self._connection_delete_token = None
         self._pending_connection_deletes = set()

@@ -7,7 +7,13 @@ Item {
     required property var canvasRoot
     required property var canvasController
     required property var appTheme
-    z: showHighlight ? 1 : 0
+    z: showHighlight || _revealActive ? 1 : 0
+
+    property bool revealRequested: false
+    property bool _revealHandled: false
+    property bool _componentReady: false
+    property bool _revealActive: false
+    signal revealAccepted(int connectionId)
 
     property real minX: Math.min(connectionItem.model.connStartEdgeX, connectionItem.model.connEndEdgeX)
     property real minY: Math.min(connectionItem.model.connStartEdgeY, connectionItem.model.connEndEdgeY)
@@ -27,7 +33,7 @@ Item {
             (0.45 - connectionItem.canvasRoot.visualDetailScale) / 0.25
         )
     )
-    property real screenStrokeWidth: showHighlight
+    property real screenStrokeWidth: showHighlight || _revealActive
             ? connectionItem.appTheme.connectionHighlightWidth
             : (connectionItem.appTheme.connectionStrokeWidth - lodLineAmount * 0.2)
     property real effectiveStrokeWidth: screenStrokeWidth / Math.max(
@@ -62,12 +68,27 @@ Item {
 
     onIsDeletingChanged: {
         if (isDeleting) {
+            revealAnimation.stop()
+            _revealActive = false
             animateDeletion(connectionItem.model.connDeleteFinalizes)
         } else {
             deleteAnim.stop()
             _isDeleting = false
             opacity = 1.0
         }
+    }
+
+    onRevealRequestedChanged: {
+        if (!revealRequested) return
+        if (_componentReady) {
+            startReveal()
+        } else if (connectionItem.appTheme.motionEnabled) {
+            opacity = 0.0
+        }
+    }
+    Component.onCompleted: {
+        _componentReady = true
+        if (revealRequested) startReveal()
     }
 
     Shape {
@@ -80,7 +101,9 @@ Item {
         ShapePath {
             id: shapePath
             strokeColor: connectionItem._isDeleting ? connectionItem.appTheme.textMuted :
-                         (connectionItem.showHighlight ? connectionItem.appTheme.accentMain : connectionItem.appTheme.borderDefault)
+                         (connectionItem.showHighlight || connectionItem._revealActive
+                          ? connectionItem.appTheme.accentMain
+                          : connectionItem.appTheme.borderDefault)
             strokeWidth: connectionItem.effectiveStrokeWidth
             fillColor: "transparent"
             capStyle: ShapePath.RoundCap
@@ -385,9 +408,34 @@ Item {
     function animateDeletion(finalizeAfterAnimation) {
         if (_isDeleting) return;
         _deleteFinalizes = finalizeAfterAnimation;
-        opacity = 1.0;
         _isDeleting = true;
         deleteAnim.start();
+    }
+
+    function startReveal() {
+        if (!revealRequested || _revealHandled || _isDeleting) return;
+        _revealHandled = true;
+        revealAccepted(connectionItem.model.connId);
+        revealAnimation.stop();
+        if (!connectionItem.appTheme.motionEnabled) {
+            opacity = 1.0;
+            _revealActive = false;
+            return;
+        }
+        _revealActive = true;
+        opacity = 0.0;
+        revealAnimation.start();
+    }
+
+    NumberAnimation {
+        id: revealAnimation
+        target: connectionItem
+        property: "opacity"
+        from: 0.0
+        to: 1.0
+        duration: 260
+        easing.type: Easing.OutQuad
+        onFinished: connectionItem._revealActive = false
     }
 
     SequentialAnimation {
@@ -395,7 +443,7 @@ Item {
         NumberAnimation {
             target: connectionItem
             property: "opacity"
-            from: 1.0; to: 0.0
+            to: 0.0
             duration: 240
         }
         ScriptAction {

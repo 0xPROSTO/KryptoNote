@@ -2,6 +2,11 @@ from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve, QObject
 from PySide6.QtWidgets import QFrame, QGraphicsOpacityEffect
 
 from KryptoNote.gui.theme.palette import Palette
+from KryptoNote.gui.widgets.dialog_motion import (
+    ENTER_DURATION_MS,
+    EXIT_DURATION_MS,
+    widget_motion_enabled,
+)
 
 
 class DimOverlay(QFrame):
@@ -25,8 +30,8 @@ class DimOverlay(QFrame):
         self.setGraphicsEffect(self.opacity_effect)
 
         self.anim = QPropertyAnimation(self.opacity_effect, b"opacity")
-        self.anim.setDuration(300)
-        self.anim.setEasingCurve(QEasingCurve.Type.OutQuad)
+        self.anim.setDuration(ENTER_DURATION_MS)
+        self.anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         self._delete_on_finished_connected = False
         self._hide_on_finished_connected = False
 
@@ -55,6 +60,10 @@ class DimOverlay(QFrame):
             self._hide_on_finished_connected = False
         self.anim.setStartValue(self.opacity_effect.opacity())
         self.anim.setEndValue(1.0)
+        self.anim.setDuration(
+            ENTER_DURATION_MS if widget_motion_enabled(self) else 0
+        )
+        self.anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         self.anim.start()
 
     def fade_out(self, delete_on_finish=True):
@@ -64,6 +73,10 @@ class DimOverlay(QFrame):
         self.anim.stop()
         self.anim.setStartValue(self.opacity_effect.opacity())
         self.anim.setEndValue(0.0)
+        self.anim.setDuration(
+            EXIT_DURATION_MS if widget_motion_enabled(self) else 0
+        )
+        self.anim.setEasingCurve(QEasingCurve.Type.InCubic)
         if delete_on_finish:
             if getattr(self, '_hide_on_finished_connected', False):
                 try:

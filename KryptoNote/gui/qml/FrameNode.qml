@@ -162,6 +162,13 @@ Item {
             icon.color: frame.frameLocked
                         ? frame.appTheme.textMain
                         : frame.appTheme.textMuted
+            scale: down ? 0.97 : 1.0
+            Behavior on scale {
+                NumberAnimation {
+                    duration: frame.appTheme.motionEnabled ? 80 : 0
+                    easing.type: Easing.OutCubic
+                }
+            }
             background: Rectangle {
                 radius: 12
                 color: frame.lockHovered

@@ -6,14 +6,13 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QProgressBar,
-    QPushButton,
     QScrollArea,
     QVBoxLayout,
     QWidget,
 )
 
 from KryptoNote.gui.theme import Theme
-from KryptoNote.gui.theme.icons import SvgIcons
+from KryptoNote.gui.widgets.dialog_close_button import DialogCloseButton
 from KryptoNote.gui.widgets.frameless_window import FramelessWindowDragMixin
 
 
@@ -49,14 +48,12 @@ class DashboardDialog(FramelessWindowDragMixin, QDialog):
         title.setObjectName("dashboard_title")
         header_layout.addWidget(title, 1)
 
-        btn_close = QPushButton()
-        btn_close.setIcon(SvgIcons.get_icon("close"))
+        btn_close = DialogCloseButton()
         btn_close.setIconSize(QSize(18, 18))
         btn_close.setToolTip("Close")
         btn_close.setAccessibleName("Close")
         btn_close.setObjectName("btn_close")
         btn_close.setFixedSize(40, 40)
-        btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_close.clicked.connect(self.close)
         header_layout.addWidget(btn_close)
         layout.addWidget(header)

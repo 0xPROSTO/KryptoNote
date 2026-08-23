@@ -19,8 +19,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from KryptoNote.gui.widgets.dialog_motion import DialogMotionMixin
 
-class FramelessWindowDragMixin:
+
+class FramelessWindowDragMixin(DialogMotionMixin):
     """Add an explicit title-handle drag gesture.
 
     Wayland does not provide reliable global pointer coordinates for clients.
@@ -66,6 +68,8 @@ class FramelessWindowDragMixin:
 
     def configure_dialog_chrome(self, title=None):
         """Apply platform-safe flags before a dialog is shown."""
+
+        self._setup_dialog_motion()
 
         if self.uses_custom_chrome():
             self.setWindowFlags(

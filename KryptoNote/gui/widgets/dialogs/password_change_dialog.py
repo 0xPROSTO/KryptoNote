@@ -15,6 +15,7 @@ from KryptoNote.gui.theme import Theme
 from KryptoNote.gui.theme.icons import SvgIcons
 from KryptoNote.gui.theme.palette import Palette
 from KryptoNote.gui.theme.style_factory import StyleFactory
+from KryptoNote.gui.widgets.dialog_close_button import DialogCloseButton
 from KryptoNote.gui.widgets.frameless_window import FramelessWindowDragMixin
 from KryptoNote.core.password_policy import (
     PROJECT_PASSWORD_MAX,
@@ -59,14 +60,12 @@ class PasswordChangeDialog(FramelessWindowDragMixin, QDialog):
         header = QHBoxLayout(header_widget)
         header.setContentsMargins(0, 5, 0, 0)
         header.addStretch()
-        self.btn_close = QPushButton()
-        self.btn_close.setIcon(SvgIcons.get_icon("close"))
+        self.btn_close = DialogCloseButton()
         self.btn_close.setIconSize(QSize(18, 18))
         self.btn_close.setToolTip("Close")
         self.btn_close.setAccessibleName("Close")
         self.btn_close.setObjectName("btn_close")
         self.btn_close.setFixedSize(40, 40)
-        self.btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_close.clicked.connect(self.reject)
         header.addWidget(self.btn_close)
         layout.addWidget(header_widget)

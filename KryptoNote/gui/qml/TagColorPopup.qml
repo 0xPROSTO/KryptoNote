@@ -146,6 +146,13 @@ Popup {
                 icon.height: 16
                 icon.color: hovered || visualFocus
                             ? colorPopup.appTheme.btnCancelText : colorPopup.appTheme.textDim
+                scale: down ? 0.97 : 1.0
+                Behavior on scale {
+                    NumberAnimation {
+                        duration: colorPopup.appTheme.motionEnabled ? 80 : 0
+                        easing.type: Easing.OutCubic
+                    }
+                }
                 background: Rectangle {
                     radius: 8
                     color: closeColorButton.down ? colorPopup.appTheme.whiteAlpha15

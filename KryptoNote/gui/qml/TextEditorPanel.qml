@@ -454,6 +454,13 @@ Item {
                 icon.height: 13
                 icon.color: hovered || visualFocus
                             ? editor.appTheme.textMain : editor.appTheme.textDim
+                scale: down ? 0.97 : 1.0
+                Behavior on scale {
+                    NumberAnimation {
+                        duration: editor.appTheme.motionEnabled ? 80 : 0
+                        easing.type: Easing.OutCubic
+                    }
+                }
                 background: Rectangle {
                     radius: 6
                     color: addTagsButton.down ? editor.appTheme.whiteAlpha15
@@ -576,17 +583,21 @@ Item {
                     color: cancelButton.destructive
                          ? (cancelButton.down || cancelButton.hovered
                             ? editor.appTheme.btnCancelHover : editor.appTheme.btnCancel)
-                         : cancelButton.down ? editor.appTheme.whiteAlpha15
-                         : cancelButton.hovered ? editor.appTheme.whiteAlpha10
+                         : cancelButton.down ? editor.appTheme.bgControlPressed
+                         : cancelButton.hovered ? editor.appTheme.bgControlHover
                          : editor.appTheme.bgNode
                     border.width: cancelButton.visualFocus ? 1.5 : 1
                     border.color: cancelButton.visualFocus ? editor.appTheme.accentMain
                                 : cancelButton.destructive
                                   ? editor.appTheme.btnCancelBorder : editor.appTheme.borderDefault
-                    Behavior on color { ColorAnimation { duration: 140 } }
                 }
 
-                Behavior on scale { NumberAnimation { duration: 80 } }
+                Behavior on scale {
+                    NumberAnimation {
+                        duration: editor.appTheme.motionEnabled ? 80 : 0
+                        easing.type: Easing.OutCubic
+                    }
+                }
                 Accessible.name: text
                 ThemedToolTip {
                     appTheme: editor.appTheme

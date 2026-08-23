@@ -301,6 +301,13 @@ Popup {
                 icon.height: 14
                 icon.color: hovered || visualFocus
                             ? picker.appTheme.btnCancelText : picker.appTheme.textDim
+                scale: down ? 0.97 : 1.0
+                Behavior on scale {
+                    NumberAnimation {
+                        duration: picker.appTheme.motionEnabled ? 80 : 0
+                        easing.type: Easing.OutCubic
+                    }
+                }
                 background: Rectangle {
                     radius: 6
                     color: closePickerButton.down ? picker.appTheme.whiteAlpha15
@@ -772,11 +779,18 @@ Popup {
         focusPolicy: Qt.TabFocus
         display: AbstractButton.IconOnly
         opacity: enabled ? 1 : 0.35
+        scale: down ? 0.97 : 1.0
         icon.source: iconSource
         icon.width: 14
         icon.height: 14
         icon.color: enabled && (hovered || visualFocus)
                     ? picker.appTheme.textMain : picker.appTheme.textDim
+        Behavior on scale {
+            NumberAnimation {
+                duration: picker.appTheme.motionEnabled ? 80 : 0
+                easing.type: Easing.OutCubic
+            }
+        }
         background: Rectangle {
             radius: 5
             color: actionButton.down ? picker.appTheme.whiteAlpha15

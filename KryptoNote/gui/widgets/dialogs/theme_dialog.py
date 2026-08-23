@@ -20,7 +20,6 @@ from PySide6.QtWidgets import (
 from KryptoNote.core.connection_geometry import (
     connection_path_commands,
 )
-from KryptoNote.gui.theme.icons import SvgIcons
 from KryptoNote.gui.theme.palette import Palette
 from KryptoNote.gui.theme.style_factory import StyleFactory
 from KryptoNote.gui.theme.theme_manager import (
@@ -40,6 +39,7 @@ from KryptoNote.gui.theme.typography import (
     resolve_font_family,
     system_font_family,
 )
+from KryptoNote.gui.widgets.dialog_close_button import DialogCloseButton
 from KryptoNote.gui.widgets.frameless_window import FramelessWindowDragMixin
 
 
@@ -216,9 +216,8 @@ class ThemeDialog(FramelessWindowDragMixin, QDialog):
         title.setObjectName("theme_title")
         header_layout.addWidget(title, 1)
 
-        close_button = QPushButton()
+        close_button = DialogCloseButton()
         close_button.setObjectName("theme_close")
-        close_button.setIcon(SvgIcons.get_icon("close"))
         close_button.setIconSize(QSize(18, 18))
         close_button.setToolTip("Cancel and close")
         close_button.setAccessibleName("Cancel theme changes and close")
@@ -803,7 +802,7 @@ class ThemeDialog(FramelessWindowDragMixin, QDialog):
 
     def _refresh_theme(self, *_args):
         self.setStyleSheet(StyleFactory.get_theme_dialog_qss())
-        self._close_button.setIcon(SvgIcons.get_icon("close"))
+        self._close_button.refresh_icon()
         self._style_swatch_buttons()
         for button in self._style_buttons.values():
             button.update()

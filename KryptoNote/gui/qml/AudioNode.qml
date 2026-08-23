@@ -83,7 +83,7 @@ Rectangle {
                         : audioNode.appTheme.accentMain
             hoverEnabled: true
             focusPolicy: Qt.TabFocus
-            scale: down ? 0.96 : 1
+            scale: down ? 0.97 : 1
             Accessible.name: audioNode.playbackIsCurrent
                              && audioNode.viewerController.playing
                              ? "Pause audio" : "Play audio"
@@ -99,7 +99,10 @@ Rectangle {
                 Behavior on color { ColorAnimation { duration: 100 } }
             }
             Behavior on scale {
-                NumberAnimation { duration: 80; easing.type: Easing.OutCubic }
+                NumberAnimation {
+                    duration: audioNode.appTheme.motionEnabled ? 80 : 0
+                    easing.type: Easing.OutCubic
+                }
             }
             onClicked: audioNode.viewerController.toggle_playback_for(
                 audioNode.nodeId

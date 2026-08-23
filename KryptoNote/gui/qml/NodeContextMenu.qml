@@ -15,7 +15,9 @@ Popup {
     dim: false
     focus: true
     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-    opacity: 0.0
+    opacity: 1.0
+    scale: 1.0
+    transformOrigin: Item.TopLeft
 
     property int nodeId: 0
     property string targetKind: "node"
@@ -24,6 +26,7 @@ Popup {
     property bool frameLocked: false
     property real canvasX: 0
     property real canvasY: 0
+    property real motionOffset: 0
     property bool snapToGrid: false
     signal requestedTags(int nodeId, var anchorItem)
     signal requestedSearch()
@@ -70,11 +73,43 @@ Popup {
     }
 
     enter: Transition {
-        NumberAnimation { property: "opacity"; from: 0.0; to: 1.0; duration: 140; easing.type: Easing.OutQuad }
+        ParallelAnimation {
+            NumberAnimation {
+                property: "opacity"; from: 0.0; to: 1.0
+                duration: contextPopup.appTheme.motionEnabled ? 150 : 0
+                easing.type: Easing.OutCubic
+            }
+            NumberAnimation {
+                property: "scale"; from: 0.98; to: 1.0
+                duration: contextPopup.appTheme.motionEnabled ? 150 : 0
+                easing.type: Easing.OutCubic
+            }
+            NumberAnimation {
+                target: contextPopup; property: "motionOffset"; from: -4; to: 0
+                duration: contextPopup.appTheme.motionEnabled ? 150 : 0
+                easing.type: Easing.OutCubic
+            }
+        }
     }
 
     exit: Transition {
-        NumberAnimation { property: "opacity"; from: 1.0; to: 0.0; duration: 120; easing.type: Easing.OutQuad }
+        ParallelAnimation {
+            NumberAnimation {
+                property: "opacity"; from: 1.0; to: 0.0
+                duration: contextPopup.appTheme.motionEnabled ? 100 : 0
+                easing.type: Easing.InCubic
+            }
+            NumberAnimation {
+                property: "scale"; from: 1.0; to: 0.99
+                duration: contextPopup.appTheme.motionEnabled ? 100 : 0
+                easing.type: Easing.InCubic
+            }
+            NumberAnimation {
+                target: contextPopup; property: "motionOffset"; from: 0; to: -2
+                duration: contextPopup.appTheme.motionEnabled ? 100 : 0
+                easing.type: Easing.InCubic
+            }
+        }
     }
 
     background: Rectangle {
@@ -82,11 +117,13 @@ Popup {
         radius: 4
         border.color: contextPopup.appTheme.borderDefault
         border.width: 1
+        transform: Translate { y: contextPopup.motionOffset }
     }
 
     contentItem: Column {
         spacing: 2
         width: parent ? parent.width : 236
+        transform: Translate { y: contextPopup.motionOffset }
 
         Loader {
             width: parent.width
@@ -566,11 +603,17 @@ Popup {
         width: parent ? parent.width : 228
         height: 28
         activeFocusOnTab: true
-        color: menuMouseArea.containsMouse ? contextPopup.appTheme.bgControlHover
+        color: menuMouseArea.pressed ? contextPopup.appTheme.bgControlPressed
+             : menuMouseArea.containsMouse ? contextPopup.appTheme.bgControlHover
              : activeFocus ? contextPopup.appTheme.bgControl : "transparent"
         radius: 3
         border.width: activeFocus ? 1 : 0
         border.color: contextPopup.appTheme.accentMain
+        Behavior on color {
+            ColorAnimation {
+                duration: contextPopup.appTheme.motionEnabled ? 80 : 0
+            }
+        }
 
         property alias text: label.text
         property alias rightText: shortcutLabel.text

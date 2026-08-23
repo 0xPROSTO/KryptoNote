@@ -1479,17 +1479,65 @@ FocusScope {
         padding: 12
         focus: true
         closePolicy: Popup.NoAutoClose
+        property real motionOffset: 0
+        scale: 1.0
+        transformOrigin: Item.Top
+
+        enter: Transition {
+            ParallelAnimation {
+                NumberAnimation {
+                    property: "opacity"; from: 0; to: 1
+                    duration: surface.appTheme.motionEnabled ? 150 : 0
+                    easing.type: Easing.OutCubic
+                }
+                NumberAnimation {
+                    property: "scale"; from: 0.98; to: 1
+                    duration: surface.appTheme.motionEnabled ? 150 : 0
+                    easing.type: Easing.OutCubic
+                }
+                NumberAnimation {
+                    target: descriptionGuard; property: "motionOffset"
+                    from: -4; to: 0
+                    duration: surface.appTheme.motionEnabled ? 150 : 0
+                    easing.type: Easing.OutCubic
+                }
+            }
+        }
+
+        exit: Transition {
+            ParallelAnimation {
+                NumberAnimation {
+                    property: "opacity"; from: 1; to: 0
+                    duration: surface.appTheme.motionEnabled ? 100 : 0
+                    easing.type: Easing.InCubic
+                }
+                NumberAnimation {
+                    property: "scale"; from: 1; to: 0.99
+                    duration: surface.appTheme.motionEnabled ? 100 : 0
+                    easing.type: Easing.InCubic
+                }
+                NumberAnimation {
+                    target: descriptionGuard; property: "motionOffset"
+                    from: 0; to: -2
+                    duration: surface.appTheme.motionEnabled ? 100 : 0
+                    easing.type: Easing.InCubic
+                }
+            }
+        }
 
         background: Rectangle {
             color: surface.appTheme.bgPanel
             border.width: 1
             border.color: surface.appTheme.borderDefault
             radius: 8
+            transform: Translate { y: descriptionGuard.motionOffset }
         }
 
         Column {
+            id: descriptionGuardContent
             width: Math.min(300, surface.width - 36)
             spacing: 9
+            transform: Translate { y: descriptionGuard.motionOffset }
 
             Text {
                 width: parent.width

@@ -1,4 +1,5 @@
 from PySide6.QtCore import QObject, Property, Signal
+from PySide6.QtWidgets import QApplication, QStyle
 
 from .palette import Palette
 from .theme_manager import CONNECTION_WIDTHS, GRID_OPACITIES, get_theme_manager
@@ -14,11 +15,25 @@ class ThemeBridge(QObject):
     def __init__(self, parent=None, manager=None):
         super().__init__(parent)
         self._manager = manager or get_theme_manager()
+        application = QApplication.instance()
+        style = (
+            application.style()
+            if application is not None and hasattr(application, "style")
+            else None
+        )
+        self._motion_enabled = bool(
+            style is None
+            or style.styleHint(QStyle.StyleHint.SH_Widget_Animate)
+        )
         self._manager.paletteChanged.connect(self.paletteChanged.emit)
         self._manager.canvasAppearanceChanged.connect(
             self.canvasAppearanceChanged.emit
         )
         self._manager.fontChanged.connect(self.fontChanged.emit)
+
+    motionEnabled = Property(
+        bool, lambda self: self._motion_enabled, constant=True
+    )
 
     bgCanvas = Property(str, lambda self: Palette.BG_CANVAS, notify=paletteChanged)
     bgPanel = Property(str, lambda self: Palette.BG_PANEL, notify=paletteChanged)

@@ -252,6 +252,7 @@ ApplicationWindow {{
 
     QtObject {{
         id: theme
+        property bool motionEnabled: true
         property color overlayDim: "#99000000"
         property color bgPopover: "#232425"
         property color borderHover: "#555b62"

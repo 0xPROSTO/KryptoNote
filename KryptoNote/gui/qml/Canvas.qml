@@ -81,6 +81,7 @@ Rectangle {
     property real _pendingConnectionRadius: 0
     property bool _connectionHitPending: false
     property bool _viewportUpdatePending: false
+    property var _pendingConnectionRevealIds: []
     readonly property bool frameClockNeeded: _connectionHitPending
             || isNodeTransforming
             || viewport.frameClockNeeded
@@ -178,12 +179,22 @@ Rectangle {
         }
 
         ConnectionLayer {
+            id: connectionLayer
             z: 1
             viewportModel: root.connectionViewportModel
             canvasRoot: root
             canvasController: root.canvasController
             appTheme: root.appTheme
+            pendingRevealIds: root._pendingConnectionRevealIds
             anchors.fill: parent
+            onRevealConsumed: function(connectionId) {
+                var pending = root._pendingConnectionRevealIds.slice()
+                var index = pending.indexOf(connectionId)
+                if (index === -1) return
+                pending.splice(index, 1)
+                root._pendingConnectionRevealIds = pending
+                if (!pending.length) connectionRevealExpiry.stop()
+            }
         }
 
         NodeLayer {
@@ -199,6 +210,55 @@ Rectangle {
             anchors.fill: parent
             onContextMenuRequested: function(nodeId, nodeType, sourceItem, localX, localY) {
                 canvasContextMenu.openForNode(nodeId, nodeType, sourceItem, localX, localY)
+            }
+        }
+
+        Rectangle {
+            id: focusPulse
+            z: 3
+            property rect targetBounds: Qt.rect(0, 0, 0, 0)
+            property real progress: 1.0
+            readonly property real expansion: (2 + 6 * progress)
+                    / Math.max(root.visualDetailScale, 0.12)
+
+            x: targetBounds.x - expansion
+            y: targetBounds.y - expansion
+            width: targetBounds.width + expansion * 2
+            height: targetBounds.height + expansion * 2
+            radius: 6 / Math.max(root.visualDetailScale, 0.12)
+            color: "transparent"
+            border.width: 2 / Math.max(root.visualDetailScale, 0.12)
+            border.color: root.appTheme.accentMain
+            opacity: 1.0 - progress
+            visible: progress < 1.0
+                     && targetBounds.width > 0 && targetBounds.height > 0
+
+            function showForBounds(bounds) {
+                focusPulseAnimation.stop()
+                progress = 1.0
+                targetBounds = Qt.rect(
+                    Number(bounds[0]),
+                    Number(bounds[1]),
+                    Number(bounds[2]),
+                    Number(bounds[3])
+                )
+                if (root.appTheme.motionEnabled) {
+                    focusPulseAnimation.start()
+                }
+            }
+
+            SequentialAnimation {
+                id: focusPulseAnimation
+                PauseAnimation { duration: 200 }
+                ScriptAction { script: focusPulse.progress = 0.0 }
+                NumberAnimation {
+                    target: focusPulse
+                    property: "progress"
+                    from: 0.0
+                    to: 1.0
+                    duration: 280
+                    easing.type: Easing.OutCubic
+                }
             }
         }
     }
@@ -483,6 +543,12 @@ Rectangle {
         function onNodePropertiesUpdated(nodeId) {
             nodeProperties.refreshForNode(nodeId)
         }
+        function onConnectionRevealRequested(connId) {
+            var pending = root._pendingConnectionRevealIds.slice()
+            if (pending.indexOf(connId) === -1) pending.push(connId)
+            root._pendingConnectionRevealIds = pending
+            connectionRevealExpiry.restart()
+        }
     }
 
     Connections {
@@ -619,6 +685,13 @@ Rectangle {
             return
         }
         if (!viewportUpdateTimer.running) viewportUpdateTimer.start()
+    }
+
+    Timer {
+        id: connectionRevealExpiry
+        interval: 1500
+        repeat: false
+        onTriggered: root._pendingConnectionRevealIds = []
     }
 
     function openTagPickerForNode(nodeId, anchorItem) {
@@ -880,6 +953,7 @@ Rectangle {
         }
 
         root.nodeModel.set_selection([nodeId])
+        focusPulse.showForBounds(bounds)
 
         var targetX = bounds[0] + bounds[2] / 2
         var targetY = bounds[1] + bounds[3] / 2

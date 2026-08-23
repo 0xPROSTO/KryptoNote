@@ -17,11 +17,13 @@ from KryptoNote.config import Config
 from KryptoNote.gui.services.case_directory_service import CaseDirectoryService
 from KryptoNote.gui.theme import Theme
 from KryptoNote.gui.theme.icons import SvgIcons
+from KryptoNote.gui.widgets.dialog_motion import DialogMotionMixin
 
 
-class CaseDirectoriesDialog(QDialog):
+class CaseDirectoriesDialog(DialogMotionMixin, QDialog):
     def __init__(self, directories, active_directory, parent=None):
         super().__init__(parent)
+        self._setup_dialog_motion()
         self.setWindowTitle("Case folders")
         self.resize(620, 360)
         self.setMinimumSize(520, 320)

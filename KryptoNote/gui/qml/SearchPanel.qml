@@ -255,6 +255,13 @@ Item {
                             icon.width: 11; icon.height: 11
                             icon.color: hovered || visualFocus
                                         ? searchPanel.appTheme.btnCancelText : searchPanel.appTheme.textDim
+                            scale: down ? 0.97 : 1.0
+                            Behavior on scale {
+                                NumberAnimation {
+                                    duration: searchPanel.appTheme.motionEnabled ? 80 : 0
+                                    easing.type: Easing.OutCubic
+                                }
+                            }
                             background: Rectangle {
                                 radius: 5
                                 color: removeChipButton.down ? searchPanel.appTheme.whiteAlpha15
@@ -338,10 +345,29 @@ Item {
             height: Math.min(218, Math.max(82, resultContent.implicitHeight + 20))
             radius: 7
             clip: true
-            color: resultMouse.containsMouse ? searchPanel.appTheme.bgControl : searchPanel.appTheme.bgNode
+            color: index === searchPanel.currentIndex
+                   ? searchPanel.appTheme.accentLow
+                   : resultMouse.containsMouse
+                     ? searchPanel.appTheme.bgControl
+                     : searchPanel.appTheme.bgNode
             border.width: index === searchPanel.currentIndex ? 1.5 : 1
             border.color: index === searchPanel.currentIndex ? searchPanel.appTheme.accentMain : searchPanel.appTheme.borderDefault
-            Behavior on color { ColorAnimation { duration: 110 } }
+            Behavior on color {
+                ColorAnimation {
+                    duration: searchPanel.appTheme.motionEnabled ? 80 : 0
+                }
+            }
+            Behavior on border.color {
+                ColorAnimation {
+                    duration: searchPanel.appTheme.motionEnabled ? 80 : 0
+                }
+            }
+            Behavior on border.width {
+                NumberAnimation {
+                    duration: searchPanel.appTheme.motionEnabled ? 80 : 0
+                    easing.type: Easing.OutCubic
+                }
+            }
 
             Column {
                 id: resultContent
@@ -393,10 +419,53 @@ Item {
         modal: true; dim: false
         focus: true
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-        background: MenuBackground {}
+        property real motionOffset: 0
+        transformOrigin: Item.Top
+        enter: Transition {
+            ParallelAnimation {
+                NumberAnimation {
+                    property: "opacity"; from: 0; to: 1
+                    duration: searchPanel.appTheme.motionEnabled ? 150 : 0
+                    easing.type: Easing.OutCubic
+                }
+                NumberAnimation {
+                    property: "scale"; from: 0.98; to: 1
+                    duration: searchPanel.appTheme.motionEnabled ? 150 : 0
+                    easing.type: Easing.OutCubic
+                }
+                NumberAnimation {
+                    target: tagMenu; property: "motionOffset"; from: -4; to: 0
+                    duration: searchPanel.appTheme.motionEnabled ? 150 : 0
+                    easing.type: Easing.OutCubic
+                }
+            }
+        }
+        exit: Transition {
+            ParallelAnimation {
+                NumberAnimation {
+                    property: "opacity"; from: 1; to: 0
+                    duration: searchPanel.appTheme.motionEnabled ? 100 : 0
+                    easing.type: Easing.InCubic
+                }
+                NumberAnimation {
+                    property: "scale"; from: 1; to: 0.99
+                    duration: searchPanel.appTheme.motionEnabled ? 100 : 0
+                    easing.type: Easing.InCubic
+                }
+                NumberAnimation {
+                    target: tagMenu; property: "motionOffset"; from: 0; to: -2
+                    duration: searchPanel.appTheme.motionEnabled ? 100 : 0
+                    easing.type: Easing.InCubic
+                }
+            }
+        }
+        background: MenuBackground {
+            transform: Translate { y: tagMenu.motionOffset }
+        }
         contentItem: Column {
             id: tagMenuContent
             spacing: 7
+            transform: Translate { y: tagMenu.motionOffset }
             MenuTitle { text: "Filter by tag" }
             Text {
                 visible: searchTagMenuModel.count === 0
@@ -440,10 +509,53 @@ Item {
         modal: true; dim: false
         focus: true
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-        background: MenuBackground {}
+        property real motionOffset: 0
+        transformOrigin: Item.Top
+        enter: Transition {
+            ParallelAnimation {
+                NumberAnimation {
+                    property: "opacity"; from: 0; to: 1
+                    duration: searchPanel.appTheme.motionEnabled ? 150 : 0
+                    easing.type: Easing.OutCubic
+                }
+                NumberAnimation {
+                    property: "scale"; from: 0.98; to: 1
+                    duration: searchPanel.appTheme.motionEnabled ? 150 : 0
+                    easing.type: Easing.OutCubic
+                }
+                NumberAnimation {
+                    target: filterMenu; property: "motionOffset"; from: -4; to: 0
+                    duration: searchPanel.appTheme.motionEnabled ? 150 : 0
+                    easing.type: Easing.OutCubic
+                }
+            }
+        }
+        exit: Transition {
+            ParallelAnimation {
+                NumberAnimation {
+                    property: "opacity"; from: 1; to: 0
+                    duration: searchPanel.appTheme.motionEnabled ? 100 : 0
+                    easing.type: Easing.InCubic
+                }
+                NumberAnimation {
+                    property: "scale"; from: 1; to: 0.99
+                    duration: searchPanel.appTheme.motionEnabled ? 100 : 0
+                    easing.type: Easing.InCubic
+                }
+                NumberAnimation {
+                    target: filterMenu; property: "motionOffset"; from: 0; to: -2
+                    duration: searchPanel.appTheme.motionEnabled ? 100 : 0
+                    easing.type: Easing.InCubic
+                }
+            }
+        }
+        background: MenuBackground {
+            transform: Translate { y: filterMenu.motionOffset }
+        }
         contentItem: Column {
             id: filterMenuContent
             spacing: 8
+            transform: Translate { y: filterMenu.motionOffset }
             MenuTitle { text: "Filters" }
             Row {
                 width: parent.width; height: 32; spacing: 6
@@ -488,10 +600,53 @@ Item {
         modal: true; dim: false
         focus: true
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-        background: MenuBackground {}
+        property real motionOffset: 0
+        transformOrigin: Item.Top
+        enter: Transition {
+            ParallelAnimation {
+                NumberAnimation {
+                    property: "opacity"; from: 0; to: 1
+                    duration: searchPanel.appTheme.motionEnabled ? 150 : 0
+                    easing.type: Easing.OutCubic
+                }
+                NumberAnimation {
+                    property: "scale"; from: 0.98; to: 1
+                    duration: searchPanel.appTheme.motionEnabled ? 150 : 0
+                    easing.type: Easing.OutCubic
+                }
+                NumberAnimation {
+                    target: sortMenu; property: "motionOffset"; from: -4; to: 0
+                    duration: searchPanel.appTheme.motionEnabled ? 150 : 0
+                    easing.type: Easing.OutCubic
+                }
+            }
+        }
+        exit: Transition {
+            ParallelAnimation {
+                NumberAnimation {
+                    property: "opacity"; from: 1; to: 0
+                    duration: searchPanel.appTheme.motionEnabled ? 100 : 0
+                    easing.type: Easing.InCubic
+                }
+                NumberAnimation {
+                    property: "scale"; from: 1; to: 0.99
+                    duration: searchPanel.appTheme.motionEnabled ? 100 : 0
+                    easing.type: Easing.InCubic
+                }
+                NumberAnimation {
+                    target: sortMenu; property: "motionOffset"; from: 0; to: -2
+                    duration: searchPanel.appTheme.motionEnabled ? 100 : 0
+                    easing.type: Easing.InCubic
+                }
+            }
+        }
+        background: MenuBackground {
+            transform: Translate { y: sortMenu.motionOffset }
+        }
         contentItem: Column {
             id: sortMenuContent
             spacing: 2
+            transform: Translate { y: sortMenu.motionOffset }
             Repeater {
                 model: [
                     {key: "relevance", label: "Relevance"},
@@ -540,6 +695,13 @@ Item {
         icon.color: danger ? (hovered ? searchPanel.appTheme.btnCancelText : searchPanel.appTheme.textDim)
                            : (active || prominent ? searchPanel.appTheme.textMain : searchPanel.appTheme.textDim)
         Accessible.name: toolTip.length > 0 ? toolTip : text
+        scale: down ? 0.97 : 1.0
+        Behavior on scale {
+            NumberAnimation {
+                duration: searchPanel.appTheme.motionEnabled ? 80 : 0
+                easing.type: Easing.OutCubic
+            }
+        }
 
         background: Rectangle {
             radius: 6
@@ -583,6 +745,13 @@ Item {
         icon.width: 14
         icon.height: 14
         icon.color: active ? searchPanel.appTheme.textMain : searchPanel.appTheme.textDim
+        scale: down ? 0.97 : 1.0
+        Behavior on scale {
+            NumberAnimation {
+                duration: searchPanel.appTheme.motionEnabled ? 80 : 0
+                easing.type: Easing.OutCubic
+            }
+        }
 
         background: Rectangle {
             radius: 6
@@ -633,8 +802,14 @@ Item {
         property bool checked: false
         signal clicked()
         height: 32; radius: 6
-        color: rowMouse.containsMouse ? searchPanel.appTheme.bgControlHover
+        color: rowMouse.pressed ? searchPanel.appTheme.bgControlPressed
+             : rowMouse.containsMouse ? searchPanel.appTheme.bgControlHover
              : checked ? searchPanel.appTheme.accentLow : "transparent"
+        Behavior on color {
+            ColorAnimation {
+                duration: searchPanel.appTheme.motionEnabled ? 80 : 0
+            }
+        }
         Rectangle {
             visible: menuRow.dotColor.a > 0
             width: 9; height: 9; radius: 5

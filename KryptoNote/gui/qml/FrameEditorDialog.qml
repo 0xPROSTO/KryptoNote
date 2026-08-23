@@ -209,6 +209,13 @@ Popup {
                 icon.color: hovered || visualFocus
                             ? editor.appTheme.btnCancelText
                             : editor.appTheme.textDim
+                scale: down ? 0.97 : 1.0
+                Behavior on scale {
+                    NumberAnimation {
+                        duration: editor.appTheme.motionEnabled ? 80 : 0
+                        easing.type: Easing.OutCubic
+                    }
+                }
                 background: Rectangle {
                     radius: 8
                     color: closeButton.down
@@ -617,6 +624,13 @@ Popup {
                     icon.color: hovered || visualFocus
                                 ? editor.appTheme.textMain
                                 : editor.appTheme.textDim
+                    scale: down ? 0.97 : 1.0
+                    Behavior on scale {
+                        NumberAnimation {
+                            duration: editor.appTheme.motionEnabled ? 80 : 0
+                            easing.type: Easing.OutCubic
+                        }
+                    }
                     background: Rectangle {
                         radius: 6
                         color: tagsButton.down

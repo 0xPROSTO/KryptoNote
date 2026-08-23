@@ -57,7 +57,12 @@ ToolButton {
     }
 
     Behavior on opacity { NumberAnimation { duration: 140 } }
-    Behavior on scale { NumberAnimation { duration: 80 } }
+    Behavior on scale {
+        NumberAnimation {
+            duration: control.appTheme.motionEnabled ? 80 : 0
+            easing.type: Easing.OutCubic
+        }
+    }
     Accessible.name: toolTipText.length > 0 ? toolTipText : text
 
     ThemedToolTip {

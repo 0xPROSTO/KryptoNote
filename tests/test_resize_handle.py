@@ -75,6 +75,7 @@ Item {{
 
     QtObject {{
         id: theme
+        property bool motionEnabled: true
         property color accentMain: "#ffffff"
         property color resizeHandle: "#aaaaaa"
     }}
@@ -174,6 +175,7 @@ Item {{
 
     QtObject {{
         id: theme
+        property bool motionEnabled: true
         property color bgNode: "#222222"
         property color accentMain: "#ffffff"
         property color borderDefault: "#555555"

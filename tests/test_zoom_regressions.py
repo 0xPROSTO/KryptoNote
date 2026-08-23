@@ -127,6 +127,7 @@ Item {{
 
     QtObject {{
         id: theme
+        property bool motionEnabled: true
         property real connectionStrokeWidth: 2
         property real connectionHighlightWidth: 4
         property string connectionStyle: "curved"

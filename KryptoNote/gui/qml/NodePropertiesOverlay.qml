@@ -248,12 +248,128 @@ Popup {
         propertiesPopup.close()
     }
 
+    onAboutToShow: {
+        overlayBody.prepareCardEntrance()
+        dimmer.requestPaint()
+    }
+
     onOpened: Qt.callLater(function() {
-        propertiesCard.x = overlayBody.cardX()
-        propertiesCard.y = overlayBody.cardY()
         dimmer.requestPaint()
         closeButton.forceActiveFocus()
     })
+
+    enter: Transition {
+        ParallelAnimation {
+            NumberAnimation {
+                target: dimmer
+                property: "opacity"
+                from: 0.0
+                to: 1.0
+                duration: propertiesPopup.appTheme.motionEnabled ? 140 : 0
+                easing.type: Easing.OutCubic
+            }
+            ParallelAnimation {
+                NumberAnimation {
+                    target: propertiesCard
+                    property: "opacity"
+                    from: 0.0
+                    to: 1.0
+                    duration: propertiesPopup.appTheme.motionEnabled ? 180 : 0
+                    easing.type: Easing.OutCubic
+                }
+                NumberAnimation {
+                    target: propertiesCard
+                    property: "scale"
+                    from: 0.985
+                    to: 1.0
+                    duration: propertiesPopup.appTheme.motionEnabled ? 180 : 0
+                    easing.type: Easing.OutCubic
+                }
+                NumberAnimation {
+                    target: propertiesCard
+                    property: "motionX"
+                    from: propertiesCard.enterOffsetX
+                    to: 0.0
+                    duration: propertiesPopup.appTheme.motionEnabled ? 180 : 0
+                    easing.type: Easing.OutCubic
+                }
+                NumberAnimation {
+                    target: propertiesCard
+                    property: "motionY"
+                    from: propertiesCard.enterOffsetY
+                    to: 0.0
+                    duration: propertiesPopup.appTheme.motionEnabled ? 180 : 0
+                    easing.type: Easing.OutCubic
+                }
+            }
+            SequentialAnimation {
+                PauseAnimation {
+                    duration: propertiesPopup.appTheme.motionEnabled ? 40 : 0
+                }
+                NumberAnimation {
+                    target: connector
+                    property: "opacity"
+                    from: 0.0
+                    to: 1.0
+                    duration: propertiesPopup.appTheme.motionEnabled ? 140 : 0
+                    easing.type: Easing.OutCubic
+                }
+            }
+        }
+    }
+
+    exit: Transition {
+        ParallelAnimation {
+            NumberAnimation {
+                target: dimmer
+                property: "opacity"
+                from: 1.0
+                to: 0.0
+                duration: propertiesPopup.appTheme.motionEnabled ? 110 : 0
+                easing.type: Easing.InCubic
+            }
+            NumberAnimation {
+                target: connector
+                property: "opacity"
+                from: 1.0
+                to: 0.0
+                duration: propertiesPopup.appTheme.motionEnabled ? 110 : 0
+                easing.type: Easing.InCubic
+            }
+            NumberAnimation {
+                target: propertiesCard
+                property: "opacity"
+                from: 1.0
+                to: 0.0
+                duration: propertiesPopup.appTheme.motionEnabled ? 110 : 0
+                easing.type: Easing.InCubic
+            }
+            NumberAnimation {
+                target: propertiesCard
+                property: "scale"
+                from: 1.0
+                to: 0.99
+                duration: propertiesPopup.appTheme.motionEnabled ? 110 : 0
+                easing.type: Easing.InCubic
+            }
+            NumberAnimation {
+                target: propertiesCard
+                property: "motionX"
+                from: 0.0
+                to: propertiesCard.enterOffsetX * 0.5
+                duration: propertiesPopup.appTheme.motionEnabled ? 110 : 0
+                easing.type: Easing.InCubic
+            }
+            NumberAnimation {
+                target: propertiesCard
+                property: "motionY"
+                from: 0.0
+                to: propertiesCard.enterOffsetY * 0.5
+                duration: propertiesPopup.appTheme.motionEnabled ? 110 : 0
+                easing.type: Easing.InCubic
+            }
+        }
+    }
 
     background: Item {}
 
@@ -349,6 +465,28 @@ Popup {
             propertiesCard.y = cardY()
         }
 
+        function prepareCardEntrance() {
+            propertiesCard.x = cardX()
+            propertiesCard.y = cardY()
+
+            var sourceCenterX = propertiesPopup.sourceRect.x
+                    + propertiesPopup.sourceRect.width / 2
+            var sourceCenterY = propertiesPopup.sourceRect.y
+                    + propertiesPopup.sourceRect.height / 2
+            var cardCenterX = propertiesCard.x + propertiesCard.width / 2
+            var cardCenterY = propertiesCard.y + propertiesCard.height / 2
+            var dx = sourceCenterX - cardCenterX
+            var dy = sourceCenterY - cardCenterY
+            var distance = Math.sqrt(dx * dx + dy * dy)
+            if (distance < 0.001) {
+                dx = 0
+                dy = -1
+                distance = 1
+            }
+            propertiesCard.enterOffsetX = dx / distance * 8
+            propertiesCard.enterOffsetY = dy / distance * 8
+        }
+
         onWidthChanged: Qt.callLater(updateCardPosition)
         onHeightChanged: Qt.callLater(updateCardPosition)
 
@@ -421,6 +559,7 @@ Popup {
         Quick.Canvas {
             id: dimmer
             anchors.fill: parent
+            opacity: 1.0
 
             function roundedRectPath(context, rect, radius) {
                 var safeRadius = Math.max(
@@ -524,6 +663,7 @@ Popup {
         Shape {
             id: connector
             anchors.fill: parent
+            opacity: 1.0
             visible: propertiesPopup.sourceRect.width > 0
                      && propertiesPopup.sourceRect.height > 0
             preferredRendererType: Shape.CurveRenderer
@@ -563,6 +703,10 @@ Popup {
             id: propertiesCard
             objectName: "nodePropertiesCard"
             property bool userPositioned: false
+            property real enterOffsetX: 0
+            property real enterOffsetY: -8
+            property real motionX: 0
+            property real motionY: 0
             readonly property real edgeMargin: 12
 
             x: 0
@@ -576,6 +720,13 @@ Popup {
             radius: 4
             border.width: 1.65
             border.color: propertiesPopup.appTheme.borderSelected
+            opacity: 1.0
+            scale: 1.0
+            transformOrigin: Item.Center
+            transform: Translate {
+                x: propertiesCard.motionX
+                y: propertiesCard.motionY
+            }
 
             MouseArea {
                 id: cardInteraction
@@ -946,6 +1097,13 @@ Popup {
                 activeFocusOnTab: true
                 readonly property bool hovered: closeHover.hovered
                 readonly property bool pressed: closeTap.pressed
+                scale: pressed ? 0.97 : 1.0
+                Behavior on scale {
+                    NumberAnimation {
+                        duration: propertiesPopup.appTheme.motionEnabled ? 80 : 0
+                        easing.type: Easing.OutCubic
+                    }
+                }
 
                 function activate() {
                     propertiesPopup.closeOverlay()

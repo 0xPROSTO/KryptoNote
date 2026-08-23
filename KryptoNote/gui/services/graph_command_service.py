@@ -1,10 +1,17 @@
 class GraphCommandService:
     """Application-level graph commands shared by the QML adapter."""
 
-    def __init__(self, node_model, connection_model, node_service):
+    def __init__(
+        self,
+        node_model,
+        connection_model,
+        node_service,
+        on_connection_created=None,
+    ):
         self._node_model = node_model
         self._conn_model = connection_model
         self._node_service = node_service
+        self._on_connection_created = on_connection_created
         self._link_start_id = None
         self._pending_commits = False
 
@@ -85,7 +92,13 @@ class GraphCommandService:
                 conn_id = self._node_service.add_connection(
                     self._link_start_id, node_id, commit=True
                 )
-                self._conn_model.add_connection(conn_id, self._link_start_id, node_id)
+                self._conn_model.add_connection(
+                    conn_id,
+                    self._link_start_id,
+                    node_id,
+                )
+                if self._on_connection_created is not None:
+                    self._on_connection_created(int(conn_id))
                 status = ("LINKED! Chain moves to new node.", "secure")
             else:
                 status = None

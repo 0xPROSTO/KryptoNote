@@ -1498,11 +1498,27 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
 
     def _exec_dimmed_dialog(self, owner, dialog):
         self._window_overlay_manager.acquire(owner)
+        overlay_released = False
+
+        def release_overlay():
+            nonlocal overlay_released
+            if overlay_released:
+                return
+            overlay_released = True
+            self._window_overlay_manager.release(owner)
+
+        set_dismiss_callback = getattr(
+            dialog,
+            "set_dialog_motion_dismiss_callback",
+            None,
+        )
+        if callable(set_dismiss_callback):
+            set_dismiss_callback(release_overlay)
         try:
             center_on_parent_window(dialog, self)
             return dialog.exec()
         finally:
-            self._window_overlay_manager.release(owner)
+            release_overlay()
 
     def _sync_connection_style(self):
         self.connection_model.set_connection_appearance(
@@ -1553,6 +1569,9 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             )
             self._pwd_change_dialog.cancelRequested.connect(
                 self._cancel_password_change
+            )
+            self._pwd_change_dialog.set_dialog_motion_dismiss_callback(
+                lambda: self._window_overlay_manager.release("password")
             )
             self._pwd_change_dialog.finished.connect(self._cleanup_pwd_change_dialog)
             center_on_parent_window(self._pwd_change_dialog, self)

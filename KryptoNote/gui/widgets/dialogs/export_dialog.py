@@ -17,8 +17,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ...theme.icons import SvgIcons
 from ...theme.style_factory import StyleFactory
+from KryptoNote.gui.widgets.dialog_close_button import DialogCloseButton
 from KryptoNote.gui.widgets.frameless_window import FramelessWindowDragMixin
 
 
@@ -187,9 +187,8 @@ class ExportDialog(FramelessWindowDragMixin, QDialog):
         header_copy.addWidget(subtitle)
         header_layout.addLayout(header_copy, 1)
 
-        close_button = QPushButton()
+        close_button = DialogCloseButton()
         close_button.setObjectName("export_close")
-        close_button.setIcon(SvgIcons.get_icon("close"))
         close_button.setIconSize(QSize(18, 18))
         close_button.setToolTip("Cancel and close")
         close_button.setAccessibleName("Cancel export and close")
