@@ -80,6 +80,14 @@ Rectangle {
             asynchronous: true
             smooth: true
             cache: false
+            opacity: status === Image.Ready ? 1.0 : 0.0
+
+            Behavior on opacity {
+                NumberAnimation {
+                    duration: mediaNode.appTheme.motionEnabled ? 140 : 0
+                    easing.type: Easing.OutCubic
+                }
+            }
 
             onStatusChanged: {
                 if (status === Image.Error) {
@@ -93,8 +101,18 @@ Rectangle {
             text: "No Thumbnail"
             color: mediaNode.appTheme.textMuted
             font.pointSize: 10
-            visible: mediaNode.thumbnailRequested
-                     && (thumbImage.status === Image.Error || thumbImage.status === Image.Null)
+            visible: opacity > 0.01
+            opacity: mediaNode.thumbnailRequested
+                     && (thumbImage.status === Image.Error
+                         || thumbImage.status === Image.Null)
+                     ? 1.0 : 0.0
+
+            Behavior on opacity {
+                NumberAnimation {
+                    duration: mediaNode.appTheme.motionEnabled ? 140 : 0
+                    easing.type: Easing.OutCubic
+                }
+            }
         }
     }
 

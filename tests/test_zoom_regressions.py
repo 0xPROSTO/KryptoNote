@@ -306,6 +306,8 @@ def test_visual_detail_and_connection_geometry_do_not_follow_tween_frames():
     assert "contentScale" not in bounds_source
     assert "visibleCanvasRect" not in connection_source
     assert "isInViewport" not in connection_source
+    assert "segments:" not in connection_source
+    assert "appendSegment" not in connection_source
 
 
 def test_zoom_overlay_bridge_is_only_called_after_motion_finishes():

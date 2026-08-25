@@ -11,14 +11,20 @@ ToolButton {
     property bool confirm: false
     property bool destructive: false
     property bool compact: false
+    property real compactProgress: compact ? 1.0 : 0.0
     property string toolTipText: ""
+    readonly property real effectiveCompactProgress: Math.max(
+        0.0, Math.min(1.0, compactProgress)
+    )
+    readonly property bool iconOnly: effectiveCompactProgress > 0.0
 
     width: 108
     height: 30
     hoverEnabled: true
     focusPolicy: Qt.TabFocus
-    display: compact ? AbstractButton.IconOnly : AbstractButton.TextBesideIcon
-    spacing: compact ? 0 : 6
+    clip: true
+    display: iconOnly ? AbstractButton.IconOnly : AbstractButton.TextBesideIcon
+    spacing: iconOnly ? 0 : 6
     font.family: confirm ? "Segoe UI Semibold" : "Segoe UI"
     font.pointSize: 9
     opacity: enabled ? 1.0 : 0.85
@@ -53,10 +59,18 @@ ToolButton {
                     : control.confirm ? control.appTheme.btnApplyBorder
                     : control.destructive ? control.appTheme.btnCancelBorder
                     : control.appTheme.borderDefault
-        Behavior on color { ColorAnimation { duration: 140 } }
+        Behavior on color {
+            ColorAnimation {
+                duration: control.appTheme.motionEnabled ? 140 : 0
+            }
+        }
     }
 
-    Behavior on opacity { NumberAnimation { duration: 140 } }
+    Behavior on opacity {
+        NumberAnimation {
+            duration: control.appTheme.motionEnabled ? 140 : 0
+        }
+    }
     Behavior on scale {
         NumberAnimation {
             duration: control.appTheme.motionEnabled ? 80 : 0

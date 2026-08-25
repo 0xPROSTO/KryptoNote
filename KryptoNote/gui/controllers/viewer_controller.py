@@ -10,9 +10,27 @@ from ...core.database.connection import DatabaseConnection
 from ...core.database.repository import NodeRepository
 from ...core.constants import MEDIA_NODE_TYPES, PLAYABLE_NODE_TYPES
 from ...services.node_service import NodeService
+from ..models.node_list_model import NodeRoles
 
 
 logger = logging.getLogger(__name__)
+
+
+_VIEWER_SNAPSHOT_ROLES = frozenset(
+    int(role)
+    for role in (
+        NodeRoles.TypeRole,
+        NodeRoles.TitleRole,
+        NodeRoles.ContentRole,
+        NodeRoles.TextSizeRole,
+        NodeRoles.CreatedAtRole,
+        NodeRoles.UpdatedAtRole,
+        NodeRoles.MetaSummaryRole,
+        NodeRoles.TagsRole,
+        NodeRoles.AudioWaveformRole,
+        NodeRoles.MediaDurationRole,
+    )
+)
 
 
 def _decode_image_preview(db_path, crypto, node_id):
@@ -841,9 +859,22 @@ class ViewerController(QObject):
         if description_changed or text_size_changed or waveform_changed:
             self.sessionChanged.emit()
 
-    def _on_model_data_changed(self, *_args):
-        if self._active:
-            self._refresh_node_snapshot()
+    def _on_model_data_changed(self, top_left, bottom_right, roles=None):
+        if not self._active:
+            return
+        if roles and _VIEWER_SNAPSHOT_ROLES.isdisjoint(
+            int(role) for role in roles
+        ):
+            return
+        if not top_left.isValid() or not bottom_right.isValid():
+            return
+
+        first_row = min(top_left.row(), bottom_right.row())
+        last_row = max(top_left.row(), bottom_right.row())
+        for row in range(first_row, last_row + 1):
+            if self._node_model.get_node_id_at_row(row) == self._node_id:
+                self._refresh_node_snapshot()
+                return
 
     def _ensure_active_node_exists(self, *_args):
         if self._active and not self._node_model.get_node_data(self._node_id):

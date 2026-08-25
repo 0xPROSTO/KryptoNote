@@ -1,6 +1,9 @@
+from pathlib import Path
+
 from PySide6.QtMultimedia import QMediaPlayer
 
 from KryptoNote.gui.controllers.viewer_controller import ViewerController
+from KryptoNote.gui.models.node_list_model import NodeListModel, NodeRoles
 from KryptoNote.services.graph_export_service import GraphExportService
 from KryptoNote.utils.media_proc import (
     AUDIO_WAVEFORM_PEAK_COUNT,
@@ -8,6 +11,9 @@ from KryptoNote.utils.media_proc import (
     decode_audio_waveform,
     encode_audio_waveform,
 )
+
+
+QML_DIR = Path(__file__).resolve().parents[1] / "KryptoNote" / "gui" / "qml"
 
 
 def test_audio_waveform_codec_is_bounded_and_round_trips():
@@ -65,3 +71,47 @@ def test_viewer_collections_are_exposed_as_qml_value_types():
         property_index = meta_object.indexOfProperty(property_name)
         assert property_index >= 0
         assert meta_object.property(property_index).typeName() == expected_type
+
+
+def test_viewer_snapshot_ignores_unrelated_model_updates():
+    model = NodeListModel()
+    model.add_node(41, "image", 0, 0, 100, 100)
+    model.add_node(42, "image", 120, 0, 100, 100)
+
+    class ViewerStub:
+        _active = True
+        _node_id = 42
+        _node_model = model
+
+        def __init__(self):
+            self.refresh_count = 0
+
+        def _refresh_node_snapshot(self):
+            self.refresh_count += 1
+
+    viewer = ViewerStub()
+    other_row = model.index(0, 0)
+    active_row = model.index(1, 0)
+
+    ViewerController._on_model_data_changed(
+        viewer, active_row, active_row, [NodeRoles.XRole]
+    )
+    ViewerController._on_model_data_changed(
+        viewer, other_row, other_row, [NodeRoles.ContentRole]
+    )
+    assert viewer.refresh_count == 0
+
+    ViewerController._on_model_data_changed(
+        viewer, active_row, active_row, [NodeRoles.ContentRole]
+    )
+    ViewerController._on_model_data_changed(viewer, active_row, active_row, [])
+    assert viewer.refresh_count == 2
+
+
+def test_audio_waveform_progress_clips_static_canvas_layers():
+    source = (QML_DIR / "AudioWaveform.qml").read_text(encoding="utf-8")
+
+    assert "width: barsLayer.solidPlayedWidth" in source
+    assert "opacity: barsLayer.edgeOpacity" in source
+    assert "onVisualProgressChanged" not in source
+    assert source.count("Canvas {") == 2

@@ -152,8 +152,7 @@ Item {
     function lineGeometry(start, end) {
         return {
             path: "M " + start[0] + " " + start[1]
-                  + " L " + end[0] + " " + end[1],
-            segments: [[start[0], start[1], end[0], end[1]]]
+                  + " L " + end[0] + " " + end[1]
         };
     }
 
@@ -195,64 +194,19 @@ Item {
             control1 = [start[0] + dx * 0.4, start[1]];
             control2 = [end[0] - dx * 0.4, end[1]];
         }
-        var estimated = pointDistance(start, control1)
-                        + pointDistance(control1, control2)
-                        + pointDistance(control2, end);
-        var steps = Math.max(8, Math.min(64, Math.ceil(estimated / 24)));
-        var segments = [];
-        var previous = start;
-        for (var index = 1; index <= steps; index++) {
-            var t = index / steps;
-            var mt = 1.0 - t;
-            var point = [
-                mt * mt * mt * start[0]
-                + 3 * mt * mt * t * control1[0]
-                + 3 * mt * t * t * control2[0]
-                + t * t * t * end[0],
-                mt * mt * mt * start[1]
-                + 3 * mt * mt * t * control1[1]
-                + 3 * mt * t * t * control2[1]
-                + t * t * t * end[1]
-            ];
-            segments.push([
-                previous[0], previous[1], point[0], point[1]
-            ]);
-            previous = point;
-        }
         return {
             path: "M " + start[0] + " " + start[1]
                   + " C " + control1[0] + " " + control1[1]
                   + ", " + control2[0] + " " + control2[1]
-                  + ", " + end[0] + " " + end[1],
-            segments: segments
+                  + ", " + end[0] + " " + end[1]
         };
     }
 
     function quadraticGeometry(start, control, end) {
-        var estimated = pointDistance(start, control)
-                        + pointDistance(control, end);
-        var steps = Math.max(3, Math.min(24, Math.ceil(estimated / 24)));
-        var segments = [];
-        var previous = start;
-        for (var index = 1; index <= steps; index++) {
-            var t = index / steps;
-            var mt = 1.0 - t;
-            var point = [
-                mt * mt * start[0]
-                + 2 * mt * t * control[0]
-                + t * t * end[0],
-                mt * mt * start[1]
-                + 2 * mt * t * control[1]
-                + t * t * end[1]
-            ];
-            appendSegment(segments, previous, point);
-            previous = point;
-        }
         return {
             path: "M " + start[0] + " " + start[1]
                   + " Q " + control[0] + " " + control[1]
-                  + " " + end[0] + " " + end[1],
-            segments: segments
+                  + " " + end[0] + " " + end[1]
         };
     }
 
@@ -299,12 +253,10 @@ Item {
 
     function roundedPolylineGeometry(points, requestedRadius) {
         if (points.length < 2) {
-            return { path: "", segments: [] };
+            return { path: "" };
         }
         var radius = Math.max(0, Math.min(64, requestedRadius));
         var path = "M " + points[0][0] + " " + points[0][1];
-        var segments = [];
-        var current = points[0];
         for (var index = 1; index < points.length - 1; index++) {
             var previous = points[index - 1];
             var corner = points[index];
@@ -316,42 +268,18 @@ Item {
             );
             if (localRadius <= 0.001) {
                 path += " L " + corner[0] + " " + corner[1];
-                appendSegment(segments, current, corner);
-                current = corner;
                 continue;
             }
             var entry = pointToward(corner, previous, localRadius);
             var exitPoint = pointToward(corner, following, localRadius);
             path += " L " + entry[0] + " " + entry[1];
-            appendSegment(segments, current, entry);
 
             path += " Q " + corner[0] + " " + corner[1]
                     + " " + exitPoint[0] + " " + exitPoint[1];
-            var estimated = pointDistance(entry, corner)
-                            + pointDistance(corner, exitPoint);
-            var steps = Math.max(3, Math.min(24, Math.ceil(estimated / 24)));
-            var curveStart = entry;
-            var curvePrevious = entry;
-            for (var step = 1; step <= steps; step++) {
-                var t = step / steps;
-                var mt = 1.0 - t;
-                var curvePoint = [
-                    mt * mt * curveStart[0]
-                    + 2 * mt * t * corner[0]
-                    + t * t * exitPoint[0],
-                    mt * mt * curveStart[1]
-                    + 2 * mt * t * corner[1]
-                    + t * t * exitPoint[1]
-                ];
-                appendSegment(segments, curvePrevious, curvePoint);
-                curvePrevious = curvePoint;
-            }
-            current = exitPoint;
         }
         var end = points[points.length - 1];
         path += " L " + end[0] + " " + end[1];
-        appendSegment(segments, current, end);
-        return { path: path, segments: segments };
+        return { path: path };
     }
 
     function compactPoints(points) {
@@ -397,12 +325,6 @@ Item {
         if (style === "sharp") return 0;
         if (style === "tight") return 8;
         return 24;
-    }
-
-    function appendSegment(segments, start, end) {
-        if (pointDistance(start, end) > 0.001) {
-            segments.push([start[0], start[1], end[0], end[1]]);
-        }
     }
 
     function animateDeletion(finalizeAfterAnimation) {

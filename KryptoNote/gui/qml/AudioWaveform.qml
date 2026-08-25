@@ -73,69 +73,158 @@ Item {
         if (force || !playing || duration <= 0 || driftMilliseconds > 750) {
             visualProgress = next
         } else {
-            visualProgress += (next - visualProgress) * 0.35
+            visualProgress = clampedProgress(
+                visualProgress + (next - visualProgress) * 0.12
+            )
         }
         anchorProgress = visualProgress
         anchorTime = Date.now()
     }
 
-    Timer {
-        interval: 16
-        repeat: true
+    function drawBars(context, canvasWidth, canvasHeight, values,
+                      fillColor, alpha) {
+        var count = values.length
+        if (count <= 0) return
+        var slotWidth = canvasWidth / count
+        var gap = Math.max(1, slotWidth * 0.30)
+        var barWidth = Math.max(1, slotWidth - gap)
+        var center = canvasHeight / 2
+        context.fillStyle = fillColor
+        context.globalAlpha = alpha
+        for (var index = 0; index < count; ++index) {
+            var barHeight = Math.max(3, values[index] * (canvasHeight - 6))
+            var x = index * slotWidth + gap / 2
+            context.fillRect(
+                x,
+                center - barHeight / 2,
+                barWidth,
+                barHeight
+            )
+        }
+        context.globalAlpha = 1
+    }
+
+    function requestWaveformPaint() {
+        neutralBars.requestPaint()
+        playedBars.requestPaint()
+    }
+
+    FrameAnimation {
         running: waveformRoot.playing
                  && waveformRoot.playbackDuration > 0
                  && waveformRoot.visualProgress < 1
         onTriggered: {
-            var elapsed = Date.now() - waveformRoot.anchorTime
+            var elapsedMilliseconds = Math.max(
+                0, Date.now() - waveformRoot.anchorTime
+            )
             waveformRoot.visualProgress = waveformRoot.clampedProgress(
                 waveformRoot.anchorProgress
-                + elapsed / waveformRoot.playbackDuration
+                + elapsedMilliseconds / waveformRoot.playbackDuration
             )
         }
     }
 
-    Canvas {
-        id: bars
+    Item {
+        id: barsLayer
         anchors.fill: parent
-        antialiasing: true
         opacity: waveformRoot.enabled ? 1.0 : 0.45
+        readonly property int barCount:
+            (waveformRoot.displayWaveform || []).length
+        readonly property real slotWidth:
+            barCount > 0 ? width / barCount : 0
+        readonly property real slotGap:
+            barCount > 0 ? Math.max(1, slotWidth * 0.30) : 0
+        readonly property real barWidth:
+            barCount > 0 ? Math.max(1, slotWidth - slotGap) : 0
+        readonly property real playedWidth: Math.max(
+            0, Math.min(width, width * waveformRoot.visualProgress)
+        )
+        readonly property real solidPlayedWidth: Math.floor(playedWidth)
+        readonly property real edgeOpacity:
+            playedWidth - solidPlayedWidth
+        readonly property int edgeBarIndex: barCount > 0
+            ? Math.min(
+                barCount - 1,
+                Math.max(0, Math.floor(solidPlayedWidth / slotWidth))
+            ) : 0
+        readonly property real edgeSlotOffset: barCount > 0
+            ? solidPlayedWidth - edgeBarIndex * slotWidth : 0
+        readonly property bool edgeCoversBar:
+            barCount > 0
+            && solidPlayedWidth < width
+            && edgeSlotOffset >= slotGap / 2
+            && edgeSlotOffset < slotGap / 2 + barWidth
+        readonly property real edgeBarValue:
+            barCount > 0
+            ? Number(waveformRoot.displayWaveform[edgeBarIndex]) || 0
+            : 0
 
-        function drawBars(context, values, fillColor, alpha) {
-            var count = values.length
-            if (count <= 0) return
-            var slotWidth = width / count
-            var gap = Math.max(1, slotWidth * 0.30)
-            var barWidth = Math.max(1, slotWidth - gap)
-            var center = height / 2
-            context.fillStyle = fillColor
-            context.globalAlpha = alpha
-            for (var index = 0; index < count; ++index) {
-                var barHeight = Math.max(3, values[index] * (height - 6))
-                var x = index * slotWidth + gap / 2
-                context.fillRect(
-                    x,
-                    center - barHeight / 2,
-                    barWidth,
-                    barHeight
+        Canvas {
+            id: neutralBars
+            anchors.fill: parent
+            antialiasing: true
+
+            onPaint: {
+                var context = getContext("2d")
+                context.clearRect(0, 0, width, height)
+                waveformRoot.drawBars(
+                    context,
+                    width,
+                    height,
+                    waveformRoot.displayWaveform || [],
+                    waveformRoot.appTheme.textDim,
+                    0.58
                 )
             }
-            context.globalAlpha = 1
         }
 
-        onPaint: {
-            var context = getContext("2d")
-            context.clearRect(0, 0, width, height)
-            var values = waveformRoot.displayWaveform || []
-            if (values.length <= 0) return
-            drawBars(context, values, waveformRoot.appTheme.textDim, 0.58)
-            var playedWidth = width * waveformRoot.visualProgress
-            if (playedWidth <= 0) return
-            context.save()
-            context.beginPath()
-            context.rect(0, 0, playedWidth, height)
-            context.clip()
-            drawBars(context, values, waveformRoot.appTheme.accentMain, 1.0)
-            context.restore()
+        Item {
+            id: playedClip
+            anchors.left: parent.left
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            width: barsLayer.solidPlayedWidth
+            clip: true
+
+            Canvas {
+                id: playedBars
+                width: barsLayer.width
+                height: barsLayer.height
+                antialiasing: true
+
+                onPaint: {
+                    var context = getContext("2d")
+                    context.clearRect(0, 0, width, height)
+                    waveformRoot.drawBars(
+                        context,
+                        width,
+                        height,
+                        waveformRoot.displayWaveform || [],
+                        waveformRoot.appTheme.accentMain,
+                        1.0
+                    )
+                }
+            }
+        }
+
+        Rectangle {
+            id: fractionalPlayedEdge
+            x: barsLayer.solidPlayedWidth
+            y: (parent.height - height) / 2
+            width: Math.min(1, Math.max(0, parent.width - x))
+            height: Math.max(
+                3, barsLayer.edgeBarValue * (parent.height - 6)
+            )
+            color: waveformRoot.appTheme.accentMain
+            opacity: barsLayer.edgeOpacity
+            visible: barsLayer.edgeCoversBar && opacity > 0.001
+        }
+    }
+
+    Connections {
+        target: waveformRoot.appTheme
+        function onPaletteChanged() {
+            waveformRoot.requestWaveformPaint()
         }
     }
 
@@ -148,17 +237,22 @@ Item {
     }
 
     MouseArea {
+        id: waveformPointer
         anchors.fill: parent
         enabled: waveformRoot.enabled
         hoverEnabled: true
+        preventStealing: true
+        acceptedButtons: Qt.LeftButton
         cursorShape: Qt.PointingHandCursor
         onPressed: function(mouse) {
-            waveformRoot.forceActiveFocus()
+            mouse.accepted = true
             waveformRoot.seekRequested(Math.max(0, Math.min(1, mouse.x / width)))
         }
         onPositionChanged: function(mouse) {
-            if (pressed)
+            if (pressed) {
+                mouse.accepted = true
                 waveformRoot.seekRequested(Math.max(0, Math.min(1, mouse.x / width)))
+            }
         }
     }
 
@@ -176,10 +270,11 @@ Item {
     onProgressChanged: synchronizeProgress(false)
     onPlayingChanged: synchronizeProgress(true)
     onPlaybackDurationChanged: synchronizeProgress(true)
-    onDisplayWaveformChanged: bars.requestPaint()
-    onVisualProgressChanged: bars.requestPaint()
-    onEnabledChanged: bars.requestPaint()
-    onWidthChanged: bars.requestPaint()
-    onHeightChanged: bars.requestPaint()
-    Component.onCompleted: synchronizeProgress(true)
+    onDisplayWaveformChanged: requestWaveformPaint()
+    onWidthChanged: requestWaveformPaint()
+    onHeightChanged: requestWaveformPaint()
+    Component.onCompleted: {
+        synchronizeProgress(true)
+        requestWaveformPaint()
+    }
 }

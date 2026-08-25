@@ -2,12 +2,14 @@ import logging
 import threading
 
 from PySide6.QtCore import QObject, QTimer, Qt, Signal, Slot
-from PySide6.QtWidgets import QMessageBox
+from PySide6.QtWidgets import QDialog, QWidget
 
 from ...core.constants import AUTO_VACUUM_THRESHOLD_BYTES, PLAYABLE_NODE_TYPES
 from ...core.database.operations import DatabaseOperationProgress, DeletionResult
 from ...core.exceptions import InsufficientDiskSpaceError
+from ...utils.gui_utils import center_on_parent_window
 from ..services.operation_coordinator import OperationCoordinator
+from ..widgets.dialogs.confirmation_dialog import ConfirmationDialog
 
 
 logger = logging.getLogger(__name__)
@@ -349,17 +351,53 @@ class DeleteController(QObject):
         selected = self._node_model.get_selected_ids()
         if not selected:
             return
-        confirm = QMessageBox.question(
-            None,
-            "Delete",
-            f"Delete {len(selected)} items?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        )
-        if confirm == QMessageBox.StandardButton.Yes:
+        if self._confirm_selected_delete(len(selected)):
             if len(selected) > 1:
                 self._request_animated_delete_batch(selected)
             else:
                 self.request_animated_delete(selected[0])
+
+    def _confirm_selected_delete(self, count):
+        count = max(1, int(count))
+        singular = count == 1
+        heading = (
+            "Delete selected item?"
+            if singular
+            else f"Delete {count} selected items?"
+        )
+        message = (
+            "This action cannot be undone. The item and its connections "
+            "will be permanently removed."
+            if singular
+            else "This action cannot be undone. The selected items and their "
+            "connections will be permanently removed."
+        )
+
+        host = self._dialog_host()
+        dialog = ConfirmationDialog(
+            heading,
+            message,
+            confirm_text="Delete",
+            cancel_text="Cancel",
+            destructive=True,
+            icon_name="delete",
+            parent=host,
+        )
+        executor = getattr(host, "_exec_dimmed_dialog", None)
+        if callable(executor):
+            result = executor("delete-confirmation", dialog)
+        else:
+            center_on_parent_window(dialog, host)
+            result = dialog.exec()
+        return result == QDialog.DialogCode.Accepted
+
+    def _dialog_host(self):
+        current = self.parent()
+        while current is not None:
+            if isinstance(current, QWidget):
+                return current.window()
+            current = current.parent()
+        return None
 
     @Slot()
     def delete_selected_nodes_without_confirmation(self):

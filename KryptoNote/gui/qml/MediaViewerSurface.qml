@@ -3,6 +3,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
+import QtQuick.Shapes
 import QtMultimedia
 
 FocusScope {
@@ -40,16 +41,51 @@ FocusScope {
                                                && (viewerController.mediaType === "image"
                                                    || viewerController.mediaType === "video"
                                                    || viewerController.mediaType === "audio")
-    readonly property bool compactToolbar: width < 720
-    readonly property bool ultraCompactToolbar: width < 480
+    property real descriptionReveal: descriptionVisible ? 1.0 : 0.0
+    readonly property real toolbarCompactTarget: Math.max(
+        0.0, Math.min(1.0, (620.0 - width) / 100.0)
+    )
+    property real toolbarCompactProgress: toolbarCompactTarget
+    readonly property real toolbarMinimalTarget: Math.max(
+        0.0, Math.min(1.0, (460.0 - width) / 60.0)
+    )
+    property real toolbarMinimalProgress: toolbarMinimalTarget
+    property real descriptionActionsReveal:
+        viewerController.descriptionDirty ? 1.0 : 0.0
     readonly property real minimumImageZoom: 0.10
     readonly property real maximumImageZoom: 8.0
+
+    Behavior on toolbarCompactProgress {
+        NumberAnimation {
+            duration: surface.appTheme.motionEnabled ? 150 : 0
+            easing.type: Easing.OutCubic
+        }
+    }
+    Behavior on toolbarMinimalProgress {
+        NumberAnimation {
+            duration: surface.appTheme.motionEnabled ? 130 : 0
+            easing.type: Easing.OutCubic
+        }
+    }
+    Behavior on descriptionActionsReveal {
+        NumberAnimation {
+            duration: surface.appTheme.motionEnabled ? 170 : 0
+            easing.type: Easing.OutCubic
+        }
+    }
+    Behavior on descriptionReveal {
+        NumberAnimation {
+            duration: surface.appTheme.motionEnabled ? 220 : 0
+            easing.type: surface.descriptionVisible
+                         ? Easing.OutCubic : Easing.InOutCubic
+        }
+    }
     readonly property real descriptionSplitRatio: {
         var available = Math.max(1, splitAvailableHeight)
         var requested = Number(viewerController.descriptionSplitRatio) || 0.20
-        var minimumEditorRatio = descriptionVisible
+        var minimumEditorRatio = descriptionReveal > 0.001
                                    ? Math.min(0.90, 70 / available) : 0.10
-        var maximumEditorRatio = descriptionVisible
+        var maximumEditorRatio = descriptionReveal > 0.001
                                   ? Math.max(0.10, 1 - 72 / available) : 0.90
         var lower = Math.max(0.10, minimumEditorRatio)
         var upper = Math.min(0.90, maximumEditorRatio)
@@ -58,7 +94,7 @@ FocusScope {
             lower, Math.min(upper, requested)
         )))
     }
-    readonly property real descriptionDividerHeight: descriptionVisible ? 12 : 0
+    readonly property real descriptionDividerHeight: 12 * descriptionReveal
     readonly property real splitAvailableHeight: Math.max(
         0,
         mediaDescriptionRegion.height
@@ -90,6 +126,13 @@ FocusScope {
         return minutes + ":" + String(seconds).padStart(2, "0")
     }
 
+    function responsiveReveal(availableWidth, hiddenAt, shownAt) {
+        return Math.max(0.0, Math.min(
+            1.0,
+            (availableWidth - hiddenAt) / Math.max(1, shownAt - hiddenAt)
+        ))
+    }
+
     function fitImageZoom() {
         var baseWidth = mediaImage.implicitWidth
         var baseHeight = mediaImage.implicitHeight
@@ -98,8 +141,8 @@ FocusScope {
         var rotatedWidth = quarterTurn ? baseHeight : baseWidth
         var rotatedHeight = quarterTurn ? baseWidth : baseHeight
         return Math.min(maximumImageZoom, Math.min(
-            Math.max(1, imageViewport.width - 28) / rotatedWidth,
-            Math.max(1, imageViewport.height - 28) / rotatedHeight
+            Math.max(1, imageViewport.width) / rotatedWidth,
+            Math.max(1, imageViewport.height) / rotatedHeight
         ))
     }
 
@@ -585,6 +628,7 @@ FocusScope {
                                     ? "Collapse viewer"
                                     : "Expand viewer"
                     visible: surface.showExpand
+                             && surface.viewerController.mediaType !== "audio"
                     onClicked: surface.expandRequested()
                 }
 
@@ -611,8 +655,6 @@ FocusScope {
                 anchors.fill: parent
                 radius: 8
                 color: surface.appTheme.bgNode
-                border.width: 1
-                border.color: surface.appTheme.borderDefault
             }
 
             Rectangle {
@@ -624,8 +666,7 @@ FocusScope {
                 anchors.leftMargin: 1
                 anchors.rightMargin: 1
                 anchors.topMargin: 1
-                anchors.bottom: surface.descriptionVisible
-                                ? descriptionDivider.top : unifiedActionBar.top
+                anchors.bottom: descriptionDivider.top
                 color: "transparent"
                 clip: true
 
@@ -650,8 +691,12 @@ FocusScope {
                 id: mediaImage
                 objectName: "mediaPreviewImage"
                 visible: surface.viewerController.mediaType === "image"
-                         && !surface.viewerController.loading
+                         && (opacity > 0.01
+                             || (!surface.viewerController.loading
+                                 && surface.viewerController.errorText.length === 0))
+                opacity: !surface.viewerController.loading
                          && surface.viewerController.errorText.length === 0
+                         ? 1.0 : 0.0
                 source: surface.surfaceActive
                         ? surface.viewerController.imageSource : ""
                 cache: false
@@ -669,13 +714,18 @@ FocusScope {
                     origin.y: mediaImage.height / 2
                     angle: surface.imageRotation
                 }
+                Behavior on opacity {
+                    NumberAnimation {
+                        duration: surface.appTheme.motionEnabled ? 140 : 0
+                        easing.type: Easing.OutCubic
+                    }
+                }
             }
 
             VideoOutput {
                 id: videoOutput
                 objectName: "mediaVideoOutput"
                 anchors.fill: parent
-                anchors.margins: 1
                 visible: surface.viewerController.mediaType === "video"
                          && surface.viewerController.errorText.length === 0
                 fillMode: VideoOutput.PreserveAspectFit
@@ -785,7 +835,15 @@ FocusScope {
                 anchors.centerIn: parent
                 width: Math.min(parent.width - 36, 360)
                 spacing: 12
-                visible: surface.viewerController.loading
+                visible: surface.viewerController.loading || opacity > 0.01
+                opacity: surface.viewerController.loading ? 1.0 : 0.0
+
+                Behavior on opacity {
+                    NumberAnimation {
+                        duration: surface.appTheme.motionEnabled ? 140 : 0
+                        easing.type: Easing.OutCubic
+                    }
+                }
 
                 BusyIndicator {
                     anchors.horizontalCenter: parent.horizontalCenter
@@ -810,6 +868,16 @@ FocusScope {
                 width: Math.min(parent.width - 36, 380)
                 spacing: 12
                 visible: surface.viewerController.errorText.length > 0
+                         || opacity > 0.01
+                opacity: surface.viewerController.errorText.length > 0 ? 1.0 : 0.0
+                enabled: surface.viewerController.errorText.length > 0
+
+                Behavior on opacity {
+                    NumberAnimation {
+                        duration: surface.appTheme.motionEnabled ? 140 : 0
+                        easing.type: Easing.OutCubic
+                    }
+                }
 
                 Text {
                     width: parent.width
@@ -862,16 +930,90 @@ FocusScope {
             }
 
             Item {
+                id: mediaTopCornerGuards
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                height: 8
+                z: 20
+                visible: surface.viewerController.mediaType === "image"
+                         || surface.viewerController.mediaType === "video"
+
+                Shape {
+                    anchors.left: parent.left
+                    anchors.top: parent.top
+                    width: 8
+                    height: 8
+
+                    ShapePath {
+                        strokeWidth: -1
+                        fillColor: surface.appTheme.bgPanel
+                        startX: 0
+                        startY: 0
+                        PathLine { x: 8; y: 0 }
+                        PathArc {
+                            x: 0
+                            y: 8
+                            radiusX: 8
+                            radiusY: 8
+                            direction: PathArc.Counterclockwise
+                        }
+                        PathLine { x: 0; y: 0 }
+                    }
+                }
+
+                Shape {
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    width: 8
+                    height: 8
+                    transform: Scale {
+                        origin.x: 4
+                        origin.y: 4
+                        xScale: -1
+                    }
+
+                    ShapePath {
+                        strokeWidth: -1
+                        fillColor: surface.appTheme.bgPanel
+                        startX: 0
+                        startY: 0
+                        PathLine { x: 8; y: 0 }
+                        PathArc {
+                            x: 0
+                            y: 8
+                            radiusX: 8
+                            radiusY: 8
+                            direction: PathArc.Counterclockwise
+                        }
+                        PathLine { x: 0; y: 0 }
+                    }
+                }
+            }
+
+            Rectangle {
+                anchors.fill: parent
+                radius: 8
+                color: "transparent"
+                border.width: 1
+                border.color: surface.appTheme.borderDefault
+                z: 21
+            }
+
+            Item {
                 id: descriptionDivider
                 objectName: "mediaDescriptionDivider"
                 width: parent.width
                 height: surface.descriptionDividerHeight
-                visible: surface.descriptionVisible
+                visible: surface.descriptionReveal > 0.001
+                opacity: surface.descriptionReveal
+                enabled: surface.descriptionVisible
+                         && surface.descriptionReveal > 0.99
                 anchors.left: parent.left
                 anchors.right: parent.right
                 anchors.bottom: descriptionSplit.top
                 z: 4
-                focus: true
+                focus: enabled
 
                 Rectangle {
                     id: dividerLine
@@ -884,6 +1026,16 @@ FocusScope {
                            : surface.appTheme.borderDefault
                     opacity: dividerMouse.pressed || dividerMouse.containsMouse
                              ? 0.95 : 0.7
+                    Behavior on color {
+                        ColorAnimation {
+                            duration: surface.appTheme.motionEnabled ? 100 : 0
+                        }
+                    }
+                    Behavior on opacity {
+                        NumberAnimation {
+                            duration: surface.appTheme.motionEnabled ? 100 : 0
+                        }
+                    }
                 }
 
                 MouseArea {
@@ -926,14 +1078,20 @@ FocusScope {
                 id: descriptionSplit
                 objectName: "mediaDescriptionEditor"
                 width: parent.width
-                visible: surface.descriptionVisible
+                visible: surface.descriptionReveal > 0.001
+                opacity: surface.descriptionReveal
+                enabled: surface.descriptionVisible
+                         && surface.descriptionReveal > 0.99
+                clip: true
                 anchors.left: parent.left
                 anchors.right: parent.right
                 anchors.bottom: unifiedActionBar.top
-                height: visible
-                        ? Math.max(0, surface.splitAvailableHeight
-                                   * surface.descriptionSplitRatio)
-                        : 0
+                height: Math.max(
+                    0,
+                    surface.splitAvailableHeight
+                    * surface.descriptionSplitRatio
+                    * surface.descriptionReveal
+                )
 
                 Item {
                     id: descriptionToolbar
@@ -949,11 +1107,21 @@ FocusScope {
                     Text {
                         anchors.left: parent.left
                         anchors.verticalCenter: parent.verticalCenter
-                        visible: parent.width > 360
+                        property real responsiveReveal: surface.responsiveReveal(
+                            parent.width, 320, 360
+                        )
+                        visible: responsiveReveal > 0.01
+                        opacity: responsiveReveal
                         text: "Description"
                         color: surface.appTheme.textDim
                         font.family: "Segoe UI Semibold"
                         font.pointSize: 8
+                        Behavior on responsiveReveal {
+                            NumberAnimation {
+                                duration: surface.appTheme.motionEnabled ? 120 : 0
+                                easing.type: Easing.OutCubic
+                            }
+                        }
                     }
 
                     EditorFontSizeCombo {
@@ -1077,25 +1245,12 @@ FocusScope {
                     anchors.left: parent.left
                     anchors.leftMargin: 5
                     anchors.verticalCenter: parent.verticalCenter
-                    width: surface.viewerController.descriptionDirty
-                           ? descriptionActionRow.implicitWidth : 0
+                    width: descriptionActionRow.implicitWidth
+                           * surface.descriptionActionsReveal
                     height: 30
-                    opacity: surface.viewerController.descriptionDirty ? 1 : 0
+                    opacity: surface.descriptionActionsReveal
                     enabled: surface.viewerController.descriptionDirty
                     clip: true
-
-                    Behavior on width {
-                        NumberAnimation {
-                            duration: 170
-                            easing.type: Easing.OutCubic
-                        }
-                    }
-                    Behavior on opacity {
-                        NumberAnimation {
-                            duration: 120
-                            easing.type: Easing.OutCubic
-                        }
-                    }
 
                     Row {
                         id: descriptionActionRow
@@ -1103,9 +1258,9 @@ FocusScope {
                         spacing: 4
 
                         EditorActionButton {
-                            width: surface.compactToolbar ? 34 : 78
+                            width: 78 - 44 * surface.toolbarCompactProgress
                             height: 30
-                            compact: surface.compactToolbar
+                            compactProgress: surface.toolbarCompactProgress
                             appTheme: surface.appTheme
                             iconSource: "../assets/icons/save.svg"
                             text: "Save"
@@ -1115,9 +1270,9 @@ FocusScope {
                         }
 
                         EditorActionButton {
-                            width: surface.compactToolbar ? 34 : 78
+                            width: 78 - 44 * surface.toolbarCompactProgress
                             height: 30
-                            compact: surface.compactToolbar
+                            compactProgress: surface.toolbarCompactProgress
                             appTheme: surface.appTheme
                             iconSource: "../assets/icons/close.svg"
                             text: "Cancel"
@@ -1174,7 +1329,7 @@ FocusScope {
                             )
                         }
                         Text {
-                            width: surface.ultraCompactToolbar ? 38 : 44
+                            width: 44 - 6 * surface.toolbarMinimalProgress
                             height: 34
                             text: Math.round(surface.effectiveImageZoom() * 100) + "%"
                             color: surface.appTheme.textMuted
@@ -1202,14 +1357,25 @@ FocusScope {
                             enabled: mediaImage.status === Image.Ready
                             onClicked: surface.setFit()
                         }
-                        MediaIconButton {
-                            appTheme: surface.appTheme
-                            iconSource: "../assets/icons/actual-size.svg"
-                            accessibleName: "Preview at 100 percent"
-                            enabled: mediaImage.status === Image.Ready
-                            visible: !surface.ultraCompactToolbar
-                            onClicked: surface.setActualSize()
+                        Item {
+                            width: 34 * (1.0 - surface.toolbarMinimalProgress)
+                            height: 34
+                            opacity: 1.0 - surface.toolbarMinimalProgress
+                            visible: width > 0.5
+                            clip: true
+
+                            MediaIconButton {
+                                anchors.left: parent.left
+                                anchors.verticalCenter: parent.verticalCenter
+                                appTheme: surface.appTheme
+                                iconSource: "../assets/icons/actual-size.svg"
+                                accessibleName: "Preview at 100 percent"
+                                enabled: mediaImage.status === Image.Ready
+                                         && parent.opacity > 0.5
+                                onClicked: surface.setActualSize()
+                            }
                         }
+
                     }
 
                     RowLayout {
@@ -1277,8 +1443,16 @@ FocusScope {
                         }
 
                         Text {
-                            Layout.preferredWidth: 88
-                            visible: centerControls.width > 270
+                            property real responsiveReveal: surface.responsiveReveal(
+                                centerControls.width, 210, 250
+                            )
+
+                            Layout.minimumWidth: 0
+                            Layout.preferredWidth: implicitWidth * responsiveReveal
+                            Layout.maximumWidth: implicitWidth * responsiveReveal
+                            visible: responsiveReveal > 0.01
+                            opacity: responsiveReveal
+                            clip: true
                             text: surface.formatTime(surface.playbackForCurrentNode
                                                      ? surface.viewerController.position : 0)
                                   + " / " + surface.formatTime(
@@ -1286,9 +1460,27 @@ FocusScope {
                                       ? surface.viewerController.duration : 0
                                   )
                             color: surface.appTheme.textMuted
-                            horizontalAlignment: Text.AlignRight
+                            horizontalAlignment: Text.AlignLeft
                             font.family: "Segoe UI"
                             font.pointSize: 8
+
+                            Behavior on responsiveReveal {
+                                NumberAnimation {
+                                    duration: surface.appTheme.motionEnabled ? 130 : 0
+                                    easing.type: Easing.OutCubic
+                                }
+                            }
+                        }
+
+                        MediaVolumeControl {
+                            appTheme: surface.appTheme
+                            viewerController: surface.viewerController
+                            availableWidth: centerControls.width
+                            mediaName: "Audio"
+                            Layout.minimumWidth: 0
+                            Layout.preferredWidth: implicitWidth
+                            Layout.maximumWidth: implicitWidth
+                            Layout.preferredHeight: 34
                         }
                     }
 
@@ -1369,8 +1561,16 @@ FocusScope {
                         }
 
                         Text {
-                            Layout.preferredWidth: 88
-                            visible: centerControls.width > 310
+                            property real responsiveReveal: surface.responsiveReveal(
+                                centerControls.width, 240, 280
+                            )
+
+                            Layout.minimumWidth: 0
+                            Layout.preferredWidth: implicitWidth * responsiveReveal
+                            Layout.maximumWidth: implicitWidth * responsiveReveal
+                            visible: responsiveReveal > 0.01
+                            opacity: responsiveReveal
+                            clip: true
                             text: surface.formatTime(surface.playbackForCurrentNode
                                                      ? surface.viewerController.position : 0)
                                   + " / " + surface.formatTime(
@@ -1378,68 +1578,27 @@ FocusScope {
                                       ? surface.viewerController.duration : 0
                                   )
                             color: surface.appTheme.textMuted
-                            horizontalAlignment: Text.AlignRight
+                            horizontalAlignment: Text.AlignLeft
                             font.family: "Segoe UI"
                             font.pointSize: 8
-                        }
 
-                        MediaIconButton {
-                            appTheme: surface.appTheme
-                            iconSource: surface.viewerController.muted
-                                        ? "../assets/icons/mute.svg"
-                                        : "../assets/icons/volume.svg"
-                            accessibleName: surface.viewerController.muted
-                                            ? "Unmute video (M)"
-                                            : "Mute video (M)"
-                            visible: centerControls.width > 220
-                            onClicked: surface.viewerController.toggle_mute()
-                        }
-
-                        Slider {
-                            id: wideVolumeSlider
-                            Layout.preferredWidth: 74
-                            Layout.preferredHeight: 30
-                            visible: centerControls.width > 500
-                            from: 0
-                            to: 100
-                            stepSize: 2
-                            focusPolicy: Qt.TabFocus
-                            Accessible.name: "Video volume"
-                            onMoved: surface.viewerController.set_volume(value)
-                            background: Rectangle {
-                                x: wideVolumeSlider.leftPadding
-                                y: wideVolumeSlider.topPadding
-                                   + wideVolumeSlider.availableHeight / 2 - height / 2
-                                width: wideVolumeSlider.availableWidth
-                                height: 4
-                                radius: 2
-                                color: surface.appTheme.sliderTrack
-                                Rectangle {
-                                    width: wideVolumeSlider.visualPosition * parent.width
-                                    height: parent.height
-                                    radius: parent.radius
-                                    color: surface.appTheme.textDim
+                            Behavior on responsiveReveal {
+                                NumberAnimation {
+                                    duration: surface.appTheme.motionEnabled ? 130 : 0
+                                    easing.type: Easing.OutCubic
                                 }
                             }
-                            handle: Rectangle {
-                                x: wideVolumeSlider.leftPadding
-                                   + wideVolumeSlider.visualPosition
-                                   * (wideVolumeSlider.availableWidth - width)
-                                y: wideVolumeSlider.topPadding
-                                   + wideVolumeSlider.availableHeight / 2 - height / 2
-                                width: 11
-                                height: 11
-                                radius: 6
-                                color: wideVolumeSlider.visualFocus
-                                       ? surface.appTheme.accentMain
-                                       : surface.appTheme.sliderHandle
-                            }
-                            Binding {
-                                target: wideVolumeSlider
-                                property: "value"
-                                value: surface.viewerController.volume
-                                when: !wideVolumeSlider.pressed
-                            }
+                        }
+
+                        MediaVolumeControl {
+                            appTheme: surface.appTheme
+                            viewerController: surface.viewerController
+                            availableWidth: centerControls.width
+                            mediaName: "Video"
+                            Layout.minimumWidth: 0
+                            Layout.preferredWidth: implicitWidth
+                            Layout.maximumWidth: implicitWidth
+                            Layout.preferredHeight: 34
                         }
                     }
                 }
@@ -1449,9 +1608,9 @@ FocusScope {
                     anchors.right: parent.right
                     anchors.rightMargin: 5
                     anchors.verticalCenter: parent.verticalCenter
-                    width: surface.compactToolbar ? 34 : 88
+                    width: 88 - 54 * surface.toolbarCompactProgress
                     height: 30
-                    compact: surface.compactToolbar
+                    compactProgress: surface.toolbarCompactProgress
                     appTheme: surface.appTheme
                     iconSource: "../assets/icons/tag.svg"
                     text: surface.viewerController.tags.length > 0

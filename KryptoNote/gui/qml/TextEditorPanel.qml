@@ -18,6 +18,7 @@ Item {
     property string createdAt: "-"
     property string updatedAt: "-"
     property bool _loading: false
+    property bool _previewPending: false
     property bool panelVisible: false
     property bool resizing: resizeMouse.pressed
     property bool userResized: false
@@ -59,6 +60,8 @@ Item {
     }
 
     function openForNode(nextNodeId) {
+        _flushPreview()
+        _cancelScheduledPreview()
         var data = editor.canvasController.get_text_editor_data(nextNodeId)
         if (!data || data.length < 4) {
             return
@@ -100,6 +103,7 @@ Item {
         if (!hasContent || !loaded) {
             return
         }
+        _cancelScheduledPreview()
         editor.canvasController.save_text_content(
             nodeId,
             titleInput.text,
@@ -111,6 +115,7 @@ Item {
     }
 
     function cancelOrDelete() {
+        _cancelScheduledPreview()
         if (!loaded) {
             closeWithoutRestore()
             return
@@ -134,6 +139,7 @@ Item {
     }
 
     function closeWithoutRestore() {
+        _cancelScheduledPreview()
         open = false
         loaded = false
         nodeId = 0
@@ -145,6 +151,18 @@ Item {
         if (_loading || !loaded) {
             return
         }
+        _previewPending = true
+        if (!previewTimer.running) {
+            previewTimer.start()
+        }
+    }
+
+    function _flushPreview() {
+        if (!_previewPending || _loading || !loaded) {
+            _previewPending = false
+            return
+        }
+        _previewPending = false
         editor.canvasController.preview_text_content(
             nodeId,
             titleInput.text,
@@ -152,6 +170,11 @@ Item {
             _selectedTitleSize(),
             _selectedTextSize()
         )
+    }
+
+    function _cancelScheduledPreview() {
+        previewTimer.stop()
+        _previewPending = false
     }
 
     function _fontIndex(size) {
@@ -169,6 +192,13 @@ Item {
 
     function _selectedTextSize() {
         return bodySizeCombo.currentIndex >= 0 ? fontSizes[bodySizeCombo.currentIndex] : 10
+    }
+
+    Timer {
+        id: previewTimer
+        interval: 33
+        repeat: false
+        onTriggered: editor._flushPreview()
     }
 
     Rectangle {

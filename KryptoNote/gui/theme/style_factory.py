@@ -333,6 +333,105 @@ class StyleFactory:
         """
 
     @staticmethod
+    def get_confirmation_dialog_qss():
+        return f"""
+            QDialog#confirmation_dialog {{
+                background: transparent;
+                color: {Palette.TEXT_MAIN};
+                font-family: 'Segoe UI', sans-serif;
+            }}
+            QWidget#confirmation_container {{
+                background: {Palette.BG_PANEL};
+                border: 1px solid {Palette.BORDER_DEFAULT};
+                border-radius: 10px;
+            }}
+            QWidget#confirmation_header {{
+                background: transparent;
+                border: none;
+            }}
+            QLabel {{
+                background: transparent;
+                border: none;
+            }}
+            QLabel#confirmation_icon {{
+                background: {Palette.BG_CONTROL};
+                border: 1px solid {Palette.BORDER_DEFAULT};
+                border-radius: 8px;
+            }}
+            QLabel#confirmation_icon[destructive="true"] {{
+                background: {Palette.BTN_CANCEL};
+                border-color: {Palette.BTN_CANCEL_BORDER};
+            }}
+            QLabel#confirmation_title {{
+                color: {Palette.TEXT_MAIN};
+                font-size: 15px;
+                font-weight: 600;
+            }}
+            QLabel#confirmation_message {{
+                color: {Palette.TEXT_DIM};
+                font-size: 12px;
+            }}
+            QPushButton {{
+                min-width: 92px;
+                min-height: 34px;
+                padding: 0 14px;
+                outline: none;
+                color: {Palette.TEXT_MAIN};
+                background: {Palette.BG_CONTROL};
+                border: 1px solid {Palette.BORDER_DEFAULT};
+                border-radius: 6px;
+                font-size: 12px;
+                font-weight: 600;
+            }}
+            QPushButton:hover {{
+                background: {Palette.BG_CONTROL_HOVER};
+                border-color: {Palette.BORDER_HOVER};
+            }}
+            QPushButton:pressed {{
+                background: {Palette.BG_CONTROL_PRESSED};
+            }}
+            QPushButton:focus {{
+                border: 2px solid {Palette.ACCENT_MAIN};
+            }}
+            QPushButton#confirmation_close {{
+                min-width: 34px;
+                max-width: 34px;
+                min-height: 34px;
+                max-height: 34px;
+                padding: 0;
+                background: transparent;
+                border: none;
+            }}
+            QPushButton#confirmation_close:hover {{
+                background: {Palette.BG_CONTROL_HOVER};
+            }}
+            QPushButton#confirmation_close:focus {{
+                border: 1px solid {Palette.ACCENT_MAIN};
+            }}
+            QPushButton#confirmation_confirm {{
+                color: {Palette.ON_ACCENT};
+                background: {Palette.ACCENT_MAIN};
+                border-color: {Palette.ACCENT_MAIN};
+            }}
+            QPushButton#confirmation_confirm:hover {{
+                background: {Palette.ACCENT_HOVER};
+                border-color: {Palette.ACCENT_HOVER};
+            }}
+            QPushButton#confirmation_confirm_danger {{
+                color: {Palette.TEXT_MAIN};
+                background: {Palette.DANGER};
+                border-color: {Palette.DANGER};
+            }}
+            QPushButton#confirmation_confirm_danger:hover {{
+                background: {Palette.DANGER_HOVER};
+                border-color: {Palette.DANGER_HOVER};
+            }}
+            QPushButton#confirmation_confirm_danger:focus {{
+                border: 2px solid {Palette.TEXT_MAIN};
+            }}
+        """
+
+    @staticmethod
     def get_theme_dialog_qss():
         return f"""
             QDialog#theme_dialog {{
