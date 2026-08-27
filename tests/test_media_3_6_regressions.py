@@ -111,7 +111,21 @@ def test_viewer_snapshot_ignores_unrelated_model_updates():
 def test_audio_waveform_progress_clips_static_canvas_layers():
     source = (QML_DIR / "AudioWaveform.qml").read_text(encoding="utf-8")
 
-    assert "width: barsLayer.solidPlayedWidth" in source
-    assert "opacity: barsLayer.edgeOpacity" in source
+    assert "width: barsLayer.playedWidth" in source
+    assert "function drawEnvelope" in source
+    assert "function buildDetailedContour" in source
+    assert "var toothPattern" in source
+    assert "fillRect(0, Math.floor(center)" not in source
+    assert "context.closePath()" in source
     assert "onVisualProgressChanged" not in source
     assert source.count("Canvas {") == 2
+
+
+def test_audio_viewer_initial_focus_targets_media_playback_controls():
+    surface = (QML_DIR / "MediaViewerSurface.qml").read_text(encoding="utf-8")
+    panel = (QML_DIR / "MediaViewerPanel.qml").read_text(encoding="utf-8")
+
+    assert "function focusPrimaryMediaControl()" in surface
+    assert 'objectName: "audioPlayButton"' in surface
+    assert 'objectName: "videoPlayButton"' in surface
+    assert "mediaSurface.focusPrimaryMediaControl()" in panel

@@ -38,12 +38,15 @@ ToolButton {
              : "transparent"
         border.width: control.visualFocus ? 1 : 0
         border.color: control.appTheme.accentMain
-        Behavior on color { ColorAnimation { duration: 120 } }
+        Behavior on color {
+            ColorAnimation { duration: control.appTheme.durationState }
+        }
     }
 
     Behavior on scale {
         NumberAnimation {
-            duration: control.appTheme.motionEnabled ? 80 : 0
+            duration: control.appTheme.motionEnabled
+                      ? control.appTheme.durationPress : 0
             easing.type: Easing.OutCubic
         }
     }

@@ -2,12 +2,14 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Window
 
 
 Popup {
     id: contextPopup
     required property var canvasController
     required property var appTheme
+    required property bool shiftHeld
     width: 236
     parent: Overlay.overlay
     padding: 4
@@ -28,14 +30,167 @@ Popup {
     property real canvasY: 0
     property real motionOffset: 0
     property bool snapToGrid: false
+    property var previousFocusItem: null
+    property bool keyboardNavigationActive: true
+    property var hoveredMenuEntry: null
+    property bool pointerHoverArmed: false
+    property real openPointerX: 0
+    property real openPointerY: 0
+    property int pendingDeleteNodeId: 0
+    property bool pendingDeleteBypass: false
+    readonly property var hostWindow: menuContent.hostWindow
     signal requestedTags(int nodeId, var anchorItem)
     signal requestedSearch()
 
     function openAt(sourceItem, localX, localY) {
+        var hostWindow = contextPopup.hostWindow
+        previousFocusItem = hostWindow ? hostWindow.activeFocusItem : null
+        // A pointer-opened menu starts neutral.  Hover or the first
+        // navigation key chooses an entry; merely opening it must not imply
+        // that the first action is selected.
+        keyboardNavigationActive = false
+        hoveredMenuEntry = null
         var point = sourceItem.mapToItem(contextPopup.parent, localX, localY)
+        pointerHoverArmed = false
+        openPointerX = point.x
+        openPointerY = point.y
         contextPopup.x = Math.max(0, Math.min(point.x, contextPopup.parent.width - contextPopup.width))
         contextPopup.y = Math.max(0, Math.min(point.y, contextPopup.parent.height - contextPopup.height))
         contextPopup.open()
+    }
+
+    function menuEntries() {
+        var entries = []
+        collectMenuEntries(menuContent, entries)
+        return entries
+    }
+
+    function collectMenuEntries(item, entries) {
+        if (!item) return
+        if (item.menuEntry === true && item.visible && item.enabled)
+            entries.push(item)
+        var children = item.children || []
+        for (var i = 0; i < children.length; i++)
+            collectMenuEntries(children[i], entries)
+    }
+
+    function updatePointerHover(entry, localX, localY) {
+        var point = entry.mapToItem(contextPopup.parent, localX, localY)
+        if (!pointerHoverArmed) {
+            var deltaX = point.x - openPointerX
+            var deltaY = point.y - openPointerY
+            // Opening/enter motion can change local coordinates under a
+            // stationary cursor.  Compare in overlay coordinates so only a
+            // real pointer move arms hover highlighting.
+            if (deltaX * deltaX + deltaY * deltaY <= 1) return
+            pointerHoverArmed = true
+        }
+        keyboardNavigationActive = false
+        hoveredMenuEntry = entry
+    }
+
+    function focusMenuEntry(step, edge) {
+        var entries = menuEntries()
+        if (entries.length === 0) return
+        var continuingKeyboardNavigation = keyboardNavigationActive
+        keyboardNavigationActive = true
+        hoveredMenuEntry = null
+        var hostWindow = contextPopup.hostWindow
+        var focused = hostWindow ? hostWindow.activeFocusItem : null
+        var index = continuingKeyboardNavigation ? entries.indexOf(focused) : -1
+        if (edge === "first") index = 0
+        else if (edge === "last") index = entries.length - 1
+        else if (index < 0) index = step > 0 ? 0 : entries.length - 1
+        else index = (index + step + entries.length) % entries.length
+        entries[index].forceActiveFocus()
+    }
+
+    function focusMenuPage(direction) {
+        var entries = menuEntries()
+        if (entries.length === 0) return
+        var continuingKeyboardNavigation = keyboardNavigationActive
+        keyboardNavigationActive = true
+        hoveredMenuEntry = null
+        var hostWindow = contextPopup.hostWindow
+        var focused = hostWindow ? hostWindow.activeFocusItem : null
+        var index = continuingKeyboardNavigation ? entries.indexOf(focused) : -1
+        if (index < 0) index = direction > 0 ? 0 : entries.length - 1
+        else index = Math.max(
+            0,
+            Math.min(entries.length - 1, index + direction * 5)
+        )
+        entries[index].forceActiveFocus()
+    }
+
+    function isNavigationKey(key) {
+        return key === Qt.Key_Down
+                || key === Qt.Key_Up
+                || key === Qt.Key_Home
+                || key === Qt.Key_End
+                || key === Qt.Key_PageDown
+                || key === Qt.Key_PageUp
+                || key === Qt.Key_Return
+                || key === Qt.Key_Enter
+                || key === Qt.Key_Space
+                || key === Qt.Key_Escape
+    }
+
+    function handleNavigationKey(event) {
+        if (event.key === Qt.Key_Down) {
+            contextPopup.focusMenuEntry(1, "")
+        } else if (event.key === Qt.Key_Up) {
+            contextPopup.focusMenuEntry(-1, "")
+        } else if (event.key === Qt.Key_Home) {
+            contextPopup.focusMenuEntry(0, "first")
+        } else if (event.key === Qt.Key_End) {
+            contextPopup.focusMenuEntry(0, "last")
+        } else if (event.key === Qt.Key_PageDown) {
+            contextPopup.focusMenuPage(1)
+        } else if (event.key === Qt.Key_PageUp) {
+            contextPopup.focusMenuPage(-1)
+        } else {
+            return false
+        }
+        event.accepted = true
+        return true
+    }
+
+    onOpened: Qt.callLater(function() {
+        if (!contextPopup.visible) return
+        contextPopup.keyboardNavigationActive = false
+        contextPopup.hoveredMenuEntry = null
+        menuContent.forceActiveFocus(Qt.PopupFocusReason)
+    })
+
+    onClosed: {
+        hoveredMenuEntry = null
+        pointerHoverArmed = false
+        var focusItem = previousFocusItem
+        var deleteNodeId = pendingDeleteNodeId
+        var bypassDeleteConfirmation = pendingDeleteBypass
+        previousFocusItem = null
+        pendingDeleteNodeId = 0
+        pendingDeleteBypass = false
+        Qt.callLater(function() {
+            if (focusItem && focusItem.visible && focusItem.enabled
+                    && typeof focusItem.forceActiveFocus === "function") {
+                focusItem.forceActiveFocus()
+            }
+            if (deleteNodeId > 0) {
+                contextPopup.canvasController.delete_node_from_context(
+                    deleteNodeId,
+                    bypassDeleteConfirmation
+                )
+            }
+        })
+    }
+
+    Keys.onShortcutOverride: function(event) {
+        if (contextPopup.isNavigationKey(event.key)) event.accepted = true
+    }
+
+    Keys.onPressed: function(event) {
+        contextPopup.handleNavigationKey(event)
     }
 
     function openForNode(targetNodeId, targetNodeType, sourceItem, localX, localY) {
@@ -76,17 +231,19 @@ Popup {
         ParallelAnimation {
             NumberAnimation {
                 property: "opacity"; from: 0.0; to: 1.0
-                duration: contextPopup.appTheme.motionEnabled ? 150 : 0
+                duration: contextPopup.appTheme.durationState
                 easing.type: Easing.OutCubic
             }
             NumberAnimation {
                 property: "scale"; from: 0.98; to: 1.0
-                duration: contextPopup.appTheme.motionEnabled ? 150 : 0
+                duration: contextPopup.appTheme.motionEnabled
+                          ? contextPopup.appTheme.durationState : 0
                 easing.type: Easing.OutCubic
             }
             NumberAnimation {
                 target: contextPopup; property: "motionOffset"; from: -4; to: 0
-                duration: contextPopup.appTheme.motionEnabled ? 150 : 0
+                duration: contextPopup.appTheme.motionEnabled
+                          ? contextPopup.appTheme.durationState : 0
                 easing.type: Easing.OutCubic
             }
         }
@@ -96,17 +253,19 @@ Popup {
         ParallelAnimation {
             NumberAnimation {
                 property: "opacity"; from: 1.0; to: 0.0
-                duration: contextPopup.appTheme.motionEnabled ? 100 : 0
+                duration: contextPopup.appTheme.durationExit
                 easing.type: Easing.InCubic
             }
             NumberAnimation {
                 property: "scale"; from: 1.0; to: 0.99
-                duration: contextPopup.appTheme.motionEnabled ? 100 : 0
+                duration: contextPopup.appTheme.motionEnabled
+                          ? contextPopup.appTheme.durationExit : 0
                 easing.type: Easing.InCubic
             }
             NumberAnimation {
                 target: contextPopup; property: "motionOffset"; from: 0; to: -2
-                duration: contextPopup.appTheme.motionEnabled ? 100 : 0
+                duration: contextPopup.appTheme.motionEnabled
+                          ? contextPopup.appTheme.durationExit : 0
                 easing.type: Easing.InCubic
             }
         }
@@ -121,9 +280,19 @@ Popup {
     }
 
     contentItem: Column {
+        id: menuContent
+        readonly property var hostWindow: Window.window
+        focus: true
         spacing: 2
         width: parent ? parent.width : 236
         transform: Translate { y: contextPopup.motionOffset }
+
+        Keys.onShortcutOverride: function(event) {
+            if (contextPopup.isNavigationKey(event.key)) event.accepted = true
+        }
+        Keys.onPressed: function(event) {
+            contextPopup.handleNavigationKey(event)
+        }
 
         Loader {
             width: parent.width
@@ -568,8 +737,9 @@ Popup {
             textColor: contextPopup.appTheme.btnCancelText
             visible: contextPopup.targetKind === "node"
             onClicked: {
-                contextPopup.canvasController.request_animated_delete(contextPopup.nodeId);
-                contextPopup.close();
+                contextPopup.pendingDeleteNodeId = contextPopup.nodeId
+                contextPopup.pendingDeleteBypass = contextPopup.shiftHeld
+                contextPopup.close()
             }
         }
     }
@@ -603,17 +773,15 @@ Popup {
         width: parent ? parent.width : 228
         height: 28
         activeFocusOnTab: true
+        property bool menuEntry: true
         color: menuMouseArea.pressed ? contextPopup.appTheme.bgControlPressed
-             : menuMouseArea.containsMouse ? contextPopup.appTheme.bgControlHover
-             : activeFocus ? contextPopup.appTheme.bgControl : "transparent"
+             : contextPopup.keyboardNavigationActive
+               ? (activeFocus ? contextPopup.appTheme.accentLow : "transparent")
+             : contextPopup.hoveredMenuEntry === menuButton
+               ? contextPopup.appTheme.bgControlHover : "transparent"
         radius: 3
-        border.width: activeFocus ? 1 : 0
+        border.width: activeFocus && contextPopup.keyboardNavigationActive ? 1 : 0
         border.color: contextPopup.appTheme.accentMain
-        Behavior on color {
-            ColorAnimation {
-                duration: contextPopup.appTheme.motionEnabled ? 80 : 0
-            }
-        }
 
         property alias text: label.text
         property alias rightText: shortcutLabel.text
@@ -667,7 +835,12 @@ Popup {
             horizontalAlignment: Text.AlignRight
         }
 
+        Keys.onShortcutOverride: function(event) {
+            if (contextPopup.isNavigationKey(event.key)) event.accepted = true
+        }
+
         Keys.onPressed: function(event) {
+            if (contextPopup.handleNavigationKey(event)) return
             if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter
                     || event.key === Qt.Key_Space) {
                 menuButton.clicked()
@@ -683,6 +856,19 @@ Popup {
             anchors.fill: parent
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
+            onEntered: {
+                if (contextPopup.pointerHoverArmed) {
+                    contextPopup.keyboardNavigationActive = false
+                    contextPopup.hoveredMenuEntry = menuButton
+                }
+            }
+            onPositionChanged: function(mouse) {
+                contextPopup.updatePointerHover(menuButton, mouse.x, mouse.y)
+            }
+            onExited: {
+                if (contextPopup.hoveredMenuEntry === menuButton)
+                    contextPopup.hoveredMenuEntry = null
+            }
             onClicked: menuButton.clicked()
         }
     }

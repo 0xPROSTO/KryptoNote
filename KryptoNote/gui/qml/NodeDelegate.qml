@@ -20,9 +20,11 @@ Item {
     height: delegateRoot.model.nodeHeight
     z: delegateRoot.visuallySelected ? 10 : 1
     visible: matchesLayer
-             && (isInViewport || delegateRoot.model.nodeIsDeleting)
+             && (isInViewport || delegateRoot.model.nodeIsDeleting
+                 || delegateRoot.nodeTransforming)
 
     property bool _isResizing: false
+    property bool _frameSurfaceHovered: false
     readonly property var _resizer: resizeLoader.item
     readonly property bool _resizeHovered:
             delegateRoot._resizer ? delegateRoot._resizer._isHovered : false
@@ -31,6 +33,7 @@ Item {
             ? delegateRoot._resizer._pointerHovered : false
     readonly property bool _visualHovered:
             delegateRoot.model.nodeIsHovered
+            || delegateRoot._frameSurfaceHovered
             || delegateRoot._resizePointerHovered
             || (delegateRoot._resizer
                 ? delegateRoot._resizer.topEdgeExclusionHovered : false)
@@ -47,6 +50,8 @@ Item {
             ? delegateRoot.model.nodeId
                 === delegateRoot.canvasRoot.propertiesFocusNodeId
             : delegateRoot.model.nodeIsSelected
+    readonly property bool nodeTransforming:
+            delegateRoot._isResizing || nodeDragController.dragging
     property bool matchesLayer: delegateRoot.renderFrames
                                 ? delegateRoot.model.nodeType === "frame"
                                 : delegateRoot.model.nodeType !== "frame"
@@ -80,7 +85,8 @@ Item {
                 + (delegateRoot.model.nodeType === "frame" ? 15 : 0)
         active: delegateRoot.matchesLayer
                 && (delegateRoot.isInViewport
-                    || delegateRoot.model.nodeIsDeleting)
+                    || delegateRoot.model.nodeIsDeleting
+                    || delegateRoot.nodeTransforming)
         sourceComponent: delegateRoot.model.nodeType === "frame"
                          ? frameNodeComponent
                          : (delegateRoot.model.nodeType === "text"
@@ -105,6 +111,7 @@ Item {
             frameLocked: delegateRoot.model.nodeFrameLocked
             frameColor: delegateRoot.model.nodeFrameColor
             frameOpacity: delegateRoot.model.nodeFrameOpacity
+            canvasScale: delegateRoot.canvasRoot.visualDetailScale
             tags: delegateRoot.model.nodeTags
             isSelected: delegateRoot.visuallySelected
             isHovered: delegateRoot._visualHovered
@@ -155,6 +162,7 @@ Item {
             nodeContent: delegateRoot.model.nodeContent
             isSelected: delegateRoot.visuallySelected
             isHovered: delegateRoot._visualHovered
+            isTransforming: delegateRoot.nodeTransforming
             titleSize: delegateRoot.model.nodeTitleSize
             textSize: delegateRoot.model.nodeTextSize
             nodeWidth: delegateRoot.model.nodeWidth
@@ -183,8 +191,10 @@ Item {
             mediaDuration: delegateRoot.model.nodeMediaDuration
             isSelected: delegateRoot.visuallySelected
             isHovered: delegateRoot._visualHovered
+            isTransforming: delegateRoot.nodeTransforming
             nodeWidth: delegateRoot.model.nodeWidth
             nodeHeight: delegateRoot.model.nodeHeight
+            canvasScale: delegateRoot.canvasRoot.visualDetailScale
             tags: delegateRoot.model.nodeTags
         }
     }
@@ -207,6 +217,7 @@ Item {
             isHovered: delegateRoot._visualHovered
             nodeWidth: delegateRoot.model.nodeWidth
             nodeHeight: delegateRoot.model.nodeHeight
+            canvasScale: delegateRoot.canvasRoot.visualDetailScale
             tags: delegateRoot.model.nodeTags
         }
     }
@@ -257,6 +268,15 @@ Item {
         }
     }
 
+    HoverHandler {
+        enabled: delegateRoot.matchesLayer
+                 && delegateRoot.model.nodeType === "frame"
+                 && delegateRoot.isInViewport
+        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+        onHoveredChanged:
+            delegateRoot._frameSurfaceHovered = hovered
+    }
+
     Loader {
         id: resizeLoader
         z: 6
@@ -264,7 +284,10 @@ Item {
         active: delegateRoot.matchesLayer
                 && !delegateRoot.model.nodeIsDeleting
                 && ((delegateRoot.isInViewport
-                     && delegateRoot.model.nodeIsHovered)
+                     && (delegateRoot.model.nodeIsHovered
+                         || delegateRoot._frameSurfaceHovered
+                         || (delegateRoot.model.nodeType === "frame"
+                             && delegateRoot.model.nodeIsSelected)))
                     || delegateRoot._resizePointerHovered
                     || delegateRoot._isResizing)
         sourceComponent: resizeHandleComponent
@@ -279,6 +302,8 @@ Item {
             nodeId: delegateRoot.model.nodeId
             delegateItem: delegateRoot
             nodeHovered: delegateRoot.model.nodeIsHovered
+            nodeSelected: delegateRoot.model.nodeIsSelected
+            passiveSurfaceHovered: delegateRoot._frameSurfaceHovered
             minimumNodeWidth: delegateRoot._minimumResizeWidth
             minimumNodeHeight: delegateRoot._minimumResizeHeight
             topEdgeExclusionWidth: nodeLoader.itemTopResizeExclusionWidth
@@ -291,6 +316,7 @@ Item {
         // delete transition above every node surface as well.
         z: 5
         canvasController: delegateRoot.canvasController
+        appTheme: delegateRoot.appTheme
         anchors.fill: nodeLoader
         targetItem: delegateRoot
         nodeId: delegateRoot.model.nodeId

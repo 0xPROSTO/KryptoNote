@@ -5,7 +5,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QObject, QPoint, QUrl, Qt
 from PySide6.QtGui import QGuiApplication
-from PySide6.QtQml import QQmlComponent, QQmlEngine
+from PySide6.QtQml import QQmlComponent, QQmlEngine, QQmlExpression
 from PySide6.QtTest import QTest
 
 from KryptoNote.gui.controllers.command_palette_controller import (
@@ -253,6 +253,10 @@ ApplicationWindow {{
     QtObject {{
         id: theme
         property bool motionEnabled: true
+        property int durationPress: 80
+        property int durationState: 140
+        property int durationPanel: 220
+        property int durationExit: 80
         property color overlayDim: "#99000000"
         property color bgPopover: "#232425"
         property color borderHover: "#555b62"
@@ -292,6 +296,8 @@ ApplicationWindow {{
                     commands.push(commandRow("many-" + i, "Many command " + i))
                 return commands
             }}
+            if (query === "frame")
+                return [commandRow("add-frame", "Add frame")]
             return []
         }}
         function execute_command(commandId) {{
@@ -347,6 +353,89 @@ ApplicationWindow {{
     return window, palette, engine, component
 
 
+def _load_context_menu():
+    QGuiApplication.instance() or QGuiApplication([])
+    engine = QQmlEngine()
+    qml_dir = QML_DIR.resolve().as_uri()
+    source = f'''
+import QtQuick
+import QtQuick.Controls
+import "{qml_dir}" as App
+
+ApplicationWindow {{
+    id: root
+    width: 640
+    height: 480
+    visible: true
+    property bool shiftHeld: false
+
+    Item {{ id: sourceItem; width: 120; height: 80 }}
+
+    QtObject {{
+        id: theme
+        property bool motionEnabled: false
+        property int durationState: 0
+        property int durationExit: 0
+        property color bgPopover: "#232425"
+        property color borderDefault: "#3a3e43"
+        property color accentMain: "#e6158b"
+        property color accentLow: "#3a1025"
+        property color bgControlHover: "#35393e"
+        property color bgControlPressed: "#44484e"
+        property color textMain: "#efefef"
+        property color textMuted: "#92979f"
+        property color btnCancelText: "#ff7777"
+    }}
+
+    QtObject {{
+        id: canvasController
+        property bool snap_to_grid: false
+        function is_frame_locked(nodeId) {{ return false }}
+        function request_open_editor(nodeId) {{}}
+        function rename_node(nodeId) {{}}
+        function auto_fit_node(nodeId) {{}}
+        function duplicate_node(nodeId) {{}}
+        function copy_nodes(nodeId) {{}}
+        function paste_nodes() {{}}
+        function copy_to_system_clipboard(nodeId) {{}}
+        function paste_from_system_clipboard() {{}}
+        function show_node_properties(nodeId) {{}}
+        function request_animated_delete(nodeId) {{}}
+        function delete_node_from_context(nodeId, bypassConfirmation) {{}}
+    }}
+
+    App.NodeContextMenu {{
+        id: contextMenu
+        objectName: "nodeContextMenu"
+        appTheme: theme
+        canvasController: canvasController
+        shiftHeld: root.shiftHeld
+    }}
+
+    function openNodeMenu() {{
+        contextMenu.openForNode(1, "text", sourceItem, 8, 8)
+    }}
+    function focusedMenuIndex() {{
+        return contextMenu.menuEntries().indexOf(root.activeFocusItem)
+    }}
+}}
+'''.encode()
+    component = QQmlComponent(engine)
+    component.setData(
+        source,
+        QUrl.fromLocalFile(str(ROOT / "tests" / "NodeContextMenuHarness.qml")),
+    )
+    assert component.status() == QQmlComponent.Status.Ready, [
+        error.toString() for error in component.errors()
+    ]
+    window = component.create()
+    assert window is not None
+    menu = window.findChild(QObject, "nodeContextMenu")
+    assert menu is not None
+    QTest.qWait(20)
+    return window, menu, engine, component
+
+
 def test_qml_palette_focus_navigation_search_limit_and_modal_close():
     window, palette, _engine, _component = _load_palette()
     palette.openPalette()
@@ -380,6 +469,20 @@ def test_qml_palette_focus_navigation_search_limit_and_modal_close():
     assert window.property("backgroundClicks") == 0
 
 
+def test_pointer_opened_context_menu_starts_neutral_and_accepts_down():
+    window, menu, _engine, _component = _load_context_menu()
+    window.openNodeMenu()
+    QTest.qWait(30)
+
+    assert menu.property("visible")
+    assert not menu.property("keyboardNavigationActive")
+    assert window.focusedMenuIndex() == -1
+
+    QTest.keyClick(window, Qt.Key.Key_Down)
+    assert menu.property("keyboardNavigationActive")
+    assert window.focusedMenuIndex() == 0
+
+
 def test_qml_palette_caps_the_viewport_and_keeps_overflow_scrollable():
     window, palette, _engine, _component = _load_palette()
     window.setHeight(1200)
@@ -390,3 +493,52 @@ def test_qml_palette_caps_the_viewport_and_keeps_overflow_scrollable():
     assert palette.property("actionCount") == 41
     assert palette.property("height") <= window.height() - 32
     assert palette.property("listContentHeight") > palette.property("listViewportHeight")
+
+    first_index = palette.property("selectedIndex")
+    QTest.keyClick(window, Qt.Key.Key_PageDown)
+    page_down_index = palette.property("selectedIndex")
+    assert page_down_index > first_index
+
+    QTest.keyClick(window, Qt.Key.Key_PageUp)
+    assert palette.property("selectedIndex") == first_index
+    QTest.keyClick(window, Qt.Key.Key_PageUp)
+    assert palette.property("selectedIndex") == first_index
+
+    palette.selectBoundary(False)
+    last_index = palette.property("selectedIndex")
+    QTest.keyClick(window, Qt.Key.Key_PageDown)
+    assert palette.property("selectedIndex") == last_index
+
+
+def test_qml_palette_search_rebuild_highlights_the_selected_delegate_only():
+    window, palette, _engine, _component = _load_palette()
+    palette.openPalette()
+    palette.setProperty("queryText", "frame")
+    QTest.qWait(100)
+
+    result_list = palette.findChild(QObject, "commandPaletteResults")
+    assert result_list is not None
+    expression = QQmlExpression(
+        QQmlEngine.contextForObject(result_list),
+        result_list,
+        """
+        (function() {
+            var highlighted = []
+            for (var index = 0; index < count; ++index) {
+                var item = itemAtIndex(index)
+                if (item && item.visuallyHighlighted)
+                    highlighted.push(index)
+            }
+            return highlighted.join(",")
+        })()
+        """,
+    )
+    highlighted_indexes, undefined = expression.evaluate()
+
+    assert not undefined
+    assert not expression.hasError(), expression.error().toString()
+    assert highlighted_indexes == str(palette.property("selectedIndex"))
+    assert palette.property("selectedKind") == "command"
+
+    source = (QML_DIR / "CommandPalette.qml").read_text(encoding="utf-8")
+    assert "keyboardHighlightMotion" not in source

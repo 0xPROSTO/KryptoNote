@@ -60,10 +60,15 @@ from ..widgets.dialogs.about_dialog import AboutDialog
 from ..widgets.dialogs.dashboard_dialog import DashboardDialog
 from ..widgets.dialogs.keybinds_dialog import KeybindsDialog
 from ..widgets.dialogs.theme_dialog import ThemeDialog
+from ..widgets.overlays.canvas_toast import CanvasToastOverlay
 from ..widgets.overlays.dim_overlay import WindowOverlayManager
 from ..widgets.overlays.arraylist_overlay import ArrayListOverlay
 from ..widgets.progress_bar import ProgressBarWidget
 from ..widgets.title_bar import CustomTitleBar
+from ..widgets.dialog_motion import (
+    widget_motion_duration,
+    widget_spatial_motion_enabled,
+)
 from ...config import Config
 from ...gui.theme import Theme
 from ...gui.theme.icons import SvgIcons
@@ -367,6 +372,8 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self.overlay = ArrayListOverlay(self)
         self.overlay.set_snap_status(Config.SNAP_TO_GRID)
         self.overlay.set_zoom_status(1.0)
+        self.overlay.snap_clicked.connect(self.toggle_snap_to_grid)
+        self.overlay.zoom_clicked.connect(self.reset_zoom)
         self.overlay.stats_clicked.connect(self.open_dashboard)
         self.overlay.raise_()
         self._arraylist_hidden = False
@@ -375,17 +382,17 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self._overlay_stats_timer.setInterval(150)
         self._overlay_stats_timer.timeout.connect(self._update_overlay_stats)
         self._arraylist_anim = QPropertyAnimation(self.overlay, b"pos", self)
-        self._arraylist_anim.setDuration(220)
         self._arraylist_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         # A surface handoff can briefly report "not suppressed" while QML
         # closes one panel and opens the next. Delay only the reveal, never
         # the hide, so the overlay cannot flash above an editor.
         self._arraylist_reveal_timer = QTimer(self)
         self._arraylist_reveal_timer.setSingleShot(True)
-        self._arraylist_reveal_timer.setInterval(260)
         self._arraylist_reveal_timer.timeout.connect(
             self._reveal_arraylist_if_idle
         )
+        self._theme_manager.motionChanged.connect(self._sync_motion_settings)
+        self._sync_motion_settings()
         self._sync_arraylist_visibility(animate=False)
         self._connect_overlay_stats_updates()
         central = QWidget()
@@ -400,6 +407,26 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self.view.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         self._window_overlay_manager = WindowOverlayManager(self.view, self)
+        self._window_overlay_manager.activeChanged.connect(
+            self._on_window_overlay_active_changed
+        )
+        self._canvas_toast = CanvasToastOverlay(self.view)
+        self._window_overlay_manager.register_foreground(self._canvas_toast)
+        self.canvas_controller.toastRequested.connect(
+            self._canvas_toast.show_message
+        )
+        self.canvas_controller.resultRevealRequested.connect(
+            self._on_result_reveal_toast
+        )
+
+    @Slot(bool)
+    def _on_window_overlay_active_changed(self, active):
+        self._invoke_qml_root("setExternalInputBlocked", bool(active))
+
+    @Slot(object, str, str)
+    def _on_result_reveal_toast(self, _node_ids, message, kind):
+        if message and hasattr(self, "_canvas_toast"):
+            self._canvas_toast.show_message(message, kind)
 
     def _connect_overlay_stats_updates(self):
         for signal in (
@@ -717,7 +744,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self._arraylist_hidden = hidden
         target = self._arraylist_hidden_pos() if hidden else self._arraylist_visible_pos()
         self.overlay.raise_()
-        if not animate:
+        if not animate or not widget_spatial_motion_enabled(self):
             self._arraylist_anim.stop()
             self.overlay.move(target)
             self._raise_progress_bar()
@@ -730,6 +757,18 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self._arraylist_anim.setEndValue(target)
         self._arraylist_anim.start()
         self._raise_progress_bar()
+
+    @Slot()
+    def _sync_motion_settings(self):
+        if not hasattr(self, "_arraylist_anim"):
+            return
+        spatial = widget_spatial_motion_enabled(self)
+        self._arraylist_anim.setDuration(
+            widget_motion_duration(self, "panel") if spatial else 0
+        )
+        self._arraylist_reveal_timer.setInterval(
+            widget_motion_duration(self, "panel") + 40 if spatial else 40
+        )
 
     def _install_key_event_filter(self):
         if getattr(self, "_key_event_filter_installed", False):
@@ -791,9 +830,9 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         act_change_pwd.triggered.connect(self._on_change_password)
         file_menu.addAction(act_change_pwd)
 
-        self._theme_action = QAction("Theme…", self)
+        self._theme_action = QAction("Settings…", self)
         self._theme_action.setIcon(SvgIcons.get_icon("palette"))
-        self._theme_action.triggered.connect(self.open_theme)
+        self._theme_action.triggered.connect(self.open_settings)
         file_menu.addAction(self._theme_action)
 
 
@@ -847,6 +886,10 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self.act_snap.setIcon(SvgIcons.get_icon("grid"))
         self.act_snap.triggered.connect(self.toggle_snap_to_grid)
         tools_menu.addAction(self.act_snap)
+        self.act_reset_zoom = QAction("Reset Zoom to 100%\t[Ctrl+0]", self)
+        self.act_reset_zoom.setIcon(SvgIcons.get_icon("reset"))
+        self.act_reset_zoom.triggered.connect(self.reset_zoom)
+        tools_menu.addAction(self.act_reset_zoom)
 
         help_menu = menubar.addMenu("Help")
         act_keybinds = QAction("Show All Keybinds", self)
@@ -868,7 +911,8 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             (act_close, "exit"), (act_note, "note"), (act_img, "image"),
             (act_vid, "video"), (act_audio, "play"), (act_frame, "frame"),
             (act_search, "search"),
-            (self.act_snap, "grid"), (act_keybinds, "keyboard"),
+            (self.act_snap, "grid"), (self.act_reset_zoom, "reset"),
+            (act_keybinds, "keyboard"),
             (act_about, "info"),
         )
 
@@ -896,7 +940,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             ("backup", act_backup, "Create backup", "", "backup", ("backup project",), ("database", "copy"), False, False),
             ("export", act_export, "Export project", "", "export", ("export",), ("markdown", "html", "pdf", "archive"), False, False),
             ("change-password", act_change_pwd, "Change project password", "", "lock", ("change password",), ("security", "encryption"), False, False),
-            ("theme", self._theme_action, "Change theme", "", "palette", ("appearance",), ("colors", "font"), False, False),
+            ("theme", self._theme_action, "Open settings", "", "palette", ("theme", "appearance"), ("general", "canvas", "colors", "font"), False, False),
             ("exit", act_close, "Exit KryptoNote", "", "exit", ("close application", "quit"), ("window",), False, False),
             ("add-text", act_note, "Add text node", "Ctrl+N", "note", ("add note", "new note"), ("create", "text"), True, False),
             ("add-image", act_img, "Add photo node", "Ctrl+M", "image", ("add image", "import image"), ("create", "media", "picture"), True, False),
@@ -905,6 +949,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             ("add-frame", act_frame, "Add frame", "", "frame", ("new frame",), ("create", "group"), True, False),
             ("search", act_search, "Open search panel", "Ctrl+F", "search", ("search", "find node"), ("notes", "content", "tags"), True, False),
             ("snap-grid", self.act_snap, "Toggle snap to grid", "G", "grid", ("snap to grid",), ("align", "canvas"), False, False),
+            ("reset-zoom", self.act_reset_zoom, "Reset zoom to 100%", "Ctrl+0", "reset", ("actual size", "zoom 100"), ("canvas", "view"), False, False),
             ("keybinds", act_keybinds, "Show all keybinds", "", "keyboard", ("keyboard shortcuts", "hotkeys"), ("help", "keys"), True, True),
             ("about", act_about, "About KryptoNote", "", "info", ("about",), ("version", "help"), True, True),
         )
@@ -1209,6 +1254,11 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self.status_label.setText(f"Snap to grid {state_text.lower()}.")
         self.canvas_controller.snap_to_grid_changed.emit(Config.SNAP_TO_GRID)
 
+    @Slot()
+    def reset_zoom(self):
+        self._invoke_qml_root("resetZoom")
+        self.status_label.setText("Zoom reset to 100%.")
+
     def _markdown_export_filename(self, selected=False):
         db_path = getattr(self.db_conn, "db_path", "Untitled")
         name, _ = os.path.splitext(os.path.basename(db_path))
@@ -1477,14 +1527,17 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         dialog = DashboardDialog(self._dashboard_stats(), self)
         self._exec_dimmed_dialog("dashboard", dialog)
 
-    def open_theme(self):
+    def open_settings(self):
         dialog = ThemeDialog(
             self,
             self._theme_manager,
             project_store=self.service,
         )
-        center_on_parent_window(dialog, self)
-        return dialog.exec()
+        return self._exec_dimmed_dialog("settings", dialog)
+
+    def open_theme(self):
+        """Compatibility entry point for existing callers."""
+        return self.open_settings()
 
     def _activate_saved_appearance(self):
         profile = self.service.load_project_appearance()
@@ -1497,15 +1550,42 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self._theme_manager.preview(settings)
 
     def _exec_dimmed_dialog(self, owner, dialog):
-        self._window_overlay_manager.acquire(owner)
+        overlay_prepared = False
         overlay_released = False
+
+        def prepare_overlay():
+            nonlocal overlay_prepared
+            if overlay_prepared:
+                return
+            overlay_prepared = True
+            self._window_overlay_manager.prepare(owner)
+
+        def present_overlay():
+            if overlay_prepared:
+                self._window_overlay_manager.present(
+                    owner,
+                    duration_kind="dialog_enter",
+                )
+
+        def begin_overlay_dismiss():
+            if overlay_prepared:
+                self._window_overlay_manager.begin_dismiss(owner)
 
         def release_overlay():
             nonlocal overlay_released
             if overlay_released:
                 return
             overlay_released = True
-            self._window_overlay_manager.release(owner)
+            if overlay_prepared:
+                self._window_overlay_manager.release(owner)
+
+        set_present_callback = getattr(
+            dialog,
+            "set_dialog_motion_present_callback",
+            None,
+        )
+        if callable(set_present_callback):
+            set_present_callback(present_overlay)
 
         set_dismiss_callback = getattr(
             dialog,
@@ -1513,8 +1593,11 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             None,
         )
         if callable(set_dismiss_callback):
-            set_dismiss_callback(release_overlay)
+            set_dismiss_callback(begin_overlay_dismiss)
         try:
+            prepare_overlay()
+            if not callable(set_present_callback):
+                present_overlay()
             center_on_parent_window(dialog, self)
             return dialog.exec()
         finally:
@@ -1547,6 +1630,10 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             )
         if hasattr(self, "overlay"):
             self.overlay.update()
+        if hasattr(self, "_window_overlay_manager"):
+            self._window_overlay_manager.refresh_theme()
+        if hasattr(self, "_canvas_toast"):
+            self._canvas_toast.refresh_theme()
         self.update()
 
     # ── Password Change ─────────────────────────────────────────────
@@ -1561,7 +1648,6 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             self._handle_status_update("Another database operation is active", "warning")
             return
         self._password_operation_token = token
-        self._window_overlay_manager.acquire("password")
         try:
             self._pwd_change_dialog = PasswordChangeDialog(self)
             self._pwd_change_dialog.passwordChangeRequested.connect(
@@ -1570,10 +1656,17 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             self._pwd_change_dialog.cancelRequested.connect(
                 self._cancel_password_change
             )
+            self._pwd_change_dialog.set_dialog_motion_present_callback(
+                lambda: self._window_overlay_manager.present(
+                    "password",
+                    duration_kind="dialog_enter",
+                )
+            )
             self._pwd_change_dialog.set_dialog_motion_dismiss_callback(
-                lambda: self._window_overlay_manager.release("password")
+                lambda: self._window_overlay_manager.begin_dismiss("password")
             )
             self._pwd_change_dialog.finished.connect(self._cleanup_pwd_change_dialog)
+            self._window_overlay_manager.prepare("password")
             center_on_parent_window(self._pwd_change_dialog, self)
             self._pwd_change_dialog.show()
         except Exception:
@@ -1698,12 +1791,16 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
                 return True
             if self._is_qml_command_palette_open():
                 return super().eventFilter(watched, event)
+            if self._is_qml_context_menu_open():
+                return super().eventFilter(watched, event)
             self._handle_global_modifier_press(event)
             if self._handle_global_key_press(event):
                 return True
         if event.type() == QEvent.Type.KeyRelease:
             self._right_shift_detector.handle_release(event, sys.platform)
             if self._is_qml_command_palette_open():
+                return super().eventFilter(watched, event)
+            if self._is_qml_context_menu_open():
                 return super().eventFilter(watched, event)
             self._handle_global_modifier_release(event)
             if self._handle_global_key_release(event):
@@ -1719,6 +1816,10 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         if self._is_qml_command_palette_open():
             # Keep QAction/window shortcuts behind the modal palette while
             # still letting the focused QML TextField handle editing keys.
+            return True
+        if self._is_qml_context_menu_open():
+            # The focused QML row owns navigation and activation keys while
+            # the popup is visible; suppress window-level QAction shortcuts.
             return True
         key = event.key()
         if self._is_qml_node_properties_open():
@@ -1745,7 +1846,13 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         if not editor_open:
             return bool(
                 self._canvas_has_keyboard_focus()
-                and self._canvas_graph_shortcut(event)
+                and (
+                    self._canvas_graph_shortcut(event)
+                    or (
+                        not self._is_qml_search_panel_open()
+                        and self._is_reset_zoom_shortcut(event)
+                    )
+                )
             )
         modifiers = event.modifiers()
         is_s_key = key == Qt.Key.Key_S or event.nativeVirtualKey() == 0x53
@@ -1862,6 +1969,10 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             return True
         if search_open:
             return False
+
+        if self._is_reset_zoom_shortcut(event):
+            self.reset_zoom()
+            return True
 
         graph_shortcut = self._canvas_graph_shortcut(event)
         if graph_shortcut:
@@ -2027,6 +2138,23 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             return "redo"
         return None
 
+    @staticmethod
+    def _is_reset_zoom_shortcut(event):
+        modifiers = event.modifiers()
+        if not (modifiers & Qt.KeyboardModifier.ControlModifier):
+            return False
+        if modifiers & (
+            Qt.KeyboardModifier.ShiftModifier
+            | Qt.KeyboardModifier.AltModifier
+            | Qt.KeyboardModifier.MetaModifier
+        ):
+            return False
+        try:
+            native = event.nativeVirtualKey()
+        except AttributeError:
+            native = 0
+        return event.key() == Qt.Key.Key_0 or native == 0x30
+
     def _handle_global_key_release(self, event):
         if self._is_qml_media_viewer_open():
             return False
@@ -2138,6 +2266,12 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             return False
         root = self.view.rootObject()
         return bool(root and root.property("isCommandPaletteOpen"))
+
+    def _is_qml_context_menu_open(self):
+        if not hasattr(self, "view"):
+            return False
+        root = self.view.rootObject()
+        return bool(root and root.property("isContextMenuOpen"))
 
     def _is_qml_media_viewer_open(self):
         if not hasattr(self, "view"):
@@ -2284,6 +2418,8 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         super().changeEvent(event)
         if event.type() == QEvent.Type.WindowStateChange:
             self._sync_window_margins()
+            if self.title_bar is not None:
+                self.title_bar.sync_window_state()
             self._schedule_qml_render_recovery()
         elif event.type() == QEvent.Type.ActivationChange:
             if self.isActiveWindow():

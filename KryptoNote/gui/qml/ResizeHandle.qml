@@ -11,6 +11,8 @@ Item {
     required property Item delegateItem
 
     property bool nodeHovered: false
+    property bool nodeSelected: false
+    property bool passiveSurfaceHovered: false
     property real minimumNodeWidth: 100
     property real minimumNodeHeight: 50
     property real topEdgeExclusionWidth: 0
@@ -84,15 +86,18 @@ Item {
             nodeHover.hovered || _isHovered
     readonly property bool _isActive: _resizing
     readonly property bool _showIcon:
-            nodeHovered || _pointerHovered || _isActive
+            nodeSelected || nodeHovered || passiveSurfaceHovered
+            || _pointerHovered || _isActive
     readonly property bool _canResize:
-            !handle.canvasRoot.isLinkMode
+            handle._resizing
+            || (!handle.canvasRoot.canvasInputBlocked
+            && !handle.canvasRoot.isNodeDragging
+            && !handle.canvasRoot.isLinkMode
             && !handle.canvasRoot.isPanning
-            && !handle.canvasRoot.isEditorResizing
+            && !handle.canvasRoot.isEditorResizing)
 
     property bool _resizing: false
     property var _activeRegion: null
-    property bool _previewPending: false
     property real _startX: 0
     property real _startY: 0
     property real _startWidth: 0
@@ -101,6 +106,7 @@ Item {
     property real _pendingY: 0
     property real _pendingWidth: 0
     property real _pendingHeight: 0
+    property bool _transformNodesRetained: false
 
     function _snappedSize(value, minimum) {
         var size = Math.max(minimum, value)
@@ -128,7 +134,6 @@ Item {
 
         handle._activeRegion = region
         handle._resizing = true
-        handle._previewPending = false
         handle._startX = handle.delegateItem.x
         handle._startY = handle.delegateItem.y
         handle._startWidth = handle.delegateItem.width
@@ -137,6 +142,12 @@ Item {
         handle._pendingY = handle._startY
         handle._pendingWidth = handle._startWidth
         handle._pendingHeight = handle._startHeight
+        if (handle.canvasRoot
+                && typeof handle.canvasRoot.retainTransformNodes
+                   === "function") {
+            handle.canvasRoot.retainTransformNodes([handle.nodeId])
+            handle._transformNodesRetained = true
+        }
         handle.delegateItem._isResizing = true
         handle.canvasRoot.activeNodeResizeController = handle
     }
@@ -175,14 +186,12 @@ Item {
             handle._pendingY = vertical[0]
             handle._pendingWidth = horizontal[1]
             handle._pendingHeight = vertical[1]
-            handle._previewPending = true
+            handle._applyResizePreview()
         }
     }
 
-    function advanceResizeFrame() {
-        if (!handle._resizing || !handle._previewPending) return
-        handle._previewPending = false
-
+    function _applyResizePreview() {
+        if (!handle._resizing) return
         if (handle._activeRegion
                 && (handle._activeRegion.horizontalDirection < 0
                     || handle._activeRegion.verticalDirection < 0)) {
@@ -211,7 +220,6 @@ Item {
         if (!handle._resizing) return
 
         var region = handle._activeRegion
-        handle._previewPending = false
         try {
             if (region && (region.horizontalDirection < 0
                            || region.verticalDirection < 0)) {
@@ -235,7 +243,6 @@ Item {
         if (!handle._resizing
                 || (region && handle._activeRegion !== region)) return
 
-        handle._previewPending = false
         try {
             handle.nodeModel.preview_position(
                 handle.nodeId,
@@ -253,13 +260,26 @@ Item {
     }
 
     function _endResizeSession() {
-        if (handle.delegateItem) handle.delegateItem._isResizing = false
+        // Mark the controller finished before clearing the delegate flag.
+        // That flag owns the ResizeHandle Loader; clearing it first can
+        // synchronously destroy this object and turn a normal release into
+        // Component.onDestruction -> cancelResize() -> visual rollback.
+        handle._activeRegion = null
+        handle._resizing = false
         if (handle.canvasRoot
                 && handle.canvasRoot.activeNodeResizeController === handle) {
             handle.canvasRoot.activeNodeResizeController = null
         }
-        handle._activeRegion = null
-        handle._resizing = false
+        if (handle._transformNodesRetained) {
+            handle._transformNodesRetained = false
+            if (handle.canvasRoot
+                    && typeof handle.canvasRoot.releaseTransformNodes
+                       === "function") {
+                handle.canvasRoot.releaseTransformNodes()
+            }
+        }
+        // Keep this last: it is allowed to unload and destroy `handle`.
+        if (handle.delegateItem) handle.delegateItem._isResizing = false
     }
 
     Component.onDestruction: {
@@ -267,6 +287,11 @@ Item {
         else if (handle.canvasRoot
                  && handle.canvasRoot.activeNodeResizeController === handle) {
             handle.canvasRoot.activeNodeResizeController = null
+        }
+        if (handle._transformNodesRetained && handle.canvasRoot
+                && typeof handle.canvasRoot.releaseTransformNodes
+                   === "function") {
+            handle.canvasRoot.releaseTransformNodes()
         }
     }
 
@@ -329,7 +354,10 @@ Item {
         }
 
         Behavior on opacity {
-            NumberAnimation { duration: 120; easing.type: Easing.OutCubic }
+            NumberAnimation {
+                duration: handle.appTheme.durationState
+                easing.type: Easing.OutCubic
+            }
         }
     }
 
@@ -353,7 +381,7 @@ Item {
             target: null
             acceptedButtons: Qt.LeftButton
             dragThreshold: 0
-            grabPermissions: PointerHandler.CanTakeOverFromAnything
+            grabPermissions: PointerHandler.CanTakeOverFromItems
 
             onActiveChanged: {
                 if (active) region.resizeController.beginResize(region)

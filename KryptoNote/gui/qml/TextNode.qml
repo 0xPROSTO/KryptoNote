@@ -14,6 +14,7 @@ Rectangle {
     property string nodeContent: ""
     property bool isSelected: false
     property bool isHovered: false
+    property bool isTransforming: false
     property int titleSize: 14
     property int textSize: 12
     property real nodeWidth: 200
@@ -29,13 +30,23 @@ Rectangle {
     radius: 4
     color: textNode.appTheme.bgNode
 
-    border.width: lodBeacon
+    border.width: isTransforming ? 1.9 : lodBeacon
                   ? Math.max(1.1, (1.45 + lodAmount * 0.45) / Math.max(canvasScale, 0.12))
-                  : (isHovered ? 1.65 : (isSelected ? 1.5 : 1.1))
-    border.color: isSelected ? textNode.appTheme.accentMain : (isHovered ? textNode.appTheme.accentMain : textNode.appTheme.borderDefault)
+                  : (isSelected ? 1.5 : (isHovered ? 1.4 : 1.1))
+    border.color: isTransforming ? textNode.appTheme.accentHigh
+                  : isSelected ? textNode.appTheme.accentMain
+                  : isHovered ? textNode.appTheme.accentMain
+                  : textNode.appTheme.borderDefault
 
-    Behavior on border.color { ColorAnimation { duration: 120 } }
-    Behavior on border.width { NumberAnimation { duration: 120 } }
+    Behavior on border.color {
+        ColorAnimation { duration: textNode.appTheme.durationState }
+    }
+    Behavior on border.width {
+        NumberAnimation {
+            duration: textNode.appTheme.motionEnabled
+                      ? textNode.appTheme.durationState : 0
+        }
+    }
 
     Text {
         id: titleText
@@ -64,7 +75,7 @@ Rectangle {
         anchors.leftMargin: 10
         anchors.rightMargin: 10
         anchors.bottomMargin: 10
-        trailingInset: 24 / Math.max(textNode.canvasScale, 0.25)
+        canvasScale: textNode.canvasScale
         tags: textNode.tags
         opacity: 1.0 - textNode.lodAmount
     }

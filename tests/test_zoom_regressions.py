@@ -128,6 +128,9 @@ Item {{
     QtObject {{
         id: theme
         property bool motionEnabled: true
+        property bool colorMotionEnabled: true
+        property int durationState: 140
+        property int durationPanel: 220
         property real connectionStrokeWidth: 2
         property real connectionHighlightWidth: 4
         property string connectionStyle: "curved"
@@ -136,7 +139,10 @@ Item {{
         property string connectionPattern: "solid"
         property color textMuted: "#888888"
         property color accentMain: "#ffffff"
+        property color accentHigh: "#ffffff"
         property color borderDefault: "#777777"
+        property color borderHover: "#999999"
+        property color dangerHover: "#ff5555"
     }}
 
     App.Connection {{

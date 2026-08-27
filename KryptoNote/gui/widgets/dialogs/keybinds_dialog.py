@@ -285,6 +285,7 @@ class KeybindsDialog(FramelessWindowDragMixin, QDialog):
                     (["Ctrl", "A"], "Select every node on the canvas."),
                     (["Arrow keys"], "Hold to pan the canvas viewport smoothly."),
                     (["G"], "Toggle snap to grid."),
+                    (["Ctrl", "0"], "Reset canvas zoom to 100%."),
                     (["Esc"], "Clear selection or close the active canvas surface."),
                 ],
             ),

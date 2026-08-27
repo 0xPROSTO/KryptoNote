@@ -10,12 +10,47 @@ Popup {
     parent: Overlay.overlay
     readonly property int popupLayer: 40
     readonly property int dragLayer: popupLayer + 1
+    readonly property int tagRowHeight: 34
+    readonly property int tagRowSpacing: 3
+    readonly property real maxVisibleTagRows: 10.5
+    readonly property real fixedColumnHeight: 178
+    readonly property real desiredAssignedZoneHeight: tagViewportHeight(
+        assignedModel.count,
+        availableModel.count > 0 ? 4.5 : maxVisibleTagRows
+    )
+    readonly property real desiredAvailableZoneHeight: tagViewportHeight(
+        availableModel.count,
+        maxVisibleTagRows
+    )
+    readonly property real desiredPopupHeight:
+            fixedColumnHeight
+            + desiredAssignedZoneHeight
+            + desiredAvailableZoneHeight
+            + topPadding + bottomPadding
+    readonly property real listHeightBudget: Math.max(
+        68,
+        height - topPadding - bottomPadding - fixedColumnHeight
+    )
+    readonly property real availableZoneHeight: {
+        if (desiredAssignedZoneHeight + desiredAvailableZoneHeight
+                <= listHeightBudget) return desiredAvailableZoneHeight
+        // When both lists need scrolling, preserve the larger browse target
+        // for available tags and keep at least one assigned row visible.
+        return Math.min(
+            desiredAvailableZoneHeight,
+            Math.max(34, listHeightBudget - 34)
+        )
+    }
+    readonly property real assignedZoneHeight: Math.min(
+        desiredAssignedZoneHeight,
+        Math.max(34, listHeightBudget - availableZoneHeight)
+    )
     z: popupLayer
     width: Math.min(340, parent && parent.width > 0 ? parent.width - 16 : 340)
     height: Math.min(
-        500,
-        parent && parent.height > 0 ? parent.height - 16 : 500,
-        contentColumn.implicitHeight + topPadding + bottomPadding
+        720,
+        parent && parent.height > 0 ? parent.height - 16 : 720,
+        desiredPopupHeight
     )
     margins: 8
     padding: 12
@@ -32,6 +67,21 @@ Popup {
     signal tagsChanged()
 
     onAboutToHide: cancelPreparedDrag()
+
+    function tagViewportHeight(count, maximumRows) {
+        var rowCount = Math.max(0, Number(count) || 0)
+        if (rowCount <= 0) return 34
+        var contentHeight = rowCount * tagRowHeight
+                + Math.max(0, rowCount - 1) * tagRowSpacing
+        var fullRows = Math.floor(maximumRows)
+        var fraction = Math.max(0, maximumRows - fullRows)
+        var cappedHeight = fullRows * tagRowHeight
+                + Math.max(0, fullRows - 1) * tagRowSpacing
+        if (fraction > 0) {
+            cappedHeight += tagRowSpacing + tagRowHeight * fraction
+        }
+        return Math.max(34, Math.min(contentHeight, cappedHeight))
+    }
 
     function openForNodeAt(nextNodeId, anchorItem) {
         if (visible && nodeId === nextNodeId) {
@@ -187,12 +237,27 @@ Popup {
 
     enter: Transition {
         ParallelAnimation {
-            NumberAnimation { property: "opacity"; from: 0; to: 1; duration: 150; easing.type: Easing.OutCubic }
-            NumberAnimation { property: "scale"; from: 0.98; to: 1; duration: 150; easing.type: Easing.OutCubic }
+            NumberAnimation {
+                property: "opacity"; from: 0; to: 1
+                duration: picker.appTheme.durationState
+                easing.type: Easing.OutCubic
+            }
+            NumberAnimation {
+                property: "scale"
+                from: picker.appTheme.motionEnabled ? 0.98 : 1
+                to: 1
+                duration: picker.appTheme.motionEnabled
+                          ? picker.appTheme.durationState : 0
+                easing.type: Easing.OutCubic
+            }
         }
     }
     exit: Transition {
-        NumberAnimation { property: "opacity"; from: 1; to: 0; duration: 100; easing.type: Easing.OutCubic }
+        NumberAnimation {
+            property: "opacity"; from: 1; to: 0
+            duration: picker.appTheme.durationExit
+            easing.type: Easing.OutCubic
+        }
     }
 
     background: Rectangle {
@@ -304,7 +369,8 @@ Popup {
                 scale: down ? 0.97 : 1.0
                 Behavior on scale {
                     NumberAnimation {
-                        duration: picker.appTheme.motionEnabled ? 80 : 0
+                        duration: picker.appTheme.motionEnabled
+                                  ? picker.appTheme.durationPress : 0
                         easing.type: Easing.OutCubic
                     }
                 }
@@ -334,7 +400,7 @@ Popup {
         Rectangle {
             id: assignedZone
             width: parent.width
-            height: Math.max(34, Math.min(140, assignedList.contentHeight))
+            height: picker.assignedZoneHeight
             radius: 6
             color: assignedDrop.containsDrag ? picker.appTheme.accentLow : "transparent"
             border.width: assignedDrop.containsDrag ? 1 : 0
@@ -356,7 +422,7 @@ Popup {
                 anchors.fill: parent
                 visible: assignedModel.count > 0
                 model: ListModel { id: assignedModel }
-                spacing: 3
+                spacing: picker.tagRowSpacing
                 clip: true
                 boundsBehavior: Flickable.StopAtBounds
                 interactive: contentHeight > height && !picker.draggingTag
@@ -418,7 +484,7 @@ Popup {
         Rectangle {
             id: availableZone
             width: parent.width
-            height: Math.max(34, Math.min(120, availableList.contentHeight))
+            height: picker.availableZoneHeight
             radius: 6
             color: availableDrop.containsDrag ? picker.appTheme.whiteAlpha05 : "transparent"
             border.width: availableDrop.containsDrag ? 1 : 0
@@ -440,7 +506,7 @@ Popup {
                 anchors.fill: parent
                 visible: availableModel.count > 0
                 model: ListModel { id: availableModel }
-                spacing: 3
+                spacing: picker.tagRowSpacing
                 clip: true
                 boundsBehavior: Flickable.StopAtBounds
                 interactive: contentHeight > height && !picker.draggingTag
@@ -478,7 +544,7 @@ Popup {
         Text {
             width: parent.width
             height: 16
-            text: "Hover a tag for actions · drag to assign or reorder"
+            text: "Click to assign or remove · right-click to edit · drag to reorder"
             color: picker.appTheme.textDim
             elide: Text.ElideRight
             font.family: "Segoe UI"
@@ -600,8 +666,7 @@ Popup {
         property bool dragStarted: false
         property bool canMoveUp: false
         property bool canMoveDown: false
-        readonly property bool actionsFocused: assignmentButton.activeFocus
-                                               || editButton.activeFocus
+        readonly property bool actionsFocused: editButton.activeFocus
                                                || moveUpButton.activeFocus
                                                || moveDownButton.activeFocus
         readonly property bool actionsShown: (rowHover.hovered || actionsFocused)
@@ -609,11 +674,14 @@ Popup {
         signal assignmentToggleRequested()
         signal moveRequested(int offset)
         signal editRequested()
-        height: 34
+        height: picker.tagRowHeight
         opacity: picker.draggingTag && picker.draggingTagId === modelTagId ? 0.22 : 1
 
         Behavior on opacity {
-            NumberAnimation { duration: 80; easing.type: Easing.OutCubic }
+            NumberAnimation {
+                duration: picker.appTheme.durationState
+                easing.type: Easing.OutCubic
+            }
         }
 
         Rectangle {
@@ -674,24 +742,12 @@ Popup {
                 radius: 6
                 color: picker.appTheme.bgNode
                 opacity: tagRow.actionsShown ? 1 : 0
-                enabled: !picker.draggingTag
+                enabled: tagRow.actionsShown && !picker.draggingTag
 
                 Row {
                     id: actionButtons
                     anchors.centerIn: parent
                     spacing: 2
-
-                    TagActionButton {
-                        id: assignmentButton
-                        objectName: tagRow.assigned ? "removeTagButton" : "addTagButton"
-                        iconSource: tagRow.assigned
-                                    ? "../assets/icons/remove.svg"
-                                    : "../assets/icons/add.svg"
-                        toolTip: tagRow.assigned
-                                 ? "Remove @" + tagRow.name + " from node"
-                                 : "Add @" + tagRow.name + " to node"
-                        onClicked: tagRow.assignmentToggleRequested()
-                    }
 
                     TagActionButton {
                         id: editButton
@@ -728,7 +784,10 @@ Popup {
                 anchors.fill: parent
                 hoverEnabled: true
                 preventStealing: true
-                cursorShape: drag.active ? Qt.ClosedHandCursor : Qt.OpenHandCursor
+                acceptedButtons: Qt.LeftButton
+                cursorShape: drag.active
+                             ? Qt.ClosedHandCursor
+                             : Qt.PointingHandCursor
                 drag.target: dragAvatar
                 drag.axis: Drag.XAndYAxis
                 drag.smoothed: false
@@ -749,17 +808,27 @@ Popup {
                         tagRow.dragStarted = picker.beginPreparedDrag()
                     }
                 }
-                onReleased: {
+                onReleased: function(mouse) {
                     var shouldDrop = tagRow.dragStarted
                     tagRow.dragStarted = false
                     if (shouldDrop) picker.dropPreparedDrag()
-                    else picker.cancelPreparedDrag()
+                    else {
+                        picker.cancelPreparedDrag()
+                        if (mouse.button === Qt.LeftButton) {
+                            tagRow.assignmentToggleRequested()
+                        }
+                    }
                 }
                 onCanceled: {
                     tagRow.dragStarted = false
                     picker.cancelPreparedDrag()
                 }
-                onDoubleClicked: tagRow.editRequested()
+            }
+
+            TapHandler {
+                acceptedButtons: Qt.RightButton
+                gesturePolicy: TapHandler.ReleaseWithinBounds
+                onTapped: tagRow.editRequested()
             }
 
             HoverHandler {
@@ -787,7 +856,8 @@ Popup {
                     ? picker.appTheme.textMain : picker.appTheme.textDim
         Behavior on scale {
             NumberAnimation {
-                duration: picker.appTheme.motionEnabled ? 80 : 0
+                duration: picker.appTheme.motionEnabled
+                          ? picker.appTheme.durationPress : 0
                 easing.type: Easing.OutCubic
             }
         }

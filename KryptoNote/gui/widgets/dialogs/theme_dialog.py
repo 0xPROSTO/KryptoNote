@@ -2,6 +2,7 @@ from PySide6.QtCore import QRectF, QSize, Qt, QSignalBlocker, QTimer
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QApplication,
     QColorDialog,
     QComboBox,
     QDialog,
@@ -11,7 +12,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
-    QScrollArea,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -27,6 +27,7 @@ from KryptoNote.gui.theme.theme_manager import (
     AppearanceSettings,
     CONNECTION_WIDTHS,
     DEFAULT_ACCENT,
+    DEFAULT_MOTION_MODE,
     TONE_ANCHORS,
     TONE_IDS,
     TONE_LABELS,
@@ -149,6 +150,8 @@ class ThemeDialog(FramelessWindowDragMixin, QDialog):
         self._global_original = self._manager.committed_settings
         self._original_font_family = self._manager.font_family
         self._font_draft = self._original_font_family
+        self._original_motion_mode = self._manager.motion_mode
+        self._motion_draft = self._original_motion_mode
         profile = (
             self._project_store.load_project_appearance()
             if self._project_store is not None
@@ -177,11 +180,14 @@ class ThemeDialog(FramelessWindowDragMixin, QDialog):
         self._pending_color = None
 
         self.setObjectName("theme_dialog")
-        self.setWindowTitle("Theme & Appearance")
-        self.configure_dialog_chrome("Theme & Appearance")
+        self.setWindowTitle("Settings")
+        self.configure_dialog_chrome("Settings")
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
-        self.resize(780, 680)
-        self.setMinimumSize(680, 560)
+        screen = parent.screen() if parent is not None else QApplication.primaryScreen()
+        available = screen.availableGeometry() if screen is not None else None
+        target_width = 860 if available is None else min(860, available.width() - 32)
+        target_height = 560 if available is None else min(560, available.height() - 32)
+        self.setFixedSize(max(1, target_width), max(1, target_height))
 
         self._color_timer = QTimer(self)
         self._color_timer.setSingleShot(True)
@@ -202,8 +208,8 @@ class ThemeDialog(FramelessWindowDragMixin, QDialog):
         container = QWidget()
         container.setObjectName("theme_container")
         layout = QVBoxLayout(container)
-        layout.setContentsMargins(20, 16, 20, 18)
-        layout.setSpacing(10)
+        layout.setContentsMargins(18, 14, 18, 16)
+        layout.setSpacing(8)
         outer.addWidget(container)
 
         header = QWidget()
@@ -212,46 +218,91 @@ class ThemeDialog(FramelessWindowDragMixin, QDialog):
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(0, 0, 0, 0)
 
-        title = QLabel("Theme & Appearance")
+        title = QLabel("Settings")
         title.setObjectName("theme_title")
         header_layout.addWidget(title, 1)
 
         close_button = DialogCloseButton()
         close_button.setObjectName("theme_close")
         close_button.setIconSize(QSize(18, 18))
-        close_button.setToolTip("Cancel and close")
-        close_button.setAccessibleName("Cancel theme changes and close")
+        close_button.setToolTip("Cancel and close settings")
+        close_button.setAccessibleName("Cancel changes and close settings")
         close_button.clicked.connect(self.reject)
         header_layout.addWidget(close_button)
         self._close_button = close_button
         layout.addWidget(header)
 
-        self._build_scope_section(layout)
+        body = QWidget()
+        body.setObjectName("settings_body")
+        body_layout = QHBoxLayout(body)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(12)
 
-        settings = QWidget()
-        settings.setObjectName("theme_settings")
-        settings_layout = QVBoxLayout(settings)
-        settings_layout.setContentsMargins(0, 0, 0, 0)
-        settings_layout.setSpacing(7)
-        self._build_tone_section(settings_layout)
-        self._separator(settings_layout)
-        self._build_font_section(settings_layout)
-        self._separator(settings_layout)
-        self._build_accent_section(settings_layout)
-        self._separator(settings_layout)
-        self._build_connections_section(settings_layout)
-        self._separator(settings_layout)
-        self._build_grid_section(settings_layout)
+        navigation = QWidget()
+        navigation.setObjectName("settings_nav")
+        navigation.setFixedWidth(168)
+        navigation_layout = QVBoxLayout(navigation)
+        navigation_layout.setContentsMargins(8, 8, 8, 8)
+        navigation_layout.setSpacing(4)
 
-        settings_scroll = QScrollArea()
-        settings_scroll.setObjectName("theme_settings_scroll")
-        settings_scroll.setWidgetResizable(True)
-        settings_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        settings_scroll.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        self._settings_nav_group = QButtonGroup(self)
+        self._settings_nav_group.setExclusive(True)
+        self._settings_nav_buttons = []
+        for index, (label, accessible_label) in enumerate(
+            (
+                ("General", "General"),
+                ("Theme && Appearance", "Theme & Appearance"),
+                ("Canvas", "Canvas"),
+            )
+        ):
+            button = QPushButton(label)
+            button.setCheckable(True)
+            button.setProperty("settingsNav", True)
+            button.setAccessibleName(
+                f"Settings category: {accessible_label}"
+            )
+            button.clicked.connect(
+                lambda checked=False, page=index: checked
+                and self._select_settings_page(page)
+            )
+            self._settings_nav_group.addButton(button)
+            self._settings_nav_buttons.append(button)
+            navigation_layout.addWidget(button)
+        navigation_layout.addStretch()
+        body_layout.addWidget(navigation)
+
+        self._settings_pages = QStackedWidget()
+        self._settings_pages.setObjectName("settings_pages")
+
+        general, general_layout = self._settings_page("General")
+        self._build_motion_section(general_layout)
+        self._separator(general_layout)
+        self._build_font_section(general_layout)
+        general_layout.addStretch()
+        self._settings_pages.addWidget(general)
+
+        appearance, appearance_layout = self._settings_page(
+            "Theme & Appearance",
+            include_scope=True,
         )
-        settings_scroll.setWidget(settings)
-        layout.addWidget(settings_scroll, 1)
+        self._separator(appearance_layout)
+        self._build_tone_section(appearance_layout)
+        self._separator(appearance_layout)
+        self._build_accent_section(appearance_layout)
+        appearance_layout.addStretch()
+        self._settings_pages.addWidget(appearance)
+
+        canvas, canvas_layout = self._settings_page("Canvas")
+        self._build_connections_section(canvas_layout)
+        self._separator(canvas_layout)
+        self._build_grid_section(canvas_layout)
+        canvas_layout.addStretch()
+        self._settings_pages.addWidget(canvas)
+
+        body_layout.addWidget(self._settings_pages, 1)
+        layout.addWidget(body, 1)
+        self._settings_nav_buttons[0].setChecked(True)
+        self._select_settings_page(0)
 
         footer = QWidget()
         footer.setObjectName("theme_footer")
@@ -276,18 +327,33 @@ class ThemeDialog(FramelessWindowDragMixin, QDialog):
         footer_layout.addWidget(apply_button)
         layout.addWidget(footer)
 
-    def _build_scope_section(self, layout):
-        block = QWidget()
-        block.setObjectName("theme_scope")
-        block_layout = QVBoxLayout(block)
-        block_layout.setContentsMargins(0, 0, 0, 4)
-        block_layout.setSpacing(5)
+    def _settings_page(self, title, include_scope=False):
+        page = QWidget()
+        page.setObjectName("settings_page")
+        page_layout = QVBoxLayout(page)
+        page_layout.setContentsMargins(4, 2, 4, 2)
+        page_layout.setSpacing(8)
 
-        row = QHBoxLayout()
-        row.setContentsMargins(0, 0, 0, 0)
-        label = QLabel("Settings scope")
-        label.setProperty("controlLabel", True)
-        row.addWidget(label)
+        heading_row = QHBoxLayout()
+        heading_row.setContentsMargins(0, 0, 0, 0)
+        heading_row.setSpacing(8)
+
+        heading = QLabel(title)
+        heading.setObjectName("settings_page_title")
+        heading_row.addWidget(heading)
+        if include_scope:
+            self._build_scope_controls(heading_row)
+        else:
+            heading_row.addStretch()
+        page_layout.addLayout(heading_row)
+        return page, page_layout
+
+    def _select_settings_page(self, index):
+        index = max(0, min(int(index), self._settings_pages.count() - 1))
+        self._settings_pages.setCurrentIndex(index)
+        self._settings_nav_buttons[index].setChecked(True)
+
+    def _build_scope_controls(self, row):
         row.addStretch()
 
         self._scope_group = QButtonGroup(self)
@@ -312,10 +378,6 @@ class ThemeDialog(FramelessWindowDragMixin, QDialog):
             self._scope_buttons["project"].setToolTip(
                 "Project appearance is available when a project is open"
             )
-        block_layout.addLayout(row)
-
-        layout.addWidget(block)
-
     def _build_tone_section(self, layout):
         self._section_header(layout, "Brightness", self._reset_tone)
         grid = QGridLayout()
@@ -337,13 +399,9 @@ class ThemeDialog(FramelessWindowDragMixin, QDialog):
         layout.addLayout(grid)
 
     def _build_font_section(self, layout):
-        self._section_header(layout, "Text node font", self._reset_font)
+        self._section_header(layout, "Nodes font", self._reset_font)
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(8)
-        label = QLabel("Global font")
-        label.setProperty("controlLabel", True)
-        row.addWidget(label)
 
         self._font_combo = QComboBox()
         self._font_combo.setObjectName("font_combo")
@@ -372,13 +430,6 @@ class ThemeDialog(FramelessWindowDragMixin, QDialog):
             )
         self._font_combo.currentIndexChanged.connect(self._on_font_changed)
         row.addWidget(self._font_combo, 1)
-
-        hint = QLabel(
-            "Global only; unavailable fonts fall back to the system font."
-        )
-        hint.setProperty("controlHint", True)
-        hint.setWordWrap(True)
-        row.addWidget(hint, 1)
         layout.addLayout(row)
 
     def _build_accent_section(self, layout):
@@ -404,6 +455,20 @@ class ThemeDialog(FramelessWindowDragMixin, QDialog):
         self._custom_color_button = QPushButton()
         self._custom_color_button.clicked.connect(self._choose_custom_color)
         layout.addWidget(self._custom_color_button)
+
+    def _build_motion_section(self, layout):
+        self._section_header(layout, "Motion", self._reset_motion)
+        row, self._motion_group, self._motion_buttons = self._choice_row(
+            (
+                ("System", "system"),
+                ("Full", "full"),
+                ("Reduced", "reduced"),
+                ("Off", "off"),
+            ),
+            "Motion mode",
+            self._set_motion_draft,
+        )
+        layout.addWidget(row)
 
     def _build_connections_section(self, layout):
         self._section_header(layout, "Connections", self._reset_connections)
@@ -642,6 +707,10 @@ class ThemeDialog(FramelessWindowDragMixin, QDialog):
         self._manager.preview_font_family(self._font_draft)
         self._sync_controls()
 
+    def _set_motion_draft(self, value):
+        self._motion_draft = self._manager.preview_motion_mode(value)
+        self._sync_controls()
+
     def _switch_scope(self, scope):
         if scope not in self._drafts or scope == self._scope:
             return
@@ -664,6 +733,9 @@ class ThemeDialog(FramelessWindowDragMixin, QDialog):
     def _reset_accent(self):
         self._set_draft(accent_seed=DEFAULT_ACCENT)
 
+    def _reset_motion(self):
+        self._set_motion_draft(DEFAULT_MOTION_MODE)
+
     def _reset_connections(self):
         defaults = ThemeManager.defaults()
         self._set_draft(
@@ -684,6 +756,8 @@ class ThemeDialog(FramelessWindowDragMixin, QDialog):
         self._manager.preview(self._draft)
         self._font_draft = SYSTEM_DEFAULT_FONT
         self._manager.reset_font_family()
+        self._motion_draft = DEFAULT_MOTION_MODE
+        self._manager.reset_motion_mode()
         self._sync_controls()
 
     def _choose_custom_color(self):
@@ -727,11 +801,13 @@ class ThemeDialog(FramelessWindowDragMixin, QDialog):
             + list(self._curve_formula_buttons.values())
             + list(self._thickness_buttons.values())
             + list(self._anchor_buttons.values())
+            + list(self._motion_buttons.values())
         ):
             blockers.append(QSignalBlocker(button))
         blockers.append(QSignalBlocker(self._font_combo))
 
         self._scope_buttons[self._scope].setChecked(True)
+        self._motion_buttons[self._motion_draft].setChecked(True)
         self._tone_buttons[self._draft.tone].setChecked(True)
         font_index = self._font_combo.findData(self._font_draft)
         if font_index < 0:
@@ -828,6 +904,7 @@ class ThemeDialog(FramelessWindowDragMixin, QDialog):
                 )
             self._manager.commit(global_settings)
             self._manager.commit_font_family(self._font_draft)
+            self._manager.commit_motion_mode(self._motion_draft)
             self._manager.preview(
                 project_settings
                 if self._scope == "project"
@@ -836,6 +913,7 @@ class ThemeDialog(FramelessWindowDragMixin, QDialog):
         except Exception as error:
             self._manager.preview(self._original_active)
             self._manager.preview_font_family(self._original_font_family)
+            self._manager.preview_motion_mode(self._original_motion_mode)
             QMessageBox.critical(
                 self,
                 "Appearance Settings",
@@ -851,6 +929,7 @@ class ThemeDialog(FramelessWindowDragMixin, QDialog):
         if not self._applied:
             self._manager.preview(self._original_active)
             self._manager.preview_font_family(self._original_font_family)
+            self._manager.preview_motion_mode(self._original_motion_mode)
             self._draft = self._original_active
         super().reject()
 
@@ -858,4 +937,5 @@ class ThemeDialog(FramelessWindowDragMixin, QDialog):
         if not self._applied:
             self._manager.preview(self._original_active)
             self._manager.preview_font_family(self._original_font_family)
+            self._manager.preview_motion_mode(self._original_motion_mode)
         super().closeEvent(event)

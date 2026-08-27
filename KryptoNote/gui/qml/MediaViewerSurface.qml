@@ -57,25 +57,28 @@ FocusScope {
 
     Behavior on toolbarCompactProgress {
         NumberAnimation {
-            duration: surface.appTheme.motionEnabled ? 150 : 0
+            duration: surface.appTheme.motionEnabled
+                      ? surface.appTheme.durationState : 0
             easing.type: Easing.OutCubic
         }
     }
     Behavior on toolbarMinimalProgress {
         NumberAnimation {
-            duration: surface.appTheme.motionEnabled ? 130 : 0
+            duration: surface.appTheme.motionEnabled
+                      ? surface.appTheme.durationState : 0
             easing.type: Easing.OutCubic
         }
     }
     Behavior on descriptionActionsReveal {
         NumberAnimation {
-            duration: surface.appTheme.motionEnabled ? 170 : 0
+            duration: surface.appTheme.durationState
             easing.type: Easing.OutCubic
         }
     }
     Behavior on descriptionReveal {
         NumberAnimation {
-            duration: surface.appTheme.motionEnabled ? 220 : 0
+            duration: surface.appTheme.motionEnabled
+                      ? surface.appTheme.durationPanel : 0
             easing.type: surface.descriptionVisible
                          ? Easing.OutCubic : Easing.InOutCubic
         }
@@ -124,6 +127,23 @@ FocusScope {
                     + ":" + String(seconds).padStart(2, "0")
         }
         return minutes + ":" + String(seconds).padStart(2, "0")
+    }
+
+    function focusPrimaryMediaControl() {
+        Qt.callLater(function() {
+            if (!surface.surfaceActive || !surface.viewerController.active)
+                return
+            var target = null
+            if (surface.viewerController.mediaType === "audio")
+                target = audioPlayButton
+            else if (surface.viewerController.mediaType === "video")
+                target = videoPlayButton
+            if (target && target.visible && target.enabled) {
+                target.forceActiveFocus(Qt.TabFocusReason)
+            } else {
+                viewportFocus.forceActiveFocus(Qt.TabFocusReason)
+            }
+        })
     }
 
     function responsiveReveal(availableWidth, hiddenAt, shownAt) {
@@ -467,12 +487,16 @@ FocusScope {
         syncDescriptionForSession()
         syncImageState()
         syncVideoOutput()
+        if (surfaceActive) focusPrimaryMediaControl()
     }
     Component.onDestruction: {
         if (surface.viewerController)
             surface.viewerController.detach_video_output(videoOutput)
     }
-    onSurfaceActiveChanged: syncVideoOutput()
+    onSurfaceActiveChanged: {
+        syncVideoOutput()
+        if (surfaceActive) focusPrimaryMediaControl()
+    }
 
     Keys.onPressed: function(event) {
         if (event.key === Qt.Key_Escape) {
@@ -716,7 +740,7 @@ FocusScope {
                 }
                 Behavior on opacity {
                     NumberAnimation {
-                        duration: surface.appTheme.motionEnabled ? 140 : 0
+                        duration: surface.appTheme.durationState
                         easing.type: Easing.OutCubic
                     }
                 }
@@ -840,7 +864,7 @@ FocusScope {
 
                 Behavior on opacity {
                     NumberAnimation {
-                        duration: surface.appTheme.motionEnabled ? 140 : 0
+                        duration: surface.appTheme.durationState
                         easing.type: Easing.OutCubic
                     }
                 }
@@ -874,7 +898,7 @@ FocusScope {
 
                 Behavior on opacity {
                     NumberAnimation {
-                        duration: surface.appTheme.motionEnabled ? 140 : 0
+                        duration: surface.appTheme.durationState
                         easing.type: Easing.OutCubic
                     }
                 }
@@ -1028,12 +1052,12 @@ FocusScope {
                              ? 0.95 : 0.7
                     Behavior on color {
                         ColorAnimation {
-                            duration: surface.appTheme.motionEnabled ? 100 : 0
+                            duration: surface.appTheme.durationState
                         }
                     }
                     Behavior on opacity {
                         NumberAnimation {
-                            duration: surface.appTheme.motionEnabled ? 100 : 0
+                            duration: surface.appTheme.durationState
                         }
                     }
                 }
@@ -1118,7 +1142,8 @@ FocusScope {
                         font.pointSize: 8
                         Behavior on responsiveReveal {
                             NumberAnimation {
-                                duration: surface.appTheme.motionEnabled ? 120 : 0
+                                duration: surface.appTheme.motionEnabled
+                                          ? surface.appTheme.durationState : 0
                                 easing.type: Easing.OutCubic
                             }
                         }
@@ -1384,6 +1409,8 @@ FocusScope {
                         visible: surface.viewerController.mediaType === "audio"
 
                         MediaIconButton {
+                            id: audioPlayButton
+                            objectName: "audioPlayButton"
                             appTheme: surface.appTheme
                             iconSource: surface.playbackForCurrentNode
                                         && surface.viewerController.playing
@@ -1391,7 +1418,10 @@ FocusScope {
                                         : "../assets/icons/play.svg"
                             accessibleName: surface.playbackForCurrentNode
                                             && surface.viewerController.playing
-                                            ? "Pause audio" : "Play audio"
+                                            ? "Pause audio (Space)"
+                                            : "Play audio (Space)"
+                            enabled: !surface.viewerController.loading
+                                     && surface.viewerController.errorText.length === 0
                             onClicked: surface.viewerController.toggle_playback()
                         }
 
@@ -1466,7 +1496,8 @@ FocusScope {
 
                             Behavior on responsiveReveal {
                                 NumberAnimation {
-                                    duration: surface.appTheme.motionEnabled ? 130 : 0
+                                    duration: surface.appTheme.motionEnabled
+                                              ? surface.appTheme.durationState : 0
                                     easing.type: Easing.OutCubic
                                 }
                             }
@@ -1490,6 +1521,8 @@ FocusScope {
                         visible: surface.viewerController.mediaType === "video"
 
                         MediaIconButton {
+                            id: videoPlayButton
+                            objectName: "videoPlayButton"
                             appTheme: surface.appTheme
                             iconSource: surface.playbackForCurrentNode
                                         && surface.viewerController.playing
@@ -1584,7 +1617,8 @@ FocusScope {
 
                             Behavior on responsiveReveal {
                                 NumberAnimation {
-                                    duration: surface.appTheme.motionEnabled ? 130 : 0
+                                    duration: surface.appTheme.motionEnabled
+                                              ? surface.appTheme.durationState : 0
                                     easing.type: Easing.OutCubic
                                 }
                             }
@@ -1646,18 +1680,21 @@ FocusScope {
             ParallelAnimation {
                 NumberAnimation {
                     property: "opacity"; from: 0; to: 1
-                    duration: surface.appTheme.motionEnabled ? 150 : 0
+                    duration: surface.appTheme.durationState
                     easing.type: Easing.OutCubic
                 }
                 NumberAnimation {
-                    property: "scale"; from: 0.98; to: 1
-                    duration: surface.appTheme.motionEnabled ? 150 : 0
+                    property: "scale"
+                    from: surface.appTheme.motionEnabled ? 0.98 : 1; to: 1
+                    duration: surface.appTheme.motionEnabled
+                              ? surface.appTheme.durationState : 0
                     easing.type: Easing.OutCubic
                 }
                 NumberAnimation {
                     target: descriptionGuard; property: "motionOffset"
-                    from: -4; to: 0
-                    duration: surface.appTheme.motionEnabled ? 150 : 0
+                    from: surface.appTheme.motionEnabled ? -4 : 0; to: 0
+                    duration: surface.appTheme.motionEnabled
+                              ? surface.appTheme.durationState : 0
                     easing.type: Easing.OutCubic
                 }
             }
@@ -1667,18 +1704,21 @@ FocusScope {
             ParallelAnimation {
                 NumberAnimation {
                     property: "opacity"; from: 1; to: 0
-                    duration: surface.appTheme.motionEnabled ? 100 : 0
+                    duration: surface.appTheme.durationExit
                     easing.type: Easing.InCubic
                 }
                 NumberAnimation {
-                    property: "scale"; from: 1; to: 0.99
-                    duration: surface.appTheme.motionEnabled ? 100 : 0
+                    property: "scale"; from: 1
+                    to: surface.appTheme.motionEnabled ? 0.99 : 1
+                    duration: surface.appTheme.motionEnabled
+                              ? surface.appTheme.durationExit : 0
                     easing.type: Easing.InCubic
                 }
                 NumberAnimation {
                     target: descriptionGuard; property: "motionOffset"
-                    from: 0; to: -2
-                    duration: surface.appTheme.motionEnabled ? 100 : 0
+                    from: 0; to: surface.appTheme.motionEnabled ? -2 : 0
+                    duration: surface.appTheme.motionEnabled
+                              ? surface.appTheme.durationExit : 0
                     easing.type: Easing.InCubic
                 }
             }
@@ -1764,6 +1804,7 @@ FocusScope {
             surface.syncTitleForSession()
             surface.syncDescriptionForSession()
             surface.syncVideoOutput()
+            if (surface.surfaceActive) surface.focusPrimaryMediaControl()
         }
 
         function onTitleChanged() {

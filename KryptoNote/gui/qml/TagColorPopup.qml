@@ -76,14 +76,15 @@ Popup {
                 property: "opacity"
                 from: 0
                 to: 1
-                duration: 150
+                duration: colorPopup.appTheme.durationState
                 easing.type: Easing.OutCubic
             }
             NumberAnimation {
                 property: "scale"
-                from: 0.98
+                from: colorPopup.appTheme.motionEnabled ? 0.98 : 1
                 to: 1
-                duration: 150
+                duration: colorPopup.appTheme.motionEnabled
+                          ? colorPopup.appTheme.durationState : 0
                 easing.type: Easing.OutCubic
             }
         }
@@ -94,7 +95,7 @@ Popup {
             property: "opacity"
             from: 1
             to: 0
-            duration: 110
+            duration: colorPopup.appTheme.durationExit
             easing.type: Easing.OutCubic
         }
     }
@@ -149,7 +150,8 @@ Popup {
                 scale: down ? 0.97 : 1.0
                 Behavior on scale {
                     NumberAnimation {
-                        duration: colorPopup.appTheme.motionEnabled ? 80 : 0
+                        duration: colorPopup.appTheme.motionEnabled
+                                  ? colorPopup.appTheme.durationPress : 0
                         easing.type: Easing.OutCubic
                     }
                 }
@@ -351,7 +353,10 @@ Popup {
                                       ? colorPopup.appTheme.textMain : colorPopup.appTheme.borderHover
 
                         Behavior on scale {
-                            NumberAnimation { duration: 80 }
+                            NumberAnimation {
+                                duration: colorPopup.appTheme.motionEnabled
+                                          ? colorPopup.appTheme.durationPress : 0
+                            }
                         }
 
                         MouseArea {
@@ -450,7 +455,11 @@ Popup {
                         border.width: cancelColorButton.visualFocus ? 1.5 : 1
                         border.color: cancelColorButton.visualFocus
                                       ? colorPopup.appTheme.accentMain : colorPopup.appTheme.borderDefault
-                        Behavior on color { ColorAnimation { duration: 120 } }
+                        Behavior on color {
+                            ColorAnimation {
+                                duration: colorPopup.appTheme.durationState
+                            }
+                        }
                     }
                     Accessible.name: text
                     onClicked: colorPopup.close()
@@ -484,7 +493,11 @@ Popup {
                              : colorPopup.appTheme.accentMain
                         border.width: applyColorButton.visualFocus ? 1.5 : 0
                         border.color: colorPopup.appTheme.textMain
-                        Behavior on color { ColorAnimation { duration: 120 } }
+                        Behavior on color {
+                            ColorAnimation {
+                                duration: colorPopup.appTheme.durationState
+                            }
+                        }
                     }
                     Accessible.name: text
                     onClicked: {

@@ -138,14 +138,15 @@ Popup {
                 property: "opacity"
                 from: 0
                 to: 1
-                duration: 150
+                duration: editor.appTheme.durationState
                 easing.type: Easing.OutCubic
             }
             NumberAnimation {
                 property: "scale"
-                from: 0.985
+                from: editor.appTheme.motionEnabled ? 0.985 : 1
                 to: 1
-                duration: 150
+                duration: editor.appTheme.motionEnabled
+                          ? editor.appTheme.durationState : 0
                 easing.type: Easing.OutCubic
             }
         }
@@ -156,7 +157,7 @@ Popup {
             property: "opacity"
             from: 1
             to: 0
-            duration: 110
+            duration: editor.appTheme.durationExit
             easing.type: Easing.OutCubic
         }
     }
@@ -212,7 +213,8 @@ Popup {
                 scale: down ? 0.97 : 1.0
                 Behavior on scale {
                     NumberAnimation {
-                        duration: editor.appTheme.motionEnabled ? 80 : 0
+                        duration: editor.appTheme.motionEnabled
+                                  ? editor.appTheme.durationPress : 0
                         easing.type: Easing.OutCubic
                     }
                 }
@@ -627,7 +629,8 @@ Popup {
                     scale: down ? 0.97 : 1.0
                     Behavior on scale {
                         NumberAnimation {
-                            duration: editor.appTheme.motionEnabled ? 80 : 0
+                            duration: editor.appTheme.motionEnabled
+                                      ? editor.appTheme.durationPress : 0
                             easing.type: Easing.OutCubic
                         }
                     }

@@ -231,7 +231,9 @@ Item {
         color: resizeMouse.containsMouse || resizeMouse.pressed ? editor.appTheme.accentMain : "transparent"
         opacity: resizeMouse.containsMouse || resizeMouse.pressed ? 0.55 : 0.0
 
-        Behavior on opacity { NumberAnimation { duration: 120 } }
+        Behavior on opacity {
+            NumberAnimation { duration: editor.appTheme.durationState }
+        }
 
         MouseArea {
             id: resizeMouse
@@ -487,7 +489,8 @@ Item {
                 scale: down ? 0.97 : 1.0
                 Behavior on scale {
                     NumberAnimation {
-                        duration: editor.appTheme.motionEnabled ? 80 : 0
+                        duration: editor.appTheme.motionEnabled
+                                  ? editor.appTheme.durationPress : 0
                         easing.type: Easing.OutCubic
                     }
                 }
@@ -571,11 +574,20 @@ Item {
                     border.width: saveButton.visualFocus ? 1.5 : 1
                     border.color: saveButton.visualFocus
                                   ? editor.appTheme.accentMain : editor.appTheme.btnApplyBorder
-                    Behavior on color { ColorAnimation { duration: 140 } }
+                    Behavior on color {
+                        ColorAnimation { duration: editor.appTheme.durationState }
+                    }
                 }
 
-                Behavior on opacity { NumberAnimation { duration: 140 } }
-                Behavior on scale { NumberAnimation { duration: 80 } }
+                Behavior on opacity {
+                    NumberAnimation { duration: editor.appTheme.durationState }
+                }
+                Behavior on scale {
+                    NumberAnimation {
+                        duration: editor.appTheme.motionEnabled
+                                  ? editor.appTheme.durationPress : 0
+                    }
+                }
                 Accessible.name: text
                 ThemedToolTip {
                     appTheme: editor.appTheme
@@ -624,7 +636,8 @@ Item {
 
                 Behavior on scale {
                     NumberAnimation {
-                        duration: editor.appTheme.motionEnabled ? 80 : 0
+                        duration: editor.appTheme.motionEnabled
+                                  ? editor.appTheme.durationPress : 0
                         easing.type: Easing.OutCubic
                     }
                 }
@@ -642,7 +655,8 @@ Item {
 
     Timer {
         id: hideTimer
-        interval: 230
+        interval: editor.appTheme.motionEnabled
+                  ? editor.appTheme.durationPanel + 10 : 0
         repeat: false
         onTriggered: {
             if (!editor.open) {

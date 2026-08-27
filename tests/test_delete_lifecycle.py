@@ -129,6 +129,32 @@ def make_controller(node_model, graph=None, parent=None):
     return controller, graph, coordinator
 
 
+def test_context_delete_confirms_unless_shift_bypasses(monkeypatch):
+    node_model = FakeNodeModel("text", "text", "text")
+    controller, _graph, _coordinator = make_controller(node_model)
+    confirmations = []
+    requested = []
+    answers = iter((False, True))
+
+    def confirm(count):
+        confirmations.append(int(count))
+        return next(answers)
+
+    monkeypatch.setattr(controller, "_confirm_selected_delete", confirm)
+    monkeypatch.setattr(
+        controller,
+        "request_animated_delete",
+        lambda node_id: requested.append(int(node_id)),
+    )
+
+    controller.delete_node_from_context(1, False)
+    controller.delete_node_from_context(2, True)
+    controller.delete_node_from_context(3, False)
+
+    assert confirmations == [1, 1]
+    assert requested == [2, 3]
+
+
 def test_empty_text_delete_does_not_wait_for_qml_animation(qt_app):
     node_model = FakeNodeModel("text")
     controller, graph, coordinator = make_controller(node_model)

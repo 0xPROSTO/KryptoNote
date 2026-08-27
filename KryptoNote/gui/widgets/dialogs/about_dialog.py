@@ -91,7 +91,10 @@ class AboutDialog(FramelessWindowDragMixin, QDialog):
         content_layout.addWidget(self.version_label)
 
         self.github_link = QLabel(
-            '<a href="https://github.com/0xPROSTO/KryptoNote" style="color: #e6158b; text-decoration: none;">GitHub Repository</a>')
+            '<a href="https://github.com/0xPROSTO/KryptoNote" '
+            f'style="color: {Theme.Palette.ACCENT_MAIN}; '
+            'text-decoration: none;">GitHub Repository</a>'
+        )
         self.github_link.setObjectName("github_link")
         self.github_link.setOpenExternalLinks(True)
         self.github_link.setAlignment(Qt.AlignmentFlag.AlignCenter)

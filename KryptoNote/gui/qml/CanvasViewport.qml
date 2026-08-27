@@ -62,6 +62,7 @@ Item {
     property real _panToX: 0.0
     property real _panToY: 0.0
     property real _panElapsed: 0.0
+    property var _panFinishedCallback: null
     readonly property real panDuration: 0.20
 
     signal zoomChanged(real scale)
@@ -160,6 +161,7 @@ Item {
         _continuousZoomGestureActive = false
         _zoomAnchorValid = false
         _panRunning = false
+        _panFinishedCallback = null
         keyboardPanLeft = false
         keyboardPanRight = false
         keyboardPanUp = false
@@ -235,6 +237,35 @@ Item {
         _pendingZoomLog = 0.0
     }
 
+    function setZoomScale(mouseX, mouseY, requestedScale, animated) {
+        if (!contentLayer) return
+        var targetScale = Math.max(
+            minScale,
+            Math.min(maxScale, Number(requestedScale))
+        )
+        if (!isFinite(targetScale)) return
+
+        if (animated) {
+            var pendingFactor = Math.exp(_pendingZoomLog)
+            var baseScale = _zoomRunning
+                    ? _zoomTo : contentScale * pendingFactor
+            if (Math.abs(baseScale - targetScale) <= 0.0001) return
+            zoomByFactor(
+                Number(mouseX),
+                Number(mouseY),
+                targetScale / Math.max(baseScale, 0.0001)
+            )
+            return
+        }
+
+        var anchor = screenToCanvas(mouseX, mouseY)
+        stopMotion()
+        contentScale = targetScale
+        contentLayer.x = Number(mouseX) - anchor.x * contentScale
+        contentLayer.y = Number(mouseY) - anchor.y * contentScale
+        zoomFinished(contentScale)
+    }
+
     function queueContinuousZoom(mouseX, mouseY, steps) {
         steps = Number(steps)
         if (!isFinite(steps) || Math.abs(steps) <= 0.0001) {
@@ -269,32 +300,53 @@ Item {
         return true
     }
 
-    function smoothCenterOn(targetX, targetY) {
-        smoothCenterOnScreen(targetX, targetY, width / 2, height / 2)
-    }
-
-    function smoothCenterOnScreen(targetX, targetY, screenCenterX, screenCenterY) {
-        stopMotion()
-        _startPan(
-            screenCenterX - targetX * contentScale,
-            screenCenterY - targetY * contentScale
+    function smoothCenterOn(targetX, targetY, onFinished) {
+        smoothCenterOnScreen(
+            targetX,
+            targetY,
+            width / 2,
+            height / 2,
+            onFinished
         )
     }
 
-    function smoothMoveTo(layerX, layerY) {
+    function smoothCenterOnScreen(targetX, targetY, screenCenterX, screenCenterY,
+                                  onFinished) {
         stopMotion()
-        _startPan(layerX, layerY)
+        _startPan(
+            screenCenterX - targetX * contentScale,
+            screenCenterY - targetY * contentScale,
+            onFinished
+        )
     }
 
-    function _startPan(layerX, layerY) {
+    function smoothMoveTo(layerX, layerY, onFinished) {
+        stopMotion()
+        _startPan(layerX, layerY, onFinished)
+    }
+
+    function _startPan(layerX, layerY, onFinished) {
         if (!contentLayer) return
         _panFromX = contentLayer.x
         _panFromY = contentLayer.y
         _panToX = layerX
         _panToY = layerY
         _panElapsed = 0.0
+        _panFinishedCallback = typeof onFinished === "function"
+                ? onFinished : null
         _panRunning = Math.abs(_panToX - _panFromX)
                 + Math.abs(_panToY - _panFromY) > 0.01
+        if (!_panRunning) {
+            contentLayer.x = _panToX
+            contentLayer.y = _panToY
+            _finishPan()
+        }
+    }
+
+    function _finishPan() {
+        var callback = _panFinishedCallback
+        _panFinishedCallback = null
+        if (typeof callback === "function") callback()
     }
 
     function setKeyboardPanKey(keyName, pressed) {
@@ -311,6 +363,7 @@ Item {
         if (pressed) {
             _inertiaRunning = false
             _panRunning = false
+            _panFinishedCallback = null
             _keyboardPanRunning = true
         } else if (!_hasKeyboardPanInput()
                    && Math.abs(keyboardVelocityX) + Math.abs(keyboardVelocityY) < 0.5) {
@@ -509,6 +562,7 @@ Item {
     function _advancePan(dt) {
         if (!contentLayer) {
             _panRunning = false
+            _panFinishedCallback = null
             return
         }
         _panElapsed = Math.min(panDuration, _panElapsed + dt)
@@ -520,6 +574,7 @@ Item {
             contentLayer.x = _panToX
             contentLayer.y = _panToY
             _panRunning = false
+            _finishPan()
         }
     }
 

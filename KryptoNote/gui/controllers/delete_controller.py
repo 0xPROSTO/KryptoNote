@@ -231,23 +231,17 @@ class DeleteController(QObject):
                 isinstance(result, DeletionResult)
                 and result.requires_vacuum
             )
-            if requires_vacuum:
-                message = (
-                    "Item deleted. Optimizing database..."
-                    if len(ids) == 1
-                    else f"Deleted {len(ids)} items. Optimizing database..."
-                )
-                self.status_message.emit(message, "normal")
-                self._start_vacuum_after_delete(token)
-                vacuum_started = True
-                return
-
-            message = (
+            deleted_message = (
                 "Item deleted."
                 if len(ids) == 1
                 else f"Deleted {len(ids)} items."
             )
-            self.status_message.emit(message, "normal")
+            self.status_message.emit(deleted_message, "success")
+            if requires_vacuum:
+                self.status_message.emit("Optimizing database...", "normal")
+                self._start_vacuum_after_delete(token)
+                vacuum_started = True
+                return
         except Exception as exc:
             logger.exception("Failed to reconcile deleted nodes: %s", exc)
             self.status_message.emit(
@@ -356,6 +350,19 @@ class DeleteController(QObject):
                 self._request_animated_delete_batch(selected)
             else:
                 self.request_animated_delete(selected[0])
+
+    @Slot(int, bool)
+    def delete_node_from_context(self, node_id, bypass_confirmation=False):
+        node_id = int(node_id)
+        node = self._node_model.get_node_data(node_id)
+        if not node or node.get("is_deleting"):
+            return
+        if (
+            not bool(bypass_confirmation)
+            and not self._confirm_selected_delete(1)
+        ):
+            return
+        self.request_animated_delete(node_id)
 
     def _confirm_selected_delete(self, count):
         count = max(1, int(count))

@@ -19,9 +19,11 @@ Rectangle {
     property int textSize: 10
     property bool isSelected: false
     property bool isHovered: false
+    property bool isTransforming: false
     property real nodeWidth: 360
     property real nodeHeight: 108
     property var tags: []
+    property real canvasScale: 1.0
     readonly property bool hasDescription: nodeContent.trim().length > 0
     readonly property bool playbackIsCurrent:
             viewerController.playbackNodeId === nodeId
@@ -32,13 +34,22 @@ Rectangle {
     anchors.fill: parent
     radius: 4
     color: audioNode.appTheme.bgNode
-    border.width: isHovered ? 1.65 : (isSelected ? 1.5 : 1.1)
-    border.color: isSelected ? audioNode.appTheme.accentMain
-                 : (isHovered ? audioNode.appTheme.accentMain
-                              : audioNode.appTheme.borderDefault)
+    border.width: isTransforming ? 1.9
+                  : isSelected ? 1.5 : (isHovered ? 1.4 : 1.1)
+    border.color: isTransforming ? audioNode.appTheme.accentHigh
+                  : isSelected ? audioNode.appTheme.accentMain
+                  : isHovered ? audioNode.appTheme.accentMain
+                  : audioNode.appTheme.borderDefault
 
-    Behavior on border.color { ColorAnimation { duration: 120 } }
-    Behavior on border.width { NumberAnimation { duration: 120 } }
+    Behavior on border.color {
+        ColorAnimation { duration: audioNode.appTheme.durationState }
+    }
+    Behavior on border.width {
+        NumberAnimation {
+            duration: audioNode.appTheme.motionEnabled
+                      ? audioNode.appTheme.durationState : 0
+        }
+    }
 
     Text {
         id: titleText
@@ -96,11 +107,14 @@ Rectangle {
                 border.color: playButton.visualFocus
                               ? audioNode.appTheme.accentMain
                               : audioNode.appTheme.borderDefault
-                Behavior on color { ColorAnimation { duration: 100 } }
+                Behavior on color {
+                    ColorAnimation { duration: audioNode.appTheme.durationState }
+                }
             }
             Behavior on scale {
                 NumberAnimation {
-                    duration: audioNode.appTheme.motionEnabled ? 80 : 0
+                    duration: audioNode.appTheme.motionEnabled
+                              ? audioNode.appTheme.durationPress : 0
                     easing.type: Easing.OutCubic
                 }
             }
@@ -188,12 +202,12 @@ Rectangle {
     TagDots {
         id: tagSummary
         appTheme: audioNode.appTheme
-        anchors.left: parent.left
+        width: Math.min(220, Math.max(84, parent.width * 0.48))
         anchors.right: parent.right
-        anchors.bottom: footerLabel.top
-        anchors.leftMargin: 10
+        anchors.bottom: parent.bottom
         anchors.rightMargin: 10
-        anchors.bottomMargin: 4
+        anchors.bottomMargin: 10
+        canvasScale: audioNode.canvasScale
         tags: audioNode.tags
     }
 
@@ -202,7 +216,11 @@ Rectangle {
         x: 10
         anchors.bottom: parent.bottom
         anchors.bottomMargin: 4
-        width: parent.width - 20
+        width: Math.max(
+            0,
+            parent.width - 20
+            - (tagSummary.visible ? tagSummary.width + 6 : 0)
+        )
         text: audioNode.metaSummary.length > 0
               ? audioNode.metaSummary : "[AUDIO]"
         color: audioNode.appTheme.accentMain

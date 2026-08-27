@@ -15,33 +15,58 @@ from KryptoNote.gui.theme import Theme
 
 
 class TitleBarButton(QPushButton):
+    _LABELS = {
+        "min": "Minimize",
+        "max": "Maximize",
+        "close": "Close",
+    }
+
     def __init__(self, btn_type, hover_color=None, parent=None):
         super().__init__("", parent)
         self._btn_type = btn_type  # 'min', 'max', 'close'
         self._hover_color = hover_color or Theme.Palette.BTN_HOVER_DEFAULT
         self.setFixedSize(46, 32)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        self._sync_accessibility()
+        self._apply_style()
+
+    def _apply_style(self):
+        pressed_color = (
+            Theme.Palette.ACCENT_HOVER
+            if self._btn_type == "close"
+            else Theme.Palette.BG_CONTROL_PRESSED
+        )
         self.setStyleSheet(f"""
             QPushButton {{
                 background: transparent;
-                border: none;
+                border: 1px solid transparent;
             }}
             QPushButton:hover {{
                 background-color: {self._hover_color};
+            }}
+            QPushButton:pressed {{
+                background-color: {pressed_color};
+            }}
+            QPushButton:focus {{
+                border-color: {Theme.Palette.ACCENT_MAIN};
             }}
         """)
 
     def set_hover_color(self, color):
         self._hover_color = color
-        self.setStyleSheet(f"""
-            QPushButton {{
-                background: transparent;
-                border: none;
-            }}
-            QPushButton:hover {{
-                background-color: {self._hover_color};
-            }}
-        """)
+        self._apply_style()
+        self.update()
+
+    def _sync_accessibility(self):
+        label = self._LABELS[self._btn_type]
+        if self._btn_type == "max" and self.window().isMaximized():
+            label = "Restore"
+        self.setAccessibleName(label)
+        self.setToolTip(label)
+
+    def sync_window_state(self):
+        self._sync_accessibility()
         self.update()
 
     def paintEvent(self, event):
@@ -63,8 +88,12 @@ class TitleBarButton(QPushButton):
         if self._btn_type == 'min':
             painter.drawLine(cx - 5, cy, cx + 5, cy)
         elif self._btn_type == 'max':
-            rect = QRectF(cx - 5, cy - 5, 10, 10)
-            painter.drawRoundedRect(rect, 2.8, 2.8)
+            if self.window().isMaximized():
+                painter.drawRect(QRectF(cx - 3, cy - 5, 8, 8))
+                painter.drawRect(QRectF(cx - 5, cy - 3, 8, 8))
+            else:
+                rect = QRectF(cx - 5, cy - 5, 10, 10)
+                painter.drawRoundedRect(rect, 2.8, 2.8)
         elif self._btn_type == 'close':
             s = 5.0 # Total span 10px
             painter.drawLine(cx - s, cy - s, cx + s, cy + s)
@@ -153,6 +182,9 @@ class CustomTitleBar(QWidget):
         self.btn_close.set_hover_color(Theme.Palette.ACCENT_MAIN)
         self.update()
 
+    def sync_window_state(self):
+        self.btn_maximize.sync_window_state()
+
     def _on_minimize(self):
         self.window().showMinimized()
 
@@ -162,6 +194,7 @@ class CustomTitleBar(QWidget):
 
         else:
             self.window().showMaximized()
+        self.sync_window_state()
 
     def _on_close(self):
         self.window().close()

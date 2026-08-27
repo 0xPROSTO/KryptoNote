@@ -11,6 +11,10 @@ from PySide6.QtWidgets import (
 
 from KryptoNote.gui.theme.palette import Palette
 from KryptoNote.gui.widgets.overlays.dim_overlay import DimOverlay
+from KryptoNote.gui.widgets.dialog_motion import (
+    widget_motion_duration,
+    widget_spatial_motion_enabled,
+)
 
 
 class LauncherOverlay(DimOverlay):
@@ -317,12 +321,18 @@ class LauncherOverlay(DimOverlay):
     def _shake_card(self):
         if self._shake_anim is not None:
             self._shake_anim.stop()
+        if not widget_spatial_motion_enabled(self):
+            return
         anim = QSequentialAnimationGroup(self)
         base_pos = self._card.pos()
         offsets = [10, -10, 6, -6, 3, -3, 0]
+        step_duration = max(
+            1,
+            round(widget_motion_duration(self, "panel") / len(offsets)),
+        )
         for offset in offsets:
             step = QPropertyAnimation(self._card, b"pos")
-            step.setDuration(40)
+            step.setDuration(step_duration)
             step.setEndValue(QPoint(base_pos.x() + offset, base_pos.y()))
             anim.addAnimation(step)
         self._shake_anim = anim

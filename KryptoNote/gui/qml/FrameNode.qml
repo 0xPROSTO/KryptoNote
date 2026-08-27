@@ -18,6 +18,7 @@ Item {
     property string frameColor: ""
     property real frameOpacity: 0.21
     property var tags: []
+    property real canvasScale: 1.0
     property bool isSelected: false
     property bool isHovered: false
     property bool resizing: false
@@ -31,10 +32,14 @@ Item {
         real localY
     )
 
-    readonly property color outlineColor: frame.isSelected
-            ? frame.appTheme.accentMain
-            : (frame.isHovered || titleHover.hovered || frame.lockHovered
-               ? frame.appTheme.borderHover
+    readonly property bool isTransforming:
+            frame.resizing || (frame.dragController && frame.dragController.dragging)
+    readonly property color outlineColor: frame.isTransforming
+            ? frame.appTheme.accentHigh
+            : frame.isSelected ? frame.appTheme.accentMain
+            : (frame.isHovered || titleHover.hovered
+               || frame.lockHovered || frame.editHovered
+               ? frame.appTheme.accentMain
                : frame.appTheme.borderDefault)
     readonly property bool lockHovered:
             lockButton.hovered
@@ -47,6 +52,17 @@ Item {
                    >= titleBlob.y + lockButton.y
                 && frame.topOverlayHoverPosition.y
                    <= titleBlob.y + lockButton.y + lockButton.height)
+    readonly property bool editHovered:
+            editButton.hovered
+            || (frame.topOverlayHoverActive
+                && frame.topOverlayHoverPosition.x
+                   >= titleBlob.x + editButton.x
+                && frame.topOverlayHoverPosition.x
+                   <= titleBlob.x + editButton.x + editButton.width
+                && frame.topOverlayHoverPosition.y
+                   >= titleBlob.y + editButton.y
+                && frame.topOverlayHoverPosition.y
+                   <= titleBlob.y + editButton.y + editButton.height)
     readonly property real surfaceTopInset: 15
     readonly property real topResizeExclusionWidth:
             titleBlob.width
@@ -73,7 +89,10 @@ Item {
         opacity: Math.max(0, Math.min(1, frame.frameOpacity))
 
         Behavior on opacity {
-            NumberAnimation { duration: 120; easing.type: Easing.OutCubic }
+            NumberAnimation {
+                duration: frame.appTheme.durationState
+                easing.type: Easing.OutCubic
+            }
         }
     }
 
@@ -81,10 +100,13 @@ Item {
         anchors.fill: frameSurface
         radius: 8
         color: "transparent"
-        border.width: frame.isSelected ? 1.8 : 1.15
+        border.width: frame.isTransforming ? 2.0
+                      : frame.isSelected ? 1.8 : 1.15
         border.color: frame.outlineColor
 
-        Behavior on border.color { ColorAnimation { duration: 120 } }
+        Behavior on border.color {
+            ColorAnimation { duration: frame.appTheme.durationState }
+        }
     }
 
     Rectangle {
@@ -99,10 +121,13 @@ Item {
         height: 30
         radius: height / 2
         color: frame.appTheme.bgNode
-        border.width: frame.isSelected ? 1.5 : 1
+        border.width: frame.isTransforming ? 1.8
+                      : frame.isSelected ? 1.5 : 1
         border.color: frame.outlineColor
 
-        Behavior on border.color { ColorAnimation { duration: 120 } }
+        Behavior on border.color {
+            ColorAnimation { duration: frame.appTheme.durationState }
+        }
 
         NodeSelectionMouseArea {
             anchors.fill: parent
@@ -130,7 +155,7 @@ Item {
             target: null
             acceptedButtons: Qt.LeftButton
             dragThreshold: 1
-            grabPermissions: PointerHandler.CanTakeOverFromAnything
+            grabPermissions: PointerHandler.CanTakeOverFromItems
             enabled: frame.dragController
                      && frame.dragController.canDrag
             onActiveChanged: {
@@ -165,7 +190,8 @@ Item {
             scale: down ? 0.97 : 1.0
             Behavior on scale {
                 NumberAnimation {
-                    duration: frame.appTheme.motionEnabled ? 80 : 0
+                    duration: frame.appTheme.motionEnabled
+                              ? frame.appTheme.durationPress : 0
                     easing.type: Easing.OutCubic
                 }
             }
@@ -186,6 +212,49 @@ Item {
                 text: frame.frameLocked
                       ? "Locked · moves contained nodes"
                       : "Unlocked · moves independently"
+            }
+        }
+
+        ToolButton {
+            id: editButton
+            z: 2
+            anchors.right: parent.right
+            anchors.rightMargin: (parent.height - height) / 2
+            anchors.verticalCenter: parent.verticalCenter
+            width: 24
+            height: 24
+            hoverEnabled: true
+            focusPolicy: Qt.NoFocus
+            display: AbstractButton.IconOnly
+            icon.source: "../assets/icons/edit.svg"
+            icon.width: 14
+            icon.height: 14
+            icon.color: frame.editHovered
+                        ? frame.appTheme.textMain
+                        : frame.appTheme.textMuted
+            scale: down ? 0.97 : 1.0
+            Behavior on scale {
+                NumberAnimation {
+                    duration: frame.appTheme.motionEnabled
+                              ? frame.appTheme.durationPress : 0
+                    easing.type: Easing.OutCubic
+                }
+            }
+            background: Rectangle {
+                radius: 12
+                color: frame.editHovered
+                       ? frame.appTheme.bgControlHover
+                       : "transparent"
+            }
+            onClicked: frame.canvasController.request_open_editor(frame.nodeId)
+
+            Accessible.role: Accessible.Button
+            Accessible.name: "Edit frame"
+            ThemedToolTip {
+                appTheme: frame.appTheme
+                visible: frame.editHovered
+                delay: 450
+                text: "Edit frame"
             }
         }
 
@@ -214,9 +283,10 @@ Item {
         z: 3
         appTheme: frame.appTheme
         tags: frame.tags
+        canvasScale: frame.canvasScale
         width: Math.min(280, Math.max(0, frameSurface.width - 56))
-        anchors.left: frameSurface.left
-        anchors.leftMargin: 28
+        anchors.right: frameSurface.right
+        anchors.rightMargin: 28
         anchors.bottom: frameSurface.bottom
         anchors.bottomMargin: -height / 2 + 1
     }

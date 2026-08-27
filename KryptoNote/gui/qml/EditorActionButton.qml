@@ -61,19 +61,20 @@ ToolButton {
                     : control.appTheme.borderDefault
         Behavior on color {
             ColorAnimation {
-                duration: control.appTheme.motionEnabled ? 140 : 0
+                duration: control.appTheme.durationState
             }
         }
     }
 
     Behavior on opacity {
         NumberAnimation {
-            duration: control.appTheme.motionEnabled ? 140 : 0
+            duration: control.appTheme.durationState
         }
     }
     Behavior on scale {
         NumberAnimation {
-            duration: control.appTheme.motionEnabled ? 80 : 0
+            duration: control.appTheme.motionEnabled
+                      ? control.appTheme.durationPress : 0
             easing.type: Easing.OutCubic
         }
     }

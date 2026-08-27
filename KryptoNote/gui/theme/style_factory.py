@@ -446,13 +446,13 @@ class StyleFactory:
             }}
             QWidget#theme_header,
             QWidget#theme_footer,
-            QWidget#theme_scope,
-            QWidget#theme_settings {{
+            QWidget#theme_settings,
+            QWidget#settings_body,
+            QWidget#settings_page,
+            QStackedWidget#settings_pages {{
                 background: transparent;
                 border: none;
             }}
-            QScrollArea#theme_settings_scroll,
-            QScrollArea#theme_settings_scroll > QWidget > QWidget,
             QStackedWidget#theme_route_options {{
                 background: transparent;
                 border: none;
@@ -468,17 +468,18 @@ class StyleFactory:
                 font-size: 14pt;
                 font-weight: 600;
             }}
+            QLabel#settings_page_title {{
+                color: {Palette.TEXT_MAIN};
+                font-size: 14pt;
+                font-weight: 650;
+            }}
             QLabel[sectionTitle="true"] {{
                 color: {Palette.TEXT_MAIN};
-                font-size: 12pt;
+                font-size: 11pt;
                 font-weight: 600;
             }}
             QLabel[controlLabel="true"] {{
                 color: {Palette.TEXT_DIM};
-                font-size: 9pt;
-            }}
-            QLabel[controlHint="true"] {{
-                color: {Palette.TEXT_MUTED};
                 font-size: 9pt;
             }}
             QFrame#theme_separator {{
@@ -536,6 +537,34 @@ class StyleFactory:
             QPushButton[scopeSwitch="true"] {{
                 min-width: 92px;
                 max-width: 92px;
+            }}
+            QWidget#settings_nav {{
+                background: {Palette.BG_NODE};
+                border: 1px solid {Palette.BORDER_SUBTLE};
+                border-radius: 7px;
+            }}
+            QPushButton[settingsNav="true"] {{
+                min-height: 34px;
+                padding: 0 10px;
+                color: {Palette.TEXT_DIM};
+                background: transparent;
+                border: 1px solid transparent;
+                text-align: left;
+                font-weight: 500;
+            }}
+            QPushButton[settingsNav="true"]:hover {{
+                color: {Palette.TEXT_MAIN};
+                background: {Palette.BG_CONTROL_HOVER};
+                border-color: transparent;
+            }}
+            QPushButton[settingsNav="true"]:checked {{
+                color: {Palette.TEXT_MAIN};
+                background: {Palette.ACCENT_LOW};
+                border: 1px solid {Palette.ACCENT_MAIN};
+                font-weight: 600;
+            }}
+            QPushButton[settingsNav="true"]:focus {{
+                border: 2px solid {Palette.ACCENT_MAIN};
             }}
             QPushButton[sectionReset="true"] {{
                 min-height: 22px;

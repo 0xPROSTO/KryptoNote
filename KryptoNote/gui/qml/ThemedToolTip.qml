@@ -41,17 +41,20 @@ ToolTip {
         ParallelAnimation {
             NumberAnimation {
                 property: "opacity"; from: 0; to: 1
-                duration: control.appTheme.motionEnabled ? 80 : 0
+                duration: control.appTheme.durationPress
                 easing.type: Easing.OutCubic
             }
             NumberAnimation {
-                property: "scale"; from: 0.985; to: 1
-                duration: control.appTheme.motionEnabled ? 80 : 0
+                property: "scale"
+                from: control.appTheme.motionEnabled ? 0.985 : 1; to: 1
+                duration: control.appTheme.motionEnabled
+                          ? control.appTheme.durationPress : 0
                 easing.type: Easing.OutCubic
             }
             NumberAnimation {
                 target: control; property: "motionOffset"; from: -2; to: 0
-                duration: control.appTheme.motionEnabled ? 80 : 0
+                duration: control.appTheme.motionEnabled
+                          ? control.appTheme.durationPress : 0
                 easing.type: Easing.OutCubic
             }
         }
@@ -61,17 +64,20 @@ ToolTip {
         ParallelAnimation {
             NumberAnimation {
                 property: "opacity"; from: 1; to: 0
-                duration: control.appTheme.motionEnabled ? 60 : 0
+                duration: control.appTheme.durationExit
                 easing.type: Easing.InCubic
             }
             NumberAnimation {
-                property: "scale"; from: 1; to: 0.99
-                duration: control.appTheme.motionEnabled ? 60 : 0
+                property: "scale"; from: 1
+                to: control.appTheme.motionEnabled ? 0.99 : 1
+                duration: control.appTheme.motionEnabled
+                          ? control.appTheme.durationExit : 0
                 easing.type: Easing.InCubic
             }
             NumberAnimation {
                 target: control; property: "motionOffset"; from: 0; to: -1
-                duration: control.appTheme.motionEnabled ? 60 : 0
+                duration: control.appTheme.motionEnabled
+                          ? control.appTheme.durationExit : 0
                 easing.type: Easing.InCubic
             }
         }

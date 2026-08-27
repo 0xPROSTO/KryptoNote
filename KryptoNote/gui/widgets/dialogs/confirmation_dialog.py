@@ -1,6 +1,6 @@
 """Application-styled confirmation dialog for destructive actions."""
 
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QSize, QTimer, Qt
 from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -149,10 +149,36 @@ class ConfirmationDialog(FramelessWindowDragMixin, QDialog):
         layout.addLayout(button_layout)
 
         self.setTabOrder(self.cancel_button, self.confirm_button)
-        self.cancel_button.setFocus(Qt.FocusReason.OtherFocusReason)
+        self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        self.setFocus(Qt.FocusReason.OtherFocusReason)
         root_layout.addWidget(container)
         root_layout.activate()
         self.adjustSize()
+
+    def _focus_dialog_surface(self):
+        if self.isVisible():
+            self.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        # QDialog otherwise promotes the first button when the native window
+        # activates. Keep the safe Cancel action for Enter without painting a
+        # delayed focus ring; the first keyboard navigation reveals focus.
+        self._focus_dialog_surface()
+        QTimer.singleShot(0, self._focus_dialog_surface)
+
+    def focusNextPrevChild(self, next_child):
+        focused = self.focusWidget()
+        if focused not in (self.cancel_button, self.confirm_button):
+            target = self.cancel_button if next_child else self.confirm_button
+            reason = (
+                Qt.FocusReason.TabFocusReason
+                if next_child
+                else Qt.FocusReason.BacktabFocusReason
+            )
+            target.setFocus(reason)
+            return True
+        return super().focusNextPrevChild(next_child)
 
     def keyPressEvent(self, event):
         key = event.key()

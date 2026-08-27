@@ -44,13 +44,15 @@ Item {
 
     Behavior on muteReveal {
         NumberAnimation {
-            duration: control.appTheme.motionEnabled ? 130 : 0
+            duration: control.appTheme.motionEnabled
+                      ? control.appTheme.durationState : 0
             easing.type: Easing.OutCubic
         }
     }
     Behavior on sliderReveal {
         NumberAnimation {
-            duration: control.appTheme.motionEnabled ? 130 : 0
+            duration: control.appTheme.motionEnabled
+                      ? control.appTheme.durationState : 0
             easing.type: Easing.OutCubic
         }
     }

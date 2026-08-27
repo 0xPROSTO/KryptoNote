@@ -21,6 +21,7 @@ Item {
     property string sortKey: "relevance"
     property string sortLabel: "Relevance"
     property bool convertingTags: false
+    property bool searchExecuted: false
 
     signal requestedCenter(int nodeId)
     signal requestedCloseCompensation(real panelWidth)
@@ -73,7 +74,9 @@ Item {
         anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom
         color: resizeMouse.containsMouse || resizeMouse.pressed ? searchPanel.appTheme.accentMain : "transparent"
         opacity: resizeMouse.containsMouse || resizeMouse.pressed ? 0.55 : 0
-        Behavior on opacity { NumberAnimation { duration: 120 } }
+        Behavior on opacity {
+            NumberAnimation { duration: searchPanel.appTheme.durationState }
+        }
 
         MouseArea {
             id: resizeMouse
@@ -118,7 +121,9 @@ Item {
                           : (searchFieldHover.hovered ? searchPanel.appTheme.borderHover
                                                       : searchPanel.appTheme.borderDefault)
 
-            Behavior on border.color { ColorAnimation { duration: 120 } }
+            Behavior on border.color {
+                ColorAnimation { duration: searchPanel.appTheme.durationState }
+            }
             HoverHandler { id: searchFieldHover }
 
             ToolButton {
@@ -258,7 +263,8 @@ Item {
                             scale: down ? 0.97 : 1.0
                             Behavior on scale {
                                 NumberAnimation {
-                                    duration: searchPanel.appTheme.motionEnabled ? 80 : 0
+                                    duration: searchPanel.appTheme.motionEnabled
+                                              ? searchPanel.appTheme.durationPress : 0
                                     easing.type: Easing.OutCubic
                                 }
                             }
@@ -318,11 +324,32 @@ Item {
         height: 1; color: searchPanel.appTheme.borderDefault
     }
 
+    Item {
+        id: resultSummary
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: divider.bottom
+        height: 34
+
+        Text {
+            anchors.left: parent.left
+            anchors.leftMargin: 15
+            anchors.verticalCenter: parent.verticalCenter
+            text: searchPanel.searchExecuted
+                  ? resultModel.count + (resultModel.count === 1
+                                         ? " result" : " results")
+                  : "Search results"
+            color: searchPanel.appTheme.textMuted
+            font.family: "Segoe UI Semibold"
+            font.pointSize: 8
+        }
+    }
+
     ListView {
         id: resultList
         anchors.left: parent.left; anchors.right: parent.right
-        anchors.top: divider.bottom; anchors.bottom: parent.bottom
-        anchors.leftMargin: 14; anchors.rightMargin: 14; anchors.topMargin: 10
+        anchors.top: resultSummary.bottom; anchors.bottom: parent.bottom
+        anchors.leftMargin: 14; anchors.rightMargin: 14
         clip: true
         spacing: 8
         model: ListModel { id: resultModel }
@@ -354,17 +381,18 @@ Item {
             border.color: index === searchPanel.currentIndex ? searchPanel.appTheme.accentMain : searchPanel.appTheme.borderDefault
             Behavior on color {
                 ColorAnimation {
-                    duration: searchPanel.appTheme.motionEnabled ? 80 : 0
+                    duration: searchPanel.appTheme.durationState
                 }
             }
             Behavior on border.color {
                 ColorAnimation {
-                    duration: searchPanel.appTheme.motionEnabled ? 80 : 0
+                    duration: searchPanel.appTheme.durationState
                 }
             }
             Behavior on border.width {
                 NumberAnimation {
-                    duration: searchPanel.appTheme.motionEnabled ? 80 : 0
+                    duration: searchPanel.appTheme.motionEnabled
+                              ? searchPanel.appTheme.durationPress : 0
                     easing.type: Easing.OutCubic
                 }
             }
@@ -409,6 +437,51 @@ Item {
         }
     }
 
+    Column {
+        z: 3
+        anchors.centerIn: resultList
+        spacing: 8
+        visible: searchPanel.searchExecuted && resultModel.count === 0
+
+        Text {
+            anchors.horizontalCenter: parent.horizontalCenter
+            text: "No matches"
+            color: searchPanel.appTheme.textMain
+            font.family: "Segoe UI Semibold"
+            font.pointSize: 10
+        }
+
+        ToolButton {
+            id: clearFiltersButton
+            anchors.horizontalCenter: parent.horizontalCenter
+            text: "Clear filters"
+            hoverEnabled: true
+            focusPolicy: Qt.TabFocus
+            font.family: "Segoe UI"
+            font.pointSize: 9
+            palette.buttonText: hovered || visualFocus
+                                ? searchPanel.appTheme.textMain
+                                : searchPanel.appTheme.textDim
+            background: Rectangle {
+                radius: 6
+                color: clearFiltersButton.down
+                       ? searchPanel.appTheme.bgControlPressed
+                     : clearFiltersButton.hovered
+                       ? searchPanel.appTheme.bgControlHover
+                     : searchPanel.appTheme.bgControl
+                border.width: clearFiltersButton.visualFocus ? 1.5 : 1
+                border.color: clearFiltersButton.visualFocus
+                              ? searchPanel.appTheme.accentMain
+                              : searchPanel.appTheme.borderDefault
+                Behavior on color {
+                    ColorAnimation { duration: searchPanel.appTheme.durationState }
+                }
+            }
+            Accessible.name: text
+            onClicked: searchPanel.clearAllFilters()
+        }
+    }
+
     Popup {
         id: tagMenu
         parent: searchPanel
@@ -425,17 +498,19 @@ Item {
             ParallelAnimation {
                 NumberAnimation {
                     property: "opacity"; from: 0; to: 1
-                    duration: searchPanel.appTheme.motionEnabled ? 150 : 0
+                    duration: searchPanel.appTheme.durationState
                     easing.type: Easing.OutCubic
                 }
                 NumberAnimation {
                     property: "scale"; from: 0.98; to: 1
-                    duration: searchPanel.appTheme.motionEnabled ? 150 : 0
+                    duration: searchPanel.appTheme.motionEnabled
+                              ? searchPanel.appTheme.durationState : 0
                     easing.type: Easing.OutCubic
                 }
                 NumberAnimation {
                     target: tagMenu; property: "motionOffset"; from: -4; to: 0
-                    duration: searchPanel.appTheme.motionEnabled ? 150 : 0
+                    duration: searchPanel.appTheme.motionEnabled
+                              ? searchPanel.appTheme.durationState : 0
                     easing.type: Easing.OutCubic
                 }
             }
@@ -444,17 +519,19 @@ Item {
             ParallelAnimation {
                 NumberAnimation {
                     property: "opacity"; from: 1; to: 0
-                    duration: searchPanel.appTheme.motionEnabled ? 100 : 0
+                    duration: searchPanel.appTheme.durationExit
                     easing.type: Easing.InCubic
                 }
                 NumberAnimation {
                     property: "scale"; from: 1; to: 0.99
-                    duration: searchPanel.appTheme.motionEnabled ? 100 : 0
+                    duration: searchPanel.appTheme.motionEnabled
+                              ? searchPanel.appTheme.durationExit : 0
                     easing.type: Easing.InCubic
                 }
                 NumberAnimation {
                     target: tagMenu; property: "motionOffset"; from: 0; to: -2
-                    duration: searchPanel.appTheme.motionEnabled ? 100 : 0
+                    duration: searchPanel.appTheme.motionEnabled
+                              ? searchPanel.appTheme.durationExit : 0
                     easing.type: Easing.InCubic
                 }
             }
@@ -515,17 +592,19 @@ Item {
             ParallelAnimation {
                 NumberAnimation {
                     property: "opacity"; from: 0; to: 1
-                    duration: searchPanel.appTheme.motionEnabled ? 150 : 0
+                    duration: searchPanel.appTheme.durationState
                     easing.type: Easing.OutCubic
                 }
                 NumberAnimation {
                     property: "scale"; from: 0.98; to: 1
-                    duration: searchPanel.appTheme.motionEnabled ? 150 : 0
+                    duration: searchPanel.appTheme.motionEnabled
+                              ? searchPanel.appTheme.durationState : 0
                     easing.type: Easing.OutCubic
                 }
                 NumberAnimation {
                     target: filterMenu; property: "motionOffset"; from: -4; to: 0
-                    duration: searchPanel.appTheme.motionEnabled ? 150 : 0
+                    duration: searchPanel.appTheme.motionEnabled
+                              ? searchPanel.appTheme.durationState : 0
                     easing.type: Easing.OutCubic
                 }
             }
@@ -534,17 +613,19 @@ Item {
             ParallelAnimation {
                 NumberAnimation {
                     property: "opacity"; from: 1; to: 0
-                    duration: searchPanel.appTheme.motionEnabled ? 100 : 0
+                    duration: searchPanel.appTheme.durationExit
                     easing.type: Easing.InCubic
                 }
                 NumberAnimation {
                     property: "scale"; from: 1; to: 0.99
-                    duration: searchPanel.appTheme.motionEnabled ? 100 : 0
+                    duration: searchPanel.appTheme.motionEnabled
+                              ? searchPanel.appTheme.durationExit : 0
                     easing.type: Easing.InCubic
                 }
                 NumberAnimation {
                     target: filterMenu; property: "motionOffset"; from: 0; to: -2
-                    duration: searchPanel.appTheme.motionEnabled ? 100 : 0
+                    duration: searchPanel.appTheme.motionEnabled
+                              ? searchPanel.appTheme.durationExit : 0
                     easing.type: Easing.InCubic
                 }
             }
@@ -606,17 +687,19 @@ Item {
             ParallelAnimation {
                 NumberAnimation {
                     property: "opacity"; from: 0; to: 1
-                    duration: searchPanel.appTheme.motionEnabled ? 150 : 0
+                    duration: searchPanel.appTheme.durationState
                     easing.type: Easing.OutCubic
                 }
                 NumberAnimation {
                     property: "scale"; from: 0.98; to: 1
-                    duration: searchPanel.appTheme.motionEnabled ? 150 : 0
+                    duration: searchPanel.appTheme.motionEnabled
+                              ? searchPanel.appTheme.durationState : 0
                     easing.type: Easing.OutCubic
                 }
                 NumberAnimation {
                     target: sortMenu; property: "motionOffset"; from: -4; to: 0
-                    duration: searchPanel.appTheme.motionEnabled ? 150 : 0
+                    duration: searchPanel.appTheme.motionEnabled
+                              ? searchPanel.appTheme.durationState : 0
                     easing.type: Easing.OutCubic
                 }
             }
@@ -625,17 +708,19 @@ Item {
             ParallelAnimation {
                 NumberAnimation {
                     property: "opacity"; from: 1; to: 0
-                    duration: searchPanel.appTheme.motionEnabled ? 100 : 0
+                    duration: searchPanel.appTheme.durationExit
                     easing.type: Easing.InCubic
                 }
                 NumberAnimation {
                     property: "scale"; from: 1; to: 0.99
-                    duration: searchPanel.appTheme.motionEnabled ? 100 : 0
+                    duration: searchPanel.appTheme.motionEnabled
+                              ? searchPanel.appTheme.durationExit : 0
                     easing.type: Easing.InCubic
                 }
                 NumberAnimation {
                     target: sortMenu; property: "motionOffset"; from: 0; to: -2
-                    duration: searchPanel.appTheme.motionEnabled ? 100 : 0
+                    duration: searchPanel.appTheme.motionEnabled
+                              ? searchPanel.appTheme.durationExit : 0
                     easing.type: Easing.InCubic
                 }
             }
@@ -698,7 +783,8 @@ Item {
         scale: down ? 0.97 : 1.0
         Behavior on scale {
             NumberAnimation {
-                duration: searchPanel.appTheme.motionEnabled ? 80 : 0
+                duration: searchPanel.appTheme.motionEnabled
+                          ? searchPanel.appTheme.durationPress : 0
                 easing.type: Easing.OutCubic
             }
         }
@@ -714,7 +800,9 @@ Item {
             border.width: headerControl.visualFocus || headerControl.active
                           || headerControl.prominent ? 1 : 0
             border.color: searchPanel.appTheme.accentMain
-            Behavior on color { ColorAnimation { duration: 110 } }
+            Behavior on color {
+                ColorAnimation { duration: searchPanel.appTheme.durationState }
+            }
         }
 
         ThemedToolTip {
@@ -748,7 +836,8 @@ Item {
         scale: down ? 0.97 : 1.0
         Behavior on scale {
             NumberAnimation {
-                duration: searchPanel.appTheme.motionEnabled ? 80 : 0
+                duration: searchPanel.appTheme.motionEnabled
+                          ? searchPanel.appTheme.durationPress : 0
                 easing.type: Easing.OutCubic
             }
         }
@@ -761,7 +850,9 @@ Item {
             border.width: 1
             border.color: toolbarControl.visualFocus || toolbarControl.active
                           ? searchPanel.appTheme.accentMain : searchPanel.appTheme.borderDefault
-            Behavior on color { ColorAnimation { duration: 110 } }
+            Behavior on color {
+                ColorAnimation { duration: searchPanel.appTheme.durationState }
+            }
         }
     }
 
@@ -807,7 +898,7 @@ Item {
              : checked ? searchPanel.appTheme.accentLow : "transparent"
         Behavior on color {
             ColorAnimation {
-                duration: searchPanel.appTheme.motionEnabled ? 80 : 0
+                duration: searchPanel.appTheme.durationState
             }
         }
         Rectangle {
@@ -848,7 +939,10 @@ Item {
     }
 
     Timer {
-        id: hideTimer; interval: 230; repeat: false
+        id: hideTimer
+        interval: searchPanel.appTheme.motionEnabled
+                  ? searchPanel.appTheme.durationPanel + 10 : 0
+        repeat: false
         onTriggered: if (!searchPanel.open) searchPanel.panelVisible = false
     }
     Timer {
@@ -857,7 +951,13 @@ Item {
         repeat: false
         onTriggered: searchPanel.performSearch(searchInput.text.trim())
     }
-    Behavior on slideOffset { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
+    Behavior on slideOffset {
+        NumberAnimation {
+            duration: searchPanel.appTheme.motionEnabled
+                      ? searchPanel.appTheme.durationPanel : 0
+            easing.type: Easing.OutCubic
+        }
+    }
 
     function toggleBelow(popup, anchorItem) {
         if (popup.visible) {
@@ -985,7 +1085,24 @@ Item {
         currentIndex = -1
         lastQuery = ""
         activeQuery = ""
+        searchExecuted = false
         statusChanged("Ready")
+    }
+
+    function clearAllFilters() {
+        searchDebounce.stop()
+        convertingTags = true
+        searchInput.text = ""
+        convertingTags = false
+        selectedTagModel.clear()
+        minCharsInput.text = ""
+        maxCharsInput.text = ""
+        createdAfterInput.text = ""
+        createdBeforeInput.text = ""
+        sortKey = "relevance"
+        sortLabel = "Relevance"
+        clearResults()
+        focusSearchInput()
     }
 
     function invalidateSearch() {
@@ -1049,6 +1166,7 @@ Item {
     function performSearch(textQuery) {
         lastQuery = searchSignature()
         activeQuery = String(textQuery || "").trim()
+        searchExecuted = true
         resultModel.clear()
         var results = searchPanel.nodeModel.search_nodes_by_filters(
             textQuery,

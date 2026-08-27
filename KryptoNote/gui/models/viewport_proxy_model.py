@@ -105,6 +105,7 @@ class NodeViewportProxyModel(_ViewportProxyModel):
     FILTER_ROLES = GEOMETRY_ROLES.union((int(NodeRoles.IsDeletingRole),))
 
     def __init__(self, source_model, parent=None):
+        self._transform_node_ids = set()
         super().__init__(source_model, parent)
         source_model.positions_batch_changed.connect(
             self._on_geometry_batch_changed
@@ -123,10 +124,36 @@ class NodeViewportProxyModel(_ViewportProxyModel):
         if rebuild_filter:
             self._filter_update_timer.start()
 
+    @Slot(list)
+    def retainTransformNodes(self, node_ids):
+        retained = set()
+        for node_id in node_ids or ():
+            try:
+                retained.add(int(node_id))
+            except (TypeError, ValueError):
+                continue
+        if retained == self._transform_node_ids:
+            return
+        self._transform_node_ids = retained
+        self._filter_update_timer.stop()
+        self._invalidate_filter()
+
+    @Slot()
+    def releaseTransformNodes(self):
+        if not self._transform_node_ids:
+            return
+        self._transform_node_ids.clear()
+        # Defer the rebuild until the QML controller has fully ended its
+        # pointer session.  A synchronous delegate removal here can destroy
+        # the active ResizeHandle while its release callback is unwinding.
+        self._filter_update_timer.start()
+
     def _accepts(self, source_row, source_parent):
         node = self.sourceModel().get_node_data_at_row(source_row)
         if node is None:
             return False
+        if node.get("id") in self._transform_node_ids:
+            return True
         if node.get("is_deleting"):
             return True
         x = float(node.get("x") or 0.0)

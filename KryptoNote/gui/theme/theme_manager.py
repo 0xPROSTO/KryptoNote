@@ -31,6 +31,7 @@ DEFAULT_TONE = "dark_2"
 DEFAULT_ACCENT = "#e6158b"
 DEFAULT_CONNECTION_THICKNESS = "normal"
 DEFAULT_GRID_INTENSITY = "normal"
+DEFAULT_MOTION_MODE = "system"
 
 TONE_IDS = (
     "dark_1", "dark_4", "dark_2", "dark_3",
@@ -38,6 +39,7 @@ TONE_IDS = (
 )
 CONNECTION_THICKNESSES = ("thin", "normal", "thick")
 GRID_INTENSITIES = ("off", "subtle", "normal", "strong", "maximum")
+MOTION_MODES = ("system", "full", "reduced", "off")
 
 TONE_LABELS = {
     "dark_1": "Void",
@@ -404,14 +406,21 @@ class ThemeManager(QObject):
     canvasAppearanceChanged = Signal()
     appearanceChanged = Signal(object)
     fontChanged = Signal()
+    motionChanged = Signal()
 
     def __init__(self, store=None, parent=None):
         super().__init__(parent)
-        self._store = store or QSettings("ZeroXware", "KryptoNote")
+        self._store = (
+            store
+            if store is not None
+            else QSettings("ZeroXware", "KryptoNote")
+        )
         self._settings = AppearanceSettings()
         self._committed = self._settings
         self._font_family = SYSTEM_DEFAULT_FONT
         self._committed_font_family = SYSTEM_DEFAULT_FONT
+        self._motion_mode = DEFAULT_MOTION_MODE
+        self._committed_motion_mode = DEFAULT_MOTION_MODE
 
     @property
     def settings(self):
@@ -434,6 +443,15 @@ class ThemeManager(QObject):
     def resolved_text_font_family(self):
         return resolve_font_family(self._font_family)
 
+    @property
+    def motion_mode(self):
+        """Persisted global motion preference."""
+        return self._motion_mode
+
+    @property
+    def committed_motion_mode(self):
+        return self._committed_motion_mode
+
     @staticmethod
     def font_choices():
         return Typography.available_font_choices()
@@ -442,6 +460,11 @@ class ThemeManager(QObject):
     def validate_font_family(value):
         value = str(value or SYSTEM_DEFAULT_FONT).strip()
         return value or SYSTEM_DEFAULT_FONT
+
+    @staticmethod
+    def validate_motion_mode(value):
+        value = str(value or DEFAULT_MOTION_MODE).strip().lower()
+        return value if value in MOTION_MODES else DEFAULT_MOTION_MODE
 
     @staticmethod
     def defaults():
@@ -541,12 +564,18 @@ class ThemeManager(QObject):
         self._store.beginGroup("font")
         stored_font = self._store.value("family", SYSTEM_DEFAULT_FONT)
         self._store.endGroup()
+        self._store.beginGroup("motion")
+        stored_motion = self._store.value("mode", DEFAULT_MOTION_MODE)
+        self._store.endGroup()
         loaded = self.validate(values)
         self._committed = loaded
         self._font_family = self.validate_font_family(stored_font)
         self._committed_font_family = self._font_family
+        self._motion_mode = self.validate_motion_mode(stored_motion)
+        self._committed_motion_mode = self._motion_mode
         self._apply(loaded)
         self.fontChanged.emit()
+        self.motionChanged.emit()
         return loaded
 
     def preview(self, settings):
@@ -591,6 +620,30 @@ class ThemeManager(QObject):
 
     def reset_font_family(self):
         self.preview_font_family(SYSTEM_DEFAULT_FONT)
+
+    def preview_motion_mode(self, value):
+        value = self.validate_motion_mode(value)
+        if value == self._motion_mode:
+            return value
+        self._motion_mode = value
+        self.motionChanged.emit()
+        return value
+
+    def commit_motion_mode(self, value=None):
+        if value is not None:
+            self.preview_motion_mode(value)
+        self._store.beginGroup("motion")
+        self._store.setValue("mode", self._motion_mode)
+        self._store.endGroup()
+        self._store.sync()
+        self._committed_motion_mode = self._motion_mode
+        return self._motion_mode
+
+    def restore_committed_motion_mode(self):
+        self.preview_motion_mode(self._committed_motion_mode)
+
+    def reset_motion_mode(self):
+        self.preview_motion_mode(DEFAULT_MOTION_MODE)
 
     def restore_committed(self):
         self.preview(self._committed)

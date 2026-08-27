@@ -8,13 +8,22 @@ Item {
     required property var appTheme
     property var tags: []
     property real trailingInset: 0
+    property real canvasScale: 1.0
     readonly property color chipBaseColor: summary.appTheme.bgNode
     readonly property real layoutWidth: Math.max(0, width - trailingInset)
     readonly property int chipGap: 4
+    readonly property int chipHeight: 20
+    readonly property real strokeWidth: Math.max(
+        1,
+        1 / Math.max(0.25, canvasScale)
+    )
     readonly property int displayCount: calculateDisplayCount()
     readonly property int remainingCount: Math.max(0, (tags ? tags.length : 0) - displayCount)
 
-    height: 20
+    // One transparent pixel above and below keeps the antialiased rounded
+    // border inside this clipped summary.  With a chip exactly as tall as
+    // its clipping parent, the horizontal arcs were shaved at some scales.
+    height: chipHeight + 2
     visible: tags && tags.length > 0
     clip: true
 
@@ -74,8 +83,11 @@ Item {
     }
 
     Row {
-        width: summary.layoutWidth
-        height: parent.height
+        id: chipRow
+        x: Math.max(0, summary.layoutWidth - implicitWidth)
+        y: 1
+        width: Math.min(summary.layoutWidth, implicitWidth)
+        height: summary.chipHeight
         spacing: summary.chipGap
 
         Repeater {
@@ -87,10 +99,10 @@ Item {
                 property color chipColor: summary.tags[index].color
 
                 width: summary.chipWidth(index)
-                height: summary.height
+                height: summary.chipHeight
                 radius: 7
                 color: summary.blendedColor(summary.chipBaseColor, chipColor, 0.2)
-                border.width: 1
+                border.width: summary.strokeWidth
                 border.color: chipColor
 
                 Text {
@@ -111,10 +123,10 @@ Item {
         Rectangle {
             visible: summary.remainingCount > 0
             width: Math.min(summary.layoutWidth, summary.moreChipWidth(summary.remainingCount))
-            height: summary.height
+            height: summary.chipHeight
             radius: 7
             color: summary.appTheme.bgNode
-            border.width: 1
+            border.width: summary.strokeWidth
             border.color: summary.appTheme.borderHover
 
             Text {

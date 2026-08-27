@@ -10,7 +10,8 @@ Item {
     property real visualProgress: 0.0
     property real anchorProgress: 0.0
     property double anchorTime: 0
-    readonly property var displayWaveform: normalizeWaveform(waveform)
+    readonly property var displayWaveform:
+            buildDetailedContour(normalizeWaveform(waveform))
     signal seekRequested(real fraction)
 
     implicitHeight: 54
@@ -51,19 +52,44 @@ Item {
         }
         if (positive.length === 0) return clean
         positive.sort(function(left, right) { return left - right })
-        var low = percentile(positive, 0.10)
-        var high = percentile(positive, 0.95)
+        var low = percentile(positive, 0.05)
+        var high = percentile(positive, 0.98)
         if (high - low <= Math.max(0.002, high * 0.01)) {
-            return clean.map(function(value) { return value > 0 ? 0.62 : 0.04 })
+            return clean.map(function(value) { return value > 0 ? 0.5 : 0 })
         }
         var spread = Math.max(high - low, high * 0.12, 0.01)
-        var floor = Math.max(0, low - spread * 0.25)
+        var floor = Math.max(0, low - spread * 0.15)
         var denominator = Math.max(0.00001, high - floor)
         return clean.map(function(value) {
-            if (value <= 0.00001) return 0.04
+            if (value <= 0.00001) return 0
             var normalized = Math.max(0, Math.min(1, (value - floor) / denominator))
-            return 0.08 + 0.92 * Math.pow(normalized, 0.82)
+            return Math.pow(normalized, 1.08)
         })
+    }
+
+    function buildDetailedContour(values) {
+        var source = values || []
+        if (source.length < 2) return source
+
+        var toothPattern = [0.12, -0.08, 0.06, -0.13, 0.10, -0.05]
+        var subdivisions = toothPattern.length
+        var detailed = [source[0]]
+        for (var index = 1; index < source.length; ++index) {
+            var previous = source[index - 1]
+            var current = source[index]
+            var detailWeight = 0.35 + 0.65 * Math.max(previous, current)
+            for (var step = 1; step < subdivisions; ++step) {
+                var amount = step / subdivisions
+                var base = previous * (1 - amount) + current * amount
+                var patternIndex = (index * 3 + step) % toothPattern.length
+                detailed.push(Math.max(0, Math.min(
+                    1,
+                    base * (1 + toothPattern[patternIndex] * detailWeight)
+                )))
+            }
+            detailed.push(current)
+        }
+        return detailed
     }
 
     function synchronizeProgress(force) {
@@ -81,32 +107,36 @@ Item {
         anchorTime = Date.now()
     }
 
-    function drawBars(context, canvasWidth, canvasHeight, values,
-                      fillColor, alpha) {
+    function drawEnvelope(context, canvasWidth, canvasHeight, values,
+                          fillColor, alpha) {
         var count = values.length
         if (count <= 0) return
-        var slotWidth = canvasWidth / count
-        var gap = Math.max(1, slotWidth * 0.30)
-        var barWidth = Math.max(1, slotWidth - gap)
         var center = canvasHeight / 2
+        var halfHeight = Math.max(
+            1,
+            Math.min((canvasHeight - 4) / 2, canvasHeight * 0.38)
+        )
         context.fillStyle = fillColor
         context.globalAlpha = alpha
+        var amplitudes = []
         for (var index = 0; index < count; ++index) {
-            var barHeight = Math.max(3, values[index] * (canvasHeight - 6))
-            var x = index * slotWidth + gap / 2
-            context.fillRect(
-                x,
-                center - barHeight / 2,
-                barWidth,
-                barHeight
-            )
+            amplitudes.push(Math.max(0.35, values[index] * halfHeight))
         }
+        var xStep = count > 1 ? canvasWidth / (count - 1) : canvasWidth
+        context.beginPath()
+        context.moveTo(0, center - amplitudes[0])
+        for (var topIndex = 1; topIndex < count; ++topIndex)
+            context.lineTo(topIndex * xStep, center - amplitudes[topIndex])
+        for (var bottomIndex = count - 1; bottomIndex >= 0; --bottomIndex)
+            context.lineTo(bottomIndex * xStep, center + amplitudes[bottomIndex])
+        context.closePath()
+        context.fill()
         context.globalAlpha = 1
     }
 
     function requestWaveformPaint() {
-        neutralBars.requestPaint()
-        playedBars.requestPaint()
+        neutralWaveform.requestPaint()
+        playedWaveform.requestPaint()
     }
 
     FrameAnimation {
@@ -128,52 +158,25 @@ Item {
         id: barsLayer
         anchors.fill: parent
         opacity: waveformRoot.enabled ? 1.0 : 0.45
-        readonly property int barCount:
-            (waveformRoot.displayWaveform || []).length
-        readonly property real slotWidth:
-            barCount > 0 ? width / barCount : 0
-        readonly property real slotGap:
-            barCount > 0 ? Math.max(1, slotWidth * 0.30) : 0
-        readonly property real barWidth:
-            barCount > 0 ? Math.max(1, slotWidth - slotGap) : 0
         readonly property real playedWidth: Math.max(
             0, Math.min(width, width * waveformRoot.visualProgress)
         )
-        readonly property real solidPlayedWidth: Math.floor(playedWidth)
-        readonly property real edgeOpacity:
-            playedWidth - solidPlayedWidth
-        readonly property int edgeBarIndex: barCount > 0
-            ? Math.min(
-                barCount - 1,
-                Math.max(0, Math.floor(solidPlayedWidth / slotWidth))
-            ) : 0
-        readonly property real edgeSlotOffset: barCount > 0
-            ? solidPlayedWidth - edgeBarIndex * slotWidth : 0
-        readonly property bool edgeCoversBar:
-            barCount > 0
-            && solidPlayedWidth < width
-            && edgeSlotOffset >= slotGap / 2
-            && edgeSlotOffset < slotGap / 2 + barWidth
-        readonly property real edgeBarValue:
-            barCount > 0
-            ? Number(waveformRoot.displayWaveform[edgeBarIndex]) || 0
-            : 0
 
         Canvas {
-            id: neutralBars
+            id: neutralWaveform
             anchors.fill: parent
             antialiasing: true
 
             onPaint: {
                 var context = getContext("2d")
                 context.clearRect(0, 0, width, height)
-                waveformRoot.drawBars(
+                waveformRoot.drawEnvelope(
                     context,
                     width,
                     height,
                     waveformRoot.displayWaveform || [],
                     waveformRoot.appTheme.textDim,
-                    0.58
+                    0.68
                 )
             }
         }
@@ -183,11 +186,11 @@ Item {
             anchors.left: parent.left
             anchors.top: parent.top
             anchors.bottom: parent.bottom
-            width: barsLayer.solidPlayedWidth
+            width: barsLayer.playedWidth
             clip: true
 
             Canvas {
-                id: playedBars
+                id: playedWaveform
                 width: barsLayer.width
                 height: barsLayer.height
                 antialiasing: true
@@ -195,29 +198,16 @@ Item {
                 onPaint: {
                     var context = getContext("2d")
                     context.clearRect(0, 0, width, height)
-                    waveformRoot.drawBars(
+                    waveformRoot.drawEnvelope(
                         context,
                         width,
                         height,
                         waveformRoot.displayWaveform || [],
                         waveformRoot.appTheme.accentMain,
-                        1.0
+                        0.62
                     )
                 }
             }
-        }
-
-        Rectangle {
-            id: fractionalPlayedEdge
-            x: barsLayer.solidPlayedWidth
-            y: (parent.height - height) / 2
-            width: Math.min(1, Math.max(0, parent.width - x))
-            height: Math.max(
-                3, barsLayer.edgeBarValue * (parent.height - 6)
-            )
-            color: waveformRoot.appTheme.accentMain
-            opacity: barsLayer.edgeOpacity
-            visible: barsLayer.edgeCoversBar && opacity > 0.001
         }
     }
 

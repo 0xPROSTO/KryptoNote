@@ -265,7 +265,7 @@ Popup {
                 property: "opacity"
                 from: 0.0
                 to: 1.0
-                duration: propertiesPopup.appTheme.motionEnabled ? 140 : 0
+                duration: propertiesPopup.appTheme.durationState
                 easing.type: Easing.OutCubic
             }
             ParallelAnimation {
@@ -274,44 +274,50 @@ Popup {
                     property: "opacity"
                     from: 0.0
                     to: 1.0
-                    duration: propertiesPopup.appTheme.motionEnabled ? 180 : 0
+                    duration: propertiesPopup.appTheme.durationPanel
                     easing.type: Easing.OutCubic
                 }
                 NumberAnimation {
                     target: propertiesCard
                     property: "scale"
-                    from: 0.985
+                    from: propertiesPopup.appTheme.motionEnabled ? 0.985 : 1
                     to: 1.0
-                    duration: propertiesPopup.appTheme.motionEnabled ? 180 : 0
+                    duration: propertiesPopup.appTheme.motionEnabled
+                              ? propertiesPopup.appTheme.durationPanel : 0
                     easing.type: Easing.OutCubic
                 }
                 NumberAnimation {
                     target: propertiesCard
                     property: "motionX"
-                    from: propertiesCard.enterOffsetX
+                    from: propertiesPopup.appTheme.motionEnabled
+                          ? propertiesCard.enterOffsetX : 0
                     to: 0.0
-                    duration: propertiesPopup.appTheme.motionEnabled ? 180 : 0
+                    duration: propertiesPopup.appTheme.motionEnabled
+                              ? propertiesPopup.appTheme.durationPanel : 0
                     easing.type: Easing.OutCubic
                 }
                 NumberAnimation {
                     target: propertiesCard
                     property: "motionY"
-                    from: propertiesCard.enterOffsetY
+                    from: propertiesPopup.appTheme.motionEnabled
+                          ? propertiesCard.enterOffsetY : 0
                     to: 0.0
-                    duration: propertiesPopup.appTheme.motionEnabled ? 180 : 0
+                    duration: propertiesPopup.appTheme.motionEnabled
+                              ? propertiesPopup.appTheme.durationPanel : 0
                     easing.type: Easing.OutCubic
                 }
             }
             SequentialAnimation {
                 PauseAnimation {
-                    duration: propertiesPopup.appTheme.motionEnabled ? 40 : 0
+                    duration: propertiesPopup.appTheme.motionEnabled
+                              ? propertiesPopup.appTheme.durationPress : 0
                 }
                 NumberAnimation {
                     target: connector
                     property: "opacity"
                     from: 0.0
                     to: 1.0
-                    duration: propertiesPopup.appTheme.motionEnabled ? 140 : 0
+                    duration: propertiesPopup.appTheme.durationState
                     easing.type: Easing.OutCubic
                 }
             }
@@ -325,7 +331,7 @@ Popup {
                 property: "opacity"
                 from: 1.0
                 to: 0.0
-                duration: propertiesPopup.appTheme.motionEnabled ? 110 : 0
+                duration: propertiesPopup.appTheme.durationExit
                 easing.type: Easing.InCubic
             }
             NumberAnimation {
@@ -333,7 +339,7 @@ Popup {
                 property: "opacity"
                 from: 1.0
                 to: 0.0
-                duration: propertiesPopup.appTheme.motionEnabled ? 110 : 0
+                duration: propertiesPopup.appTheme.durationExit
                 easing.type: Easing.InCubic
             }
             NumberAnimation {
@@ -341,31 +347,36 @@ Popup {
                 property: "opacity"
                 from: 1.0
                 to: 0.0
-                duration: propertiesPopup.appTheme.motionEnabled ? 110 : 0
+                duration: propertiesPopup.appTheme.durationExit
                 easing.type: Easing.InCubic
             }
             NumberAnimation {
                 target: propertiesCard
                 property: "scale"
                 from: 1.0
-                to: 0.99
-                duration: propertiesPopup.appTheme.motionEnabled ? 110 : 0
+                to: propertiesPopup.appTheme.motionEnabled ? 0.99 : 1
+                duration: propertiesPopup.appTheme.motionEnabled
+                          ? propertiesPopup.appTheme.durationExit : 0
                 easing.type: Easing.InCubic
             }
             NumberAnimation {
                 target: propertiesCard
                 property: "motionX"
                 from: 0.0
-                to: propertiesCard.enterOffsetX * 0.5
-                duration: propertiesPopup.appTheme.motionEnabled ? 110 : 0
+                to: propertiesPopup.appTheme.motionEnabled
+                    ? propertiesCard.enterOffsetX * 0.5 : 0
+                duration: propertiesPopup.appTheme.motionEnabled
+                          ? propertiesPopup.appTheme.durationExit : 0
                 easing.type: Easing.InCubic
             }
             NumberAnimation {
                 target: propertiesCard
                 property: "motionY"
                 from: 0.0
-                to: propertiesCard.enterOffsetY * 0.5
-                duration: propertiesPopup.appTheme.motionEnabled ? 110 : 0
+                to: propertiesPopup.appTheme.motionEnabled
+                    ? propertiesCard.enterOffsetY * 0.5 : 0
+                duration: propertiesPopup.appTheme.motionEnabled
+                          ? propertiesPopup.appTheme.durationExit : 0
                 easing.type: Easing.InCubic
             }
         }
@@ -867,7 +878,9 @@ Popup {
                                          ? 1.0 : 0.82
 
                                 Behavior on opacity {
-                                    NumberAnimation { duration: 100 }
+                                    NumberAnimation {
+                                        duration: propertiesPopup.appTheme.durationState
+                                    }
                                 }
                             }
 
@@ -904,7 +917,8 @@ Popup {
 
                                     Behavior on implicitHeight {
                                         NumberAnimation {
-                                            duration: 160
+                                            duration: propertiesPopup.appTheme.motionEnabled
+                                                      ? propertiesPopup.appTheme.durationState : 0
                                             easing.type: Easing.OutCubic
                                         }
                                     }
@@ -1005,7 +1019,9 @@ Popup {
                                             border.width: expandButton.activeFocus ? 1 : 0
                                             border.color: propertiesPopup.appTheme.accentMain
                                             Behavior on color {
-                                                ColorAnimation { duration: 100 }
+                                                ColorAnimation {
+                                                    duration: propertiesPopup.appTheme.durationState
+                                                }
                                             }
                                         }
 
@@ -1037,7 +1053,8 @@ Popup {
 
                                                 Behavior on rotation {
                                                     NumberAnimation {
-                                                        duration: 160
+                                                        duration: propertiesPopup.appTheme.motionEnabled
+                                                                  ? propertiesPopup.appTheme.durationState : 0
                                                         easing.type: Easing.OutCubic
                                                     }
                                                 }
@@ -1100,7 +1117,8 @@ Popup {
                 scale: pressed ? 0.97 : 1.0
                 Behavior on scale {
                     NumberAnimation {
-                        duration: propertiesPopup.appTheme.motionEnabled ? 80 : 0
+                        duration: propertiesPopup.appTheme.motionEnabled
+                                  ? propertiesPopup.appTheme.durationPress : 0
                         easing.type: Easing.OutCubic
                     }
                 }

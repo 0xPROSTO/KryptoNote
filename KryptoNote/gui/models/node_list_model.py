@@ -5,6 +5,7 @@ from PySide6.QtCore import (
     QAbstractListModel,
     QModelIndex,
     Qt,
+    Property,
     Slot,
     Signal,
     QByteArray,
@@ -52,6 +53,7 @@ class NodeListModel(QAbstractListModel):
     sizes_batch_changed = Signal(object, bool)         # node_ids, rebuild hit index
     selection_batch_changed = Signal(object)           # changed node_ids
     node_size_changed = Signal(int, float, float)      # node_id, w, h
+    nodeCountChanged = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -66,6 +68,10 @@ class NodeListModel(QAbstractListModel):
 
     def rowCount(self, parent=QModelIndex()):
         return len(self._nodes)
+
+    nodeCount = Property(
+        int, lambda self: len(self._nodes), notify=nodeCountChanged
+    )
 
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if not index.isValid() or index.row() >= len(self._nodes):
@@ -195,12 +201,15 @@ class NodeListModel(QAbstractListModel):
             self.append_item_batch(items, tags_by_item)
 
     def begin_incremental_load(self):
+        had_nodes = bool(self._nodes)
         self.beginResetModel()
         self._nodes.clear()
         self._id_to_index.clear()
         self._selected_ids.clear()
         self._hovered_ids.clear()
         self.endResetModel()
+        if had_nodes:
+            self.nodeCountChanged.emit()
 
     def append_item_batch(self, items, tags_by_item=None):
         items = list(items)
@@ -215,12 +224,13 @@ class NodeListModel(QAbstractListModel):
             self._id_to_index[item.id] = len(self._nodes)
             self._nodes.append(node_data)
         self.endInsertRows()
+        self.nodeCountChanged.emit()
 
     def _node_data_from_item(self, item, tags_by_item):
         thumb_image = None
         audio_waveform = []
-        # Audio thumbnails contain the versioned waveform payload, not an
-        # image.  Never hand those bytes to QImage: doing so is both wasteful
+        # Audio thumbnails contain the versioned waveform payload, not an image.
+        # Never hand those bytes to QImage: doing so is both wasteful
         # and can make a valid audio node look like a broken image.
         if item.type == "audio":
             decoded = decode_audio_waveform(item.thumbnail)
@@ -337,6 +347,7 @@ class NodeListModel(QAbstractListModel):
         self._id_to_index[node_id] = row
         self._nodes.append(node_data)
         self.endInsertRows()
+        self.nodeCountChanged.emit()
 
     def remove_node(self, node_id):
         idx = self._id_to_index.get(node_id)
@@ -351,6 +362,7 @@ class NodeListModel(QAbstractListModel):
         for i in range(idx, len(self._nodes)):
             self._id_to_index[self._nodes[i]["id"]] = i
         self.endRemoveRows()
+        self.nodeCountChanged.emit()
 
     # Position & Size Updates
 
@@ -369,8 +381,18 @@ class NodeListModel(QAbstractListModel):
             node["y"] = y
 
             model_idx = self.index(idx, 0)
-            self.dataChanged.emit(model_idx, model_idx, [NodeRoles.XRole, NodeRoles.YRole])
+            self._position_batch_active = True
+            try:
+                self.dataChanged.emit(
+                    model_idx,
+                    model_idx,
+                    [NodeRoles.XRole, NodeRoles.YRole],
+                )
+            finally:
+                self._position_batch_active = False
 
+        if changed or persist:
+            self.positions_batch_changed.emit([node_id], bool(persist))
         if persist:
             self.node_position_changed.emit(node_id, x, y)
 
@@ -979,6 +1001,27 @@ class NodeListModel(QAbstractListModel):
         if not data:
             return []
         return [data["x"], data["y"], data["width"], data["height"]]
+
+    @Slot(list, result=list)
+    def get_nodes_bounds(self, node_ids):
+        """Return the union [x, y, width, height] for existing node IDs."""
+        wanted = set()
+        for node_id in node_ids or ():
+            try:
+                wanted.add(int(node_id))
+            except (TypeError, ValueError):
+                continue
+        nodes = [
+            node for node in self._nodes
+            if node["id"] in wanted and not node.get("is_deleting")
+        ]
+        if not nodes:
+            return []
+        left = min(node["x"] for node in nodes)
+        top = min(node["y"] for node in nodes)
+        right = max(node["x"] + node["width"] for node in nodes)
+        bottom = max(node["y"] + node["height"] for node in nodes)
+        return [left, top, right - left, bottom - top]
 
     def get_node_rect(self, node_id):
         """Return (x, y, w, h) tuple for a node. Used for connection edge calculation."""

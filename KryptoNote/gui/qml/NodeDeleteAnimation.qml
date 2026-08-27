@@ -3,6 +3,7 @@ import QtQuick
 Item {
     id: deleteAnimation
     required property var canvasController
+    required property var appTheme
     property Item targetItem
     property int nodeId: 0
     property bool deleting: false
@@ -31,7 +32,8 @@ Item {
             if (!deleteAnimation.deleting) return "transparent"
             var p = deleteAnimation.progress
             var alpha = p < 0.33 ? (p / 0.33) * 0.7 : 0.7 * (1.0 - (p - 0.33) / 0.67)
-            return Qt.rgba(90/255, 90/255, 90/255, alpha)
+            var danger = deleteAnimation.appTheme.dangerHover
+            return Qt.rgba(danger.r, danger.g, danger.b, alpha)
         }
     }
 
@@ -41,7 +43,7 @@ Item {
         property: "opacity"
         from: 1.0
         to: 0.0
-        duration: 240
+        duration: deleteAnimation.appTheme.durationPanel
         onFinished: deleteAnimation.canvasController.perform_delete(deleteAnimation.nodeId)
     }
 
@@ -51,6 +53,6 @@ Item {
         property: "progress"
         from: 0.0
         to: 1.0
-        duration: 240
+        duration: deleteAnimation.appTheme.durationPanel
     }
 }

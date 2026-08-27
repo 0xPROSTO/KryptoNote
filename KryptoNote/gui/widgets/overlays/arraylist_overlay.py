@@ -1,4 +1,4 @@
-from PySide6.QtCore import QRect, Qt, Signal
+from PySide6.QtCore import QRect, QRectF, Qt, Signal
 from PySide6.QtGui import QPainter, QPainterPath, QColor, QFont, QPen, QRegion
 from PySide6.QtWidgets import QWidget
 
@@ -6,6 +6,8 @@ from ...theme.palette import Palette
 
 
 class ArrayListOverlay(QWidget):
+    snap_clicked = Signal()
+    zoom_clicked = Signal()
     stats_clicked = Signal()
 
     def __init__(self, parent=None):
@@ -20,6 +22,8 @@ class ArrayListOverlay(QWidget):
         self.zoom_w = 90
         self.stats_w = 210
         self.p_left = 8.0
+        self._hovered_row = None
+        self._pressed_row = None
         self.setFixedSize(int(self.stats_w + self.p_left), self.row_h * 3)
         self._sync_mask()
 
@@ -40,35 +44,80 @@ class ArrayListOverlay(QWidget):
             self.update()
 
     def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton and self._is_stats_hit(event.position()):
-            self.stats_clicked.emit()
+        row = self._hit_row(event.position())
+        if event.button() == Qt.MouseButton.LeftButton and row is not None:
+            self._pressed_row = row
+            self.update()
             event.accept()
             return
         event.ignore()
 
+    def mouseReleaseEvent(self, event):
+        if event.button() != Qt.MouseButton.LeftButton:
+            event.ignore()
+            return
+        pressed_row = self._pressed_row
+        self._pressed_row = None
+        row = self._hit_row(event.position())
+        self.update()
+        if pressed_row is None:
+            event.ignore()
+            return
+        if row == pressed_row:
+            {
+                "snap": self.snap_clicked,
+                "zoom": self.zoom_clicked,
+                "stats": self.stats_clicked,
+            }[row].emit()
+        event.accept()
+
     def mouseMoveEvent(self, event):
-        self._update_cursor(event.position())
+        self._update_hover(event.position())
         super().mouseMoveEvent(event)
 
     def enterEvent(self, event):
-        self._update_cursor(event.position())
+        self._update_hover(event.position())
         super().enterEvent(event)
 
     def leaveEvent(self, event):
+        self._hovered_row = None
+        self._pressed_row = None
+        self.setToolTip("")
         self.unsetCursor()
+        self.update()
         super().leaveEvent(event)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._sync_mask()
 
-    def _is_stats_hit(self, pos):
-        return self.row_h * 2 <= pos.y() < self.row_h * 3
+    def _hit_row(self, pos):
+        if not self._shape_path().contains(pos):
+            return None
+        if 0 <= pos.y() < self.row_h:
+            return "snap"
+        if self.row_h <= pos.y() < self.row_h * 2:
+            return "zoom"
+        if self.row_h * 2 <= pos.y() < self.row_h * 3:
+            return "stats"
+        return None
 
-    def _update_cursor(self, pos):
-        if self._is_stats_hit(pos):
+    def _update_hover(self, pos):
+        row = self._hit_row(pos)
+        if row != self._hovered_row:
+            self._hovered_row = row
+            self.update()
+        if row is not None:
             self.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.setToolTip(
+                {
+                    "snap": "Toggle snap to grid (G)",
+                    "zoom": "Reset zoom to 100% (Ctrl+0)",
+                    "stats": "Open Knowledge Dashboard",
+                }[row]
+            )
         else:
+            self.setToolTip("")
             self.unsetCursor()
 
     def _shape_path(self, offset=0.5):
@@ -174,6 +223,19 @@ class ArrayListOverlay(QWidget):
         path = self._shape_path()
         painter.fillPath(path, QColor(Palette.BG_PANEL))
 
+        interactive_row = self._pressed_row or self._hovered_row
+        if interactive_row is not None:
+            row_index = {"snap": 0, "zoom": 1, "stats": 2}[interactive_row]
+            tint = QColor(Palette.ACCENT_LOW)
+            tint.setAlpha(130 if self._pressed_row is not None else 78)
+            painter.save()
+            painter.setClipPath(path)
+            painter.fillRect(
+                QRectF(0, row_index * self.row_h, self.width(), self.row_h),
+                tint,
+            )
+            painter.restore()
+
         pen = QPen(QColor(Palette.BORDER_DEFAULT))
         pen.setWidthF(1.0)
         painter.setPen(pen)
@@ -184,9 +246,15 @@ class ArrayListOverlay(QWidget):
         zoom_x = total_w - float(self.zoom_w)
         stats_x = self.p_left
 
-        painter.setPen(QColor(Palette.TEXT_MUTED))
         font = QFont("Segoe UI", 8, QFont.Weight.Bold)
         painter.setFont(font)
+        painter.setPen(
+            QColor(
+                Palette.TEXT_ACCENT
+                if self._hovered_row == "snap" or self._pressed_row == "snap"
+                else Palette.TEXT_MUTED
+            )
+        )
         painter.drawText(
             int(snap_x),
             0,
@@ -194,6 +262,13 @@ class ArrayListOverlay(QWidget):
             self.row_h,
             Qt.AlignmentFlag.AlignCenter,
             f"SNAP: {self.snap_state}",
+        )
+        painter.setPen(
+            QColor(
+                Palette.TEXT_ACCENT
+                if self._hovered_row == "zoom" or self._pressed_row == "zoom"
+                else Palette.TEXT_MUTED
+            )
         )
         painter.drawText(
             int(zoom_x),
@@ -203,7 +278,13 @@ class ArrayListOverlay(QWidget):
             Qt.AlignmentFlag.AlignCenter,
             f"ZOOM: {self.zoom_pct}",
         )
-        painter.setPen(QColor(Palette.TEXT_MUTED))
+        painter.setPen(
+            QColor(
+                Palette.TEXT_ACCENT
+                if self._hovered_row == "stats" or self._pressed_row == "stats"
+                else Palette.TEXT_MUTED
+            )
+        )
         painter.drawText(
             int(stats_x),
             self.row_h * 2,

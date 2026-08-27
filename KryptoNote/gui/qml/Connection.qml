@@ -82,7 +82,7 @@ Item {
         if (!revealRequested) return
         if (_componentReady) {
             startReveal()
-        } else if (connectionItem.appTheme.motionEnabled) {
+        } else if (connectionItem.appTheme.colorMotionEnabled) {
             opacity = 0.0
         }
     }
@@ -100,10 +100,15 @@ Item {
 
         ShapePath {
             id: shapePath
-            strokeColor: connectionItem._isDeleting ? connectionItem.appTheme.textMuted :
-                         (connectionItem.showHighlight || connectionItem._revealActive
-                          ? connectionItem.appTheme.accentMain
-                          : connectionItem.appTheme.borderDefault)
+            strokeColor: connectionItem._isDeleting
+                         ? connectionItem.appTheme.dangerHover
+                         : connectionItem._revealActive
+                           ? connectionItem.appTheme.accentHigh
+                           : connectionItem.isHighlighted
+                             ? connectionItem.appTheme.accentMain
+                             : connectionItem.curveHovered
+                               ? connectionItem.appTheme.borderHover
+                               : connectionItem.appTheme.borderDefault
             strokeWidth: connectionItem.effectiveStrokeWidth
             fillColor: "transparent"
             capStyle: ShapePath.RoundCap
@@ -113,7 +118,9 @@ Item {
             dashPattern: connectionItem.appTheme.connectionPattern === "dotted"
                          ? [1, 2.4] : [5, 3]
 
-            Behavior on strokeColor { ColorAnimation { duration: 120 } }
+            Behavior on strokeColor {
+                ColorAnimation { duration: connectionItem.appTheme.durationState }
+            }
 
             PathSvg {
                 path: connectionItem.pathGeometry.path
@@ -339,7 +346,7 @@ Item {
         _revealHandled = true;
         revealAccepted(connectionItem.model.connId);
         revealAnimation.stop();
-        if (!connectionItem.appTheme.motionEnabled) {
+        if (!connectionItem.appTheme.colorMotionEnabled) {
             opacity = 1.0;
             _revealActive = false;
             return;
@@ -355,7 +362,7 @@ Item {
         property: "opacity"
         from: 0.0
         to: 1.0
-        duration: 260
+        duration: connectionItem.appTheme.durationPanel
         easing.type: Easing.OutQuad
         onFinished: connectionItem._revealActive = false
     }
@@ -366,7 +373,7 @@ Item {
             target: connectionItem
             property: "opacity"
             to: 0.0
-            duration: 240
+            duration: connectionItem.appTheme.durationPanel
         }
         ScriptAction {
             script: {

@@ -16,21 +16,34 @@ Rectangle {
     property string metaSummary: ""
     property bool isSelected: false
     property bool isHovered: false
+    property bool isTransforming: false
     property int textSize: 10
     property real nodeWidth: 220
     property real nodeHeight: 220
     property var tags: []
+    property real canvasScale: 1.0
     property bool thumbnailRequested: false
 
     anchors.fill: parent
     radius: 4
     color: mediaNode.appTheme.bgNode
 
-    border.width: isHovered ? 1.65 : (isSelected ? 1.5 : 1.1)
-    border.color: isSelected ? mediaNode.appTheme.accentMain : (isHovered ? mediaNode.appTheme.accentMain : mediaNode.appTheme.borderDefault)
+    border.width: isTransforming ? 1.9
+                  : isSelected ? 1.5 : (isHovered ? 1.4 : 1.1)
+    border.color: isTransforming ? mediaNode.appTheme.accentHigh
+                  : isSelected ? mediaNode.appTheme.accentMain
+                  : isHovered ? mediaNode.appTheme.accentMain
+                  : mediaNode.appTheme.borderDefault
 
-    Behavior on border.color { ColorAnimation { duration: 120 } }
-    Behavior on border.width { NumberAnimation { duration: 120 } }
+    Behavior on border.color {
+        ColorAnimation { duration: mediaNode.appTheme.durationState }
+    }
+    Behavior on border.width {
+        NumberAnimation {
+            duration: mediaNode.appTheme.motionEnabled
+                      ? mediaNode.appTheme.durationState : 0
+        }
+    }
 
     Text {
         id: titleText
@@ -84,7 +97,7 @@ Rectangle {
 
             Behavior on opacity {
                 NumberAnimation {
-                    duration: mediaNode.appTheme.motionEnabled ? 140 : 0
+                    duration: mediaNode.appTheme.durationState
                     easing.type: Easing.OutCubic
                 }
             }
@@ -109,7 +122,7 @@ Rectangle {
 
             Behavior on opacity {
                 NumberAnimation {
-                    duration: mediaNode.appTheme.motionEnabled ? 140 : 0
+                    duration: mediaNode.appTheme.durationState
                     easing.type: Easing.OutCubic
                 }
             }
@@ -165,6 +178,7 @@ Rectangle {
         anchors.leftMargin: 6
         anchors.rightMargin: 6
         anchors.bottomMargin: 6
+        canvasScale: mediaNode.canvasScale
         tags: mediaNode.tags
     }
 

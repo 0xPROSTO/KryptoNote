@@ -3,6 +3,11 @@ from PySide6.QtGui import QPainter, QColor, QLinearGradient
 from PySide6.QtWidgets import QWidget
 
 from KryptoNote.gui.theme.palette import Palette
+from KryptoNote.gui.theme.theme_manager import get_theme_manager
+from KryptoNote.gui.widgets.dialog_motion import (
+    widget_motion_duration,
+    widget_spatial_motion_enabled,
+)
 
 
 class ProgressBarWidget(QWidget):
@@ -11,7 +16,7 @@ class ProgressBarWidget(QWidget):
     """
 
     BAR_HEIGHT = 3
-    ANIM_DURATION = 300
+    ANIM_DURATION = 220
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -43,8 +48,25 @@ class ProgressBarWidget(QWidget):
         self.setGraphicsEffect(self._opacity_effect)
 
         self._fade_anim = QPropertyAnimation(self._opacity_effect, b"opacity", self)
-        self._fade_anim.setDuration(200)
+        self._theme_manager = get_theme_manager()
+        self._theme_manager.motionChanged.connect(self._apply_motion_settings)
+        self._apply_motion_settings()
         self._fade_out_connected = False
+
+    def _apply_motion_settings(self):
+        self._progress_anim.setDuration(
+            widget_motion_duration(self, "panel")
+            if widget_spatial_motion_enabled(self)
+            else 0
+        )
+        self._fade_anim.setDuration(widget_motion_duration(self, "state"))
+        if (
+            hasattr(self, "_indet_timer")
+            and not widget_spatial_motion_enabled(self)
+        ):
+            self._indet_timer.stop()
+            self._indeterminate_offset = 0.0
+            self.update()
 
     def _get_visible_progress(self):
         return self._visible_progress
@@ -91,12 +113,17 @@ class ProgressBarWidget(QWidget):
         self._fade_anim.setEndValue(1.0)
         self._fade_anim.start()
 
-        if indeterminate and not hasattr(self, '_indet_timer'):
+        animate_indeterminate = (
+            indeterminate and widget_spatial_motion_enabled(self)
+        )
+        if animate_indeterminate and not hasattr(self, '_indet_timer'):
             self._indet_timer = QTimer(self)
             self._indet_timer.timeout.connect(self._update_indeterminate)
             self._indet_timer.start(30)
-        elif indeterminate and hasattr(self, '_indet_timer'):
+        elif animate_indeterminate and hasattr(self, '_indet_timer'):
             self._indet_timer.start(30)
+        elif hasattr(self, '_indet_timer'):
+            self._indet_timer.stop()
 
         self.update()
 
@@ -124,7 +151,7 @@ class ProgressBarWidget(QWidget):
             self._message = message
 
         self._progress_anim.stop()
-        if animate:
+        if animate and widget_spatial_motion_enabled(self):
             self._progress_anim.setStartValue(self._visible_progress)
             self._progress_anim.setEndValue(self._progress)
             self._progress_anim.start()

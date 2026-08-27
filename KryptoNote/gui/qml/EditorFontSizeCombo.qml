@@ -79,5 +79,7 @@ ComboBox {
         }
     }
 
-    Behavior on opacity { NumberAnimation { duration: 130 } }
+    Behavior on opacity {
+        NumberAnimation { duration: combo.appTheme.durationState }
+    }
 }

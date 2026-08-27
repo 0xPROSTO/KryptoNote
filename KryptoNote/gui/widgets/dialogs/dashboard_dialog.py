@@ -1,4 +1,4 @@
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QSize, QTimer, Qt
 from PySide6.QtWidgets import (
     QDialog,
     QFrame,
@@ -6,13 +6,16 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QProgressBar,
-    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
 
 from KryptoNote.gui.theme import Theme
 from KryptoNote.gui.widgets.dialog_close_button import DialogCloseButton
+from KryptoNote.gui.widgets.dialog_motion import (
+    widget_motion_duration,
+    widget_spatial_motion_enabled,
+)
 from KryptoNote.gui.widgets.frameless_window import FramelessWindowDragMixin
 
 
@@ -20,9 +23,12 @@ class DashboardDialog(FramelessWindowDragMixin, QDialog):
     def __init__(self, stats, parent=None):
         super().__init__(parent)
         self.stats = stats or {}
+        self._type_bar_targets = []
+        self._type_bar_animations = []
+        self._type_bars_started = False
 
         self.configure_dialog_chrome("Knowledge Dashboard")
-        self.setFixedSize(700, 650)
+        self.setFixedSize(760, 680)
         self.setStyleSheet(self._style())
 
         self._init_ui()
@@ -36,8 +42,8 @@ class DashboardDialog(FramelessWindowDragMixin, QDialog):
         container = QWidget()
         container.setObjectName("about_container")
         layout = QVBoxLayout(container)
-        layout.setContentsMargins(24, 20, 24, 24)
-        layout.setSpacing(16)
+        layout.setContentsMargins(22, 16, 22, 18)
+        layout.setSpacing(12)
 
         header = QWidget()
         self._drag_handle = header
@@ -78,7 +84,7 @@ class DashboardDialog(FramelessWindowDragMixin, QDialog):
         overview_grid = QGridLayout()
         overview_grid.setContentsMargins(0, 0, 0, 0)
         overview_grid.setHorizontalSpacing(20)
-        overview_grid.setVerticalSpacing(9)
+        overview_grid.setVerticalSpacing(5)
 
         rows = [
             ("Project created", self.stats.get("project_created_label", "-")),
@@ -110,46 +116,39 @@ class DashboardDialog(FramelessWindowDragMixin, QDialog):
         graph_layout = graph.layout()
         graph_grid = QGridLayout()
         graph_grid.setContentsMargins(0, 0, 0, 0)
-        graph_grid.setHorizontalSpacing(20)
-        graph_grid.setVerticalSpacing(9)
+        graph_grid.setHorizontalSpacing(10)
+        graph_grid.setVerticalSpacing(0)
         graph_rows = [
             ("Connected nodes", self.stats.get("connected_node_count", 0)),
             ("Orphan nodes", self.stats.get("orphan_node_count", 0)),
             ("Avg links / node", self.stats.get("avg_links_per_node_label", "0.00")),
         ]
-        for row, (label, value) in enumerate(graph_rows):
-            graph_grid.addWidget(self._label(label), row, 0)
-            graph_grid.addWidget(self._value(str(value)), row, 1)
+        for column, (label, value) in enumerate(graph_rows):
+            metric = QWidget()
+            metric_layout = QHBoxLayout(metric)
+            metric_layout.setContentsMargins(0, 0, 0, 0)
+            metric_layout.setSpacing(8)
+            metric_layout.addWidget(self._label(label))
+            metric_layout.addStretch()
+            metric_layout.addWidget(self._value(str(value)))
+            graph_grid.addWidget(metric, 0, column)
+            graph_grid.setColumnStretch(column, 1)
         graph_layout.addLayout(graph_grid)
         layout.addWidget(graph)
 
         types = self._section("Nodes by type")
         types_layout = types.layout()
-
-        scroll = QScrollArea()
-        scroll.setObjectName("dashboard_scroll")
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-
-        type_content = QWidget()
-        type_content.setObjectName("dashboard_scroll_content")
-        type_content_layout = QVBoxLayout(type_content)
-        type_content_layout.setContentsMargins(0, 0, 0, 0)
-        type_content_layout.setSpacing(10)
+        types_layout.setSpacing(6)
 
         type_stats = self.stats.get("type_stats") or []
         if type_stats:
             for item in type_stats:
-                type_content_layout.addWidget(self._type_row(item))
+                types_layout.addWidget(self._type_row(item))
         else:
             empty = QLabel("No nodes")
             empty.setObjectName("dashboard_empty")
-            type_content_layout.addWidget(empty)
-        type_content_layout.addStretch()
-        scroll.setWidget(type_content)
-        types_layout.addWidget(scroll, 1)
-        layout.addWidget(types, 1)
+            types_layout.addWidget(empty)
+        layout.addWidget(types)
 
         main_layout.addWidget(container)
 
@@ -157,8 +156,8 @@ class DashboardDialog(FramelessWindowDragMixin, QDialog):
         frame = QFrame()
         frame.setObjectName("dashboard_metric")
         layout = QVBoxLayout(frame)
-        layout.setContentsMargins(12, 10, 12, 10)
-        layout.setSpacing(4)
+        layout.setContentsMargins(12, 7, 12, 7)
+        layout.setSpacing(2)
 
         value_label = QLabel(str(value))
         value_label.setObjectName("dashboard_metric_value")
@@ -175,8 +174,8 @@ class DashboardDialog(FramelessWindowDragMixin, QDialog):
         frame = QFrame()
         frame.setObjectName("dashboard_section")
         layout = QVBoxLayout(frame)
-        layout.setContentsMargins(14, 12, 14, 12)
-        layout.setSpacing(10)
+        layout.setContentsMargins(14, 10, 14, 10)
+        layout.setSpacing(7)
 
         heading = QLabel(title)
         heading.setObjectName("dashboard_heading")
@@ -197,6 +196,7 @@ class DashboardDialog(FramelessWindowDragMixin, QDialog):
 
     def _type_row(self, item):
         row = QWidget()
+        row.setFixedHeight(22)
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
@@ -208,7 +208,12 @@ class DashboardDialog(FramelessWindowDragMixin, QDialog):
         bar = QProgressBar()
         bar.setObjectName("dashboard_type_bar")
         bar.setRange(0, 1000)
-        bar.setValue(int(round(float(item.get("percent", 0.0)) * 10)))
+        target = int(round(float(item.get("percent", 0.0)) * 10))
+        if widget_spatial_motion_enabled(self):
+            bar.setValue(0)
+            self._type_bar_targets.append((bar, target))
+        else:
+            bar.setValue(target)
         bar.setTextVisible(False)
         layout.addWidget(bar, 1)
 
@@ -223,80 +228,82 @@ class DashboardDialog(FramelessWindowDragMixin, QDialog):
         layout.addWidget(value)
         return row
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self._type_bars_started or not self._type_bar_targets:
+            return
+        self._type_bars_started = True
+        QTimer.singleShot(0, self._start_type_bar_animations)
+
+    def _start_type_bar_animations(self):
+        if not self.isVisible():
+            return
+        duration = min(220, widget_motion_duration(self, "panel"))
+        for bar, target in self._type_bar_targets:
+            animation = QPropertyAnimation(bar, b"value", self)
+            animation.setStartValue(0)
+            animation.setEndValue(target)
+            animation.setDuration(duration)
+            animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+            animation.start()
+            self._type_bar_animations.append(animation)
+
     @staticmethod
     def _style():
-        return Theme.Styles.get_about_dialog_qss() + """
-            QLabel#dashboard_title {
-                color: #e6158b;
+        palette = Theme.Palette
+        return Theme.Styles.get_about_dialog_qss() + f"""
+            QLabel#dashboard_title {{
+                color: {palette.ACCENT_MAIN};
                 font-size: 24px;
                 font-weight: 900;
-            }
+            }}
             QFrame#dashboard_metric,
-            QFrame#dashboard_section {
-                background: #1e1e1e;
-                border: 1px solid #34383d;
+            QFrame#dashboard_section {{
+                background: {palette.BG_PANEL};
+                border: 1px solid {palette.BORDER_DEFAULT};
                 border-radius: 8px;
-            }
-            QLabel#dashboard_metric_value {
-                color: #efefef;
-                font-size: 24px;
+            }}
+            QLabel#dashboard_metric_value {{
+                color: {palette.TEXT_MAIN};
+                font-size: 22px;
                 font-weight: 900;
-            }
+            }}
             QLabel#dashboard_metric_label,
             QLabel#dashboard_label,
             QLabel#dashboard_type_name,
-            QLabel#dashboard_empty {
-                color: #a8adb5;
+            QLabel#dashboard_empty {{
+                color: {palette.TEXT_MUTED};
                 font-size: 13px;
-            }
+            }}
             QLabel#dashboard_value,
             QLabel#dashboard_type_count,
-            QLabel#dashboard_type_percent {
-                color: #efefef;
+            QLabel#dashboard_type_percent {{
+                color: {palette.TEXT_MAIN};
                 font-size: 13px;
                 font-weight: 700;
-            }
-            QLabel#dashboard_type_name {
+            }}
+            QLabel#dashboard_type_name {{
                 min-width: 72px;
-            }
-            QLabel#dashboard_type_percent {
+            }}
+            QLabel#dashboard_type_percent {{
                 min-width: 44px;
-            }
-            QLabel#dashboard_type_count {
+            }}
+            QLabel#dashboard_type_count {{
                 min-width: 32px;
-            }
-            QLabel#dashboard_heading {
-                color: #e6158b;
-                font-size: 17px;
+            }}
+            QLabel#dashboard_heading {{
+                color: {palette.ACCENT_MAIN};
+                font-size: 16px;
                 font-weight: 900;
-            }
-            QScrollArea#dashboard_scroll,
-            QWidget#dashboard_scroll_content {
-                background: #1e1e1e;
-                border: none;
-            }
-            QProgressBar#dashboard_type_bar {
-                background: #26282b;
-                border: 1px solid #34383d;
+            }}
+            QProgressBar#dashboard_type_bar {{
+                background: {palette.BG_NODE};
+                border: 1px solid {palette.BORDER_DEFAULT};
                 border-radius: 4px;
                 height: 8px;
-            }
-            QProgressBar#dashboard_type_bar::chunk {
-                background: #e6158b;
+            }}
+            QProgressBar#dashboard_type_bar::chunk {{
+                background: {palette.ACCENT_MAIN};
                 border-radius: 3px;
-            }
-            QScrollArea#dashboard_scroll QScrollBar:vertical {
-                background: transparent;
-                width: 8px;
-                margin: 4px 2px 8px 0;
-            }
-            QScrollArea#dashboard_scroll QScrollBar::handle:vertical {
-                background: #5a5a5a;
-                border-radius: 4px;
-                min-height: 32px;
-            }
-            QScrollArea#dashboard_scroll QScrollBar::add-line:vertical,
-            QScrollArea#dashboard_scroll QScrollBar::sub-line:vertical {
-                height: 0;
-            }
+            }}
         """

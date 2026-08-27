@@ -11,6 +11,7 @@ class ThemeBridge(QObject):
     paletteChanged = Signal()
     canvasAppearanceChanged = Signal()
     fontChanged = Signal()
+    motionChanged = Signal()
 
     def __init__(self, parent=None, manager=None):
         super().__init__(parent)
@@ -21,7 +22,7 @@ class ThemeBridge(QObject):
             if application is not None and hasattr(application, "style")
             else None
         )
-        self._motion_enabled = bool(
+        self._system_motion_enabled = bool(
             style is None
             or style.styleHint(QStyle.StyleHint.SH_Widget_Animate)
         )
@@ -30,9 +31,52 @@ class ThemeBridge(QObject):
             self.canvasAppearanceChanged.emit
         )
         self._manager.fontChanged.connect(self.fontChanged.emit)
+        self._manager.motionChanged.connect(self.motionChanged.emit)
 
+    def _effective_motion_mode(self):
+        mode = self._manager.motion_mode
+        if mode == "system":
+            return "full" if self._system_motion_enabled else "off"
+        return mode
+
+    def _duration(self, full, reduced):
+        mode = self._effective_motion_mode()
+        if mode == "off":
+            return 0
+        return int(reduced if mode == "reduced" else full)
+
+    motionMode = Property(
+        str, lambda self: self._manager.motion_mode, notify=motionChanged
+    )
+    effectiveMotionMode = Property(
+        str, _effective_motion_mode, notify=motionChanged
+    )
     motionEnabled = Property(
-        bool, lambda self: self._motion_enabled, constant=True
+        bool,
+        lambda self: self._effective_motion_mode() == "full",
+        notify=motionChanged,
+    )
+    colorMotionEnabled = Property(
+        bool,
+        lambda self: self._effective_motion_mode() != "off",
+        notify=motionChanged,
+    )
+    reducedMotion = Property(
+        bool,
+        lambda self: self._effective_motion_mode() == "reduced",
+        notify=motionChanged,
+    )
+    durationPress = Property(
+        int, lambda self: self._duration(80, 60), notify=motionChanged
+    )
+    durationState = Property(
+        int, lambda self: self._duration(140, 80), notify=motionChanged
+    )
+    durationPanel = Property(
+        int, lambda self: self._duration(220, 100), notify=motionChanged
+    )
+    durationExit = Property(
+        int, lambda self: self._duration(80, 60), notify=motionChanged
     )
 
     bgCanvas = Property(str, lambda self: Palette.BG_CANVAS, notify=paletteChanged)
@@ -158,6 +202,8 @@ class ThemeBridge(QObject):
         str, lambda self: Palette.SUCCESS_HOVER, notify=paletteChanged
     )
     dangerHover = Property(str, lambda self: Palette.DANGER_HOVER, notify=paletteChanged)
+    danger = Property(str, lambda self: Palette.DANGER, notify=paletteChanged)
+    success = Property(str, lambda self: Palette.SUCCESS, notify=paletteChanged)
 
     whiteAlpha05 = Property(
         str, lambda self: Palette.WHITE_ALPHA_05, notify=paletteChanged

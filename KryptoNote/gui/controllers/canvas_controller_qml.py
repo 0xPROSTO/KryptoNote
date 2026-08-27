@@ -41,6 +41,8 @@ class QmlCanvasController(QObject):
     openNodePropertiesRequested = Signal(int)
     nodePropertiesUpdated = Signal(int)
     connectionRevealRequested = Signal(int)
+    resultRevealRequested = Signal(object, str, str)
+    toastRequested = Signal(str, str)
     open_media_viewer_requested = Signal(int)  # node_id
     initial_load_failed = Signal(str)
     initial_load_finished = Signal()
@@ -111,6 +113,8 @@ class QmlCanvasController(QObject):
         self._import_export_ctrl.status_message.connect(self.status_message)
         self._import_export_ctrl.progress_updated.connect(self.progress_updated)
         self._import_export_ctrl.progress_finished.connect(self.progress_finished)
+        self._import_export_ctrl.nodes_imported.connect(self._on_nodes_imported)
+        self.status_message.connect(self._relay_status_to_toast)
 
         # Persist position/size changes to DB
         self._node_model.node_position_changed.connect(self._on_position_changed)
@@ -127,6 +131,34 @@ class QmlCanvasController(QObject):
 
     def _on_size_changed(self, node_id, w, h):
         self._service.update_size(node_id, w, h)
+
+    @Slot(str, str)
+    def _relay_status_to_toast(self, message, status_type):
+        message = str(message or "").strip()
+        status_type = str(status_type or "normal").strip().lower()
+        if (
+            not message
+            or message == "Ready"
+            or message.startswith(("Search:", "LINKING:", "SELECTION ACTIVE:"))
+        ):
+            return
+        if status_type in {"warning", "error"}:
+            self.toastRequested.emit(message, status_type)
+        elif status_type in {"accent", "success"}:
+            self.toastRequested.emit(message, "success")
+
+    @Slot(object)
+    def _on_nodes_imported(self, node_ids):
+        node_ids = [int(node_id) for node_id in (node_ids or [])]
+        if not node_ids:
+            return
+        count = len(node_ids)
+        self._node_model.set_selection(node_ids)
+        self.resultRevealRequested.emit(
+            node_ids,
+            f"Imported {count} media file{'s' if count != 1 else ''}.",
+            "success",
+        )
 
     @Slot(str, str)
     def set_status_message(self, message, status_type="normal"):
@@ -475,6 +507,9 @@ class QmlCanvasController(QObject):
             auto_fit_now=False,
         )
         self._node_model.set_selection([node_id])
+        self.resultRevealRequested.emit(
+            [node_id], "New note created.", "success"
+        )
         self.openTextEditorRequested.emit(node_id)
 
     def create_text_node_at(
@@ -525,6 +560,9 @@ class QmlCanvasController(QObject):
             frame_opacity=Config.FRAME_DEFAULT_OPACITY,
         )
         self._node_model.set_selection([frame_id])
+        self.resultRevealRequested.emit(
+            [frame_id], "", "success"
+        )
         self.status_message.emit(
             "Frame added unlocked. Lock it to move contained nodes.", "accent"
         )
@@ -649,6 +687,13 @@ class QmlCanvasController(QObject):
     @Slot(int)
     def request_animated_delete(self, node_id):
         self._delete_ctrl.request_animated_delete(node_id)
+
+    @Slot(int, bool)
+    def delete_node_from_context(self, node_id, bypass_confirmation=False):
+        self._delete_ctrl.delete_node_from_context(
+            node_id,
+            bypass_confirmation,
+        )
 
     @Slot(int)
     def perform_delete(self, node_id):
@@ -918,6 +963,10 @@ class QmlCanvasController(QObject):
                 self._restore_graph_clone_redo(pending)
             elif pending["history_action"] == "paste":
                 self._graph_paste_count += 1
+            if created_ids and pending["history_action"] in {
+                "paste", "duplicate"
+            }:
+                self.resultRevealRequested.emit(created_ids, "", "success")
         except Exception as exc:
             self._restore_graph_clone_redo(pending)
             self._finish_graph_clone()
@@ -1458,6 +1507,7 @@ class QmlCanvasController(QObject):
             self.status_message.emit(
                 message, "warning" if auto_fit_error is not None else "accent"
             )
+            self.resultRevealRequested.emit(created_ids, "", "success")
             return True
         self.status_message.emit(
             "System clipboard contains no supported text or image.",
@@ -1672,7 +1722,7 @@ class QmlCanvasController(QObject):
     def perform_delete_connection(self, conn_id):
         try:
             self._graph_commands.delete_connection_after_animation(conn_id)
-            self.status_message.emit("Link deleted.", "normal")
+            self.status_message.emit("Link deleted.", "success")
         except Exception as exc:
             self._conn_model.set_deleting(conn_id, False, finalize=True)
             self.status_message.emit(f"Delete failed: {exc}", "error")

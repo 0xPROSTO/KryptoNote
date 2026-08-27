@@ -16,6 +16,7 @@ Item {
     property bool expansionTransition: false
     property string pendingAction: ""
     property real preferredWidth: 520
+    property real preferredWidthRatio: 0.40
     readonly property real minPanelWidth: parent ? parent.width * 0.25 : 320
     readonly property real maxPanelWidth: parent ? parent.width * 0.75 : 960
     readonly property real mediaAspectRatio: Math.max(
@@ -31,7 +32,12 @@ Item {
                                            : 520
     readonly property real collapsedWidth: Math.max(
         minPanelWidth,
-        Math.min(maxPanelWidth, userResized ? preferredWidth : automaticWidth)
+        Math.min(
+            maxPanelWidth,
+            userResized && parent
+            ? parent.width * preferredWidthRatio
+            : automaticWidth
+        )
     )
     property real slideOffset: open ? 0 : width
     readonly property bool resizing: resizeMouse.pressed
@@ -64,7 +70,7 @@ Item {
             hideTimer.stop()
             panelVisible = true
             Qt.callLater(function() {
-                if (panel.open) mediaSurface.forceActiveFocus()
+                if (panel.open) mediaSurface.focusPrimaryMediaControl()
             })
         } else {
             resetExpanded()
@@ -152,14 +158,16 @@ Item {
 
     Timer {
         id: hideTimer
-        interval: 230
+        interval: panel.appTheme.motionEnabled
+                  ? panel.appTheme.durationPanel + 10 : 0
         repeat: false
         onTriggered: panel.panelVisible = false
     }
 
     Timer {
         id: expansionTimer
-        interval: 280
+        interval: panel.appTheme.motionEnabled
+                  ? panel.appTheme.durationPanel + 20 : 0
         repeat: false
         onTriggered: {
             panel.expansionTransition = false
@@ -171,18 +179,21 @@ Item {
         }
     }
 
-    Connections {
-        target: panel.viewerController
-        function onSessionOpened() { panel.userResized = false }
-    }
-
     Behavior on slideOffset {
-        NumberAnimation { duration: 220; easing.type: Easing.OutCubic }
+        NumberAnimation {
+            duration: panel.appTheme.motionEnabled
+                      ? panel.appTheme.durationPanel : 0
+            easing.type: Easing.OutCubic
+        }
     }
 
     Behavior on width {
         enabled: panel.expansionTransition && panel.open && !panel.resizing
-        NumberAnimation { duration: 260; easing.type: Easing.OutCubic }
+        NumberAnimation {
+            duration: panel.appTheme.motionEnabled
+                      ? panel.appTheme.durationPanel : 0
+            easing.type: Easing.OutCubic
+        }
     }
 
     Rectangle {
@@ -197,7 +208,9 @@ Item {
                ? panel.appTheme.accentMain : "transparent"
         opacity: resizeMouse.containsMouse || resizeMouse.pressed ? 0.55 : 0
 
-        Behavior on opacity { NumberAnimation { duration: 120 } }
+        Behavior on opacity {
+            NumberAnimation { duration: panel.appTheme.durationState }
+        }
 
         MouseArea {
             id: resizeMouse
@@ -214,6 +227,8 @@ Item {
                 pressSceneX = resizeMouse.mapToItem(panel.parent, mouse.x, mouse.y).x
                 startPreferredWidth = panel.collapsedWidth
                 panel.preferredWidth = startPreferredWidth
+                panel.preferredWidthRatio = panel.parent
+                        ? startPreferredWidth / panel.parent.width : 0.40
                 panel.userResized = true
             }
             onPositionChanged: function(mouse) {
@@ -229,6 +244,10 @@ Item {
                     panel.minPanelWidth,
                     Math.min(panel.maxPanelWidth, nextWidth)
                 )
+                if (panel.parent && panel.parent.width > 0) {
+                    panel.preferredWidthRatio = panel.preferredWidth
+                            / panel.parent.width
+                }
                 panel.requestedCenter(panel.viewerController.nodeId)
             }
         }

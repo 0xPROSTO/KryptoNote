@@ -6,6 +6,9 @@ from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlComponent, QQmlEngine
 from PySide6.QtQuick import QQuickItem
 
+from KryptoNote.gui.models.node_list_model import NodeListModel
+from KryptoNote.gui.models.viewport_proxy_model import NodeViewportProxyModel
+
 ROOT = Path(__file__).resolve().parents[1]
 QML_DIR = ROOT / "KryptoNote" / "gui" / "qml"
 
@@ -51,6 +54,14 @@ Item {{
     id: root
     width: 400
     height: 300
+    property real previewX: 0
+    property real previewY: 0
+    property real previewWidth: 0
+    property real previewHeight: 0
+    property real savedX: 0
+    property real savedY: 0
+    property real savedWidth: 0
+    property real savedHeight: 0
 
     QtObject {{
         id: canvasRoot
@@ -61,21 +72,45 @@ Item {{
         property bool isLinkMode: false
         property bool isPanning: false
         property bool isEditorResizing: false
+        property bool canvasInputBlocked: false
+        property bool isNodeDragging: false
         property var activeNodeResizeController: null
         function screenToCanvas(x, y) {{ return Qt.point(x, y) }}
     }}
 
     QtObject {{
         id: nodeModel
-        function preview_position(nodeId, x, y) {{}}
-        function preview_size(nodeId, width, height) {{}}
-        function update_position(nodeId, x, y) {{}}
-        function update_size(nodeId, width, height) {{}}
+        function set_hovered(nodeId, hovered) {{}}
+        function preview_position(nodeId, x, y) {{
+            root.previewX = x
+            root.previewY = y
+            delegateItem.x = x
+            delegateItem.y = y
+        }}
+        function preview_size(nodeId, width, height) {{
+            root.previewWidth = width
+            root.previewHeight = height
+            delegateItem.width = width
+            delegateItem.height = height
+        }}
+        function update_position(nodeId, x, y) {{
+            root.savedX = x
+            root.savedY = y
+            delegateItem.x = x
+            delegateItem.y = y
+        }}
+        function update_size(nodeId, width, height) {{
+            root.savedWidth = width
+            root.savedHeight = height
+            delegateItem.width = width
+            delegateItem.height = height
+        }}
     }}
 
     QtObject {{
         id: theme
         property bool motionEnabled: true
+        property int durationState: 140
         property color accentMain: "#ffffff"
         property color resizeHandle: "#aaaaaa"
     }}
@@ -115,6 +150,30 @@ Item {{
     function setVisualDetailScale(scale) {{
         canvasRoot.visualDetailScale = scale
     }}
+    function setSnap(enabled) {{ canvasRoot.snapToGrid = enabled }}
+    function setNodeDragging(dragging) {{
+        canvasRoot.isNodeDragging = dragging
+    }}
+    function startResize(region) {{ handle.beginResize(region) }}
+    function updateResize(region, dx, dy) {{
+        handle.updateResize(region, {{
+            centroid: {{
+                scenePosition: Qt.point(20 + dx, 20 + dy),
+                scenePressPosition: Qt.point(20, 20)
+            }}
+        }})
+    }}
+    function finishResize() {{ handle.finishResize() }}
+    function pendingGeometry() {{
+        return [
+            handle._pendingX,
+            handle._pendingY,
+            handle._pendingWidth,
+            handle._pendingHeight
+        ]
+    }}
+    function canResize() {{ return handle._canResize }}
+    function resizing() {{ return handle._resizing }}
 }}
 '''
     return _load_component(source, "ResizeHarness.qml")
@@ -137,11 +196,14 @@ Item {{
     property bool isLinkMode: false
     property bool isPanning: false
     property bool isEditorResizing: false
+    property bool canvasInputBlocked: false
     property bool isCtrlHeld: false
     property bool snapToGrid: false
     property real gridSize: 100.0
     property var activeNodeDragController: null
     property var activeNodeResizeController: null
+    readonly property bool isNodeDragging:
+            activeNodeDragController !== null
 
     function visibleCanvasRect(margin) {{
         return Qt.rect(-1000, -1000, 2000, 2000)
@@ -176,6 +238,11 @@ Item {{
     QtObject {{
         id: theme
         property bool motionEnabled: true
+        property int durationState: 140
+        property int durationPanel: 220
+        property color accentHigh: "#ffffff"
+        property color accentLow: "#221122"
+        property color dangerHover: "#ff5555"
         property color bgNode: "#222222"
         property color accentMain: "#ffffff"
         property color borderDefault: "#555555"
@@ -240,9 +307,104 @@ Item {{
     function setHovered(hovered) {{
         nodes.setProperty(0, "nodeIsHovered", hovered)
     }}
+    function setFrameSelected(selected) {{
+        nodes.setProperty(0, "nodeType", "frame")
+        nodes.setProperty(0, "nodeIsSelected", selected)
+    }}
 }}
 '''
     return _load_component(source, "NodeLayerHarness.qml")
+
+
+def _load_drag_controller():
+    qml_dir = QML_DIR.resolve().as_uri()
+    source = f'''
+import QtQuick
+import "{qml_dir}" as App
+
+Item {{
+    id: root
+    width: 800
+    height: 600
+    property real previewX: 0
+    property real previewY: 0
+    property real savedX: 0
+    property real savedY: 0
+
+    QtObject {{
+        id: canvasRoot
+        property bool canvasInputBlocked: false
+        property bool isLinkMode: false
+        property bool isPanning: false
+        property bool isEditorResizing: false
+        property bool isCtrlHeld: false
+        property bool snapToGrid: true
+        property real gridSize: 100
+        property var activeNodeDragController: null
+        function screenToCanvas(x, y) {{ return Qt.point(x, y) }}
+    }}
+
+    QtObject {{
+        id: nodeModel
+        function clear_hovered() {{}}
+        function set_selection(nodeIds) {{}}
+        function add_selection(nodeIds) {{}}
+        function get_drag_node_positions(nodeId) {{
+            return [{{"id": nodeId, "x": 20, "y": 20}}]
+        }}
+        function preview_positions(positions) {{
+            if (positions.length <= 0) return
+            root.previewX = positions[0].x
+            root.previewY = positions[0].y
+            delegateItem.x = positions[0].x
+            delegateItem.y = positions[0].y
+        }}
+        function update_positions(positions) {{
+            if (positions.length <= 0) return
+            root.savedX = positions[0].x
+            root.savedY = positions[0].y
+        }}
+    }}
+
+    Item {{ id: contentLayer }}
+    Item {{
+        id: delegateItem
+        x: 20
+        y: 20
+        width: 200
+        height: 100
+    }}
+
+    App.NodeDragController {{
+        id: dragController
+        width: delegateItem.width
+        height: delegateItem.height
+        canvasRoot: canvasRoot
+        nodeModel: nodeModel
+        contentLayer: contentLayer
+        delegateItem: delegateItem
+        nodeId: 1
+        nodeType: "text"
+        nodeIsSelected: true
+    }}
+
+    function beginDrag() {{ dragController.beginDrag() }}
+    function movePointer(x, y) {{
+        dragController.updateDrag({{
+            centroid: {{
+                scenePosition: Qt.point(x, y),
+                scenePressPosition: Qt.point(40, 40)
+            }}
+        }})
+    }}
+    function setResizeHovered(hovered) {{
+        dragController.resizeHovered = hovered
+    }}
+    function canDrag() {{ return dragController.canDrag }}
+    function finishDrag() {{ dragController.finishDrag() }}
+}}
+'''
+    return _load_component(source, "NodeDragHarness.qml")
 
 
 def _regions(handle):
@@ -309,6 +471,76 @@ def test_resize_grip_geometry_shrinks_to_fit_a_zoomed_out_node():
     assert root.iconGeometryScale() == pytest.approx(1.25)
 
 
+def test_snap_resize_keeps_preview_and_persists_top_left_geometry():
+    root, _engine, _component = _load_resize_handle()
+    handle = _class_items(root, "ResizeHandle")[0]
+    top_left = next(
+        region
+        for region in _regions(handle)
+        if region.property("horizontalDirection") == -1
+        and region.property("verticalDirection") == -1
+    )
+
+    root.setSnap(True)
+    root.startResize(top_left)
+    assert root.resizing()
+
+    root.setNodeDragging(True)
+    assert root.canResize()
+    root.updateResize(top_left, -71, -71)
+    first = root.pendingGeometry().toVariant()
+    root.updateResize(top_left, -119, -119)
+    second = root.pendingGeometry().toVariant()
+
+    assert first == pytest.approx([-80, -80, 300, 200])
+    assert second == pytest.approx(first)
+
+    root.finishResize()
+    assert not root.resizing()
+    assert root.property("savedX") == pytest.approx(-80)
+    assert root.property("savedY") == pytest.approx(-80)
+    assert root.property("savedWidth") == pytest.approx(300)
+    assert root.property("savedHeight") == pytest.approx(200)
+
+
+def test_viewport_retains_transform_node_until_resize_commit_unwinds():
+    model = NodeListModel()
+    model.add_node(1, "text", 0, 0, 200, 100)
+    proxy = NodeViewportProxyModel(model)
+    proxy.updateViewport(-100, -100, 100, 100)
+    QCoreApplication.processEvents()
+    assert proxy.rowCount() == 1
+
+    proxy.retainTransformNodes([1])
+    model.preview_position(1, 10_000, 10_000)
+    model.update_position(1, 10_000, 10_000)
+    QCoreApplication.processEvents()
+    assert proxy.rowCount() == 1
+
+    proxy.releaseTransformNodes()
+    QCoreApplication.processEvents()
+    assert proxy.rowCount() == 0
+
+
+def test_fast_snap_drag_remains_active_outside_node_and_persists():
+    root, _engine, _component = _load_drag_controller()
+
+    root.beginDrag()
+    root.movePointer(410, 310)
+    assert root.property("previewX") == pytest.approx(400)
+    assert root.property("previewY") == pytest.approx(300)
+
+    root.setResizeHovered(True)
+    assert root.canDrag()
+    root.movePointer(690, 550)
+    assert root.property("previewX") == pytest.approx(700)
+    assert root.property("previewY") == pytest.approx(500)
+
+    root.finishDrag()
+    assert root.property("savedX") == pytest.approx(700)
+    assert root.property("savedY") == pytest.approx(500)
+
+
 def test_only_matching_layer_loads_a_full_delegate_and_resize_is_lazy():
     root, _engine, _component = _load_node_layers()
 
@@ -330,14 +562,39 @@ def test_only_matching_layer_loads_a_full_delegate_and_resize_is_lazy():
     QCoreApplication.processEvents()
     assert _class_items(root, "ResizeHandle") == []
 
+    root.setFrameSelected(True)
+    QCoreApplication.processEvents()
+    assert len(_class_items(root, "ResizeHandle")) == 1
+
 
 def test_resize_handle_keeps_its_existing_pointer_handler_implementation():
     resize_source = (QML_DIR / "ResizeHandle.qml").read_text(encoding="utf-8")
     delegate_source = (QML_DIR / "NodeDelegate.qml").read_text(encoding="utf-8")
 
     assert resize_source.count("ResizeRegion {") == 9
+    assert resize_source.count(
+        "grabPermissions: PointerHandler.CanTakeOverFromItems"
+    ) == 1
     assert "HoverHandler" in resize_source
     assert "DragHandler" in resize_source
-    assert "nodeHover.hovered || _isHovered" in resize_source
+    assert "handle._resizing" in resize_source
+    end_session = resize_source.split(
+        "function _endResizeSession()", 1
+    )[1].split("\n    Component.onDestruction:", 1)[0]
+    assert end_session.index("handle._resizing = false") < end_session.index(
+        "handle.delegateItem._isResizing = false"
+    )
+    assert "retainTransformNodes([handle.nodeId])" in resize_source
+    assert "releaseTransformNodes()" in resize_source
+    drag_source = (QML_DIR / "NodeDragController.qml").read_text(
+        encoding="utf-8"
+    )
+    assert drag_source.count(
+        "grabPermissions: PointerHandler.CanTakeOverFromItems"
+    ) == 5
+    assert "dragController.dragging" in drag_source
+    frame_source = (QML_DIR / "FrameNode.qml").read_text(encoding="utf-8")
+    assert "grabPermissions: PointerHandler.CanTakeOverFromItems" in frame_source
     assert "_resizer._pointerHovered" in delegate_source
     assert "|| delegateRoot._resizePointerHovered" in delegate_source
+    assert "|| delegateRoot.nodeTransforming" in delegate_source

@@ -55,6 +55,15 @@ Rectangle {
     property bool isTagPickerOpen: globalTagPicker.visible || mediaViewerPanel.tagPickerOpen
     property bool isSearchPanelOpen: searchPanel.open
     readonly property bool isCommandPaletteOpen: commandPalette.visible
+    readonly property bool isContextMenuOpen: canvasContextMenu.visible
+    property bool externalInputBlocked: false
+    readonly property bool canvasInputBlocked:
+            externalInputBlocked
+            || isNodePropertiesOpen
+            || isFrameEditorOpen
+            || isTagPickerOpen
+            || isCommandPaletteOpen
+            || isContextMenuOpen
     property bool isMediaViewerOpen: viewerController.active && !viewerController.detached
     readonly property bool arrayListSuppressed:
             textEditorPanel.open
@@ -83,7 +92,6 @@ Rectangle {
     property bool _viewportUpdatePending: false
     property var _pendingConnectionRevealIds: []
     readonly property bool frameClockNeeded: _connectionHitPending
-            || isNodeTransforming
             || viewport.frameClockNeeded
     property int _lastReportedZoomPercent: -1
 
@@ -104,6 +112,11 @@ Rectangle {
     // focus to another. QML can otherwise expose a one-frame gap between the
     // closing and opening panels.
     property bool _arrayListHandoffActive: false
+    property bool initialLoadComplete: false
+    property alias searchPanelPreferredWidth: searchPanel.preferredWidth
+    property alias textEditorPreferredWidth: textEditorPanel.preferredWidth
+    property alias mediaPanelPreferredRatio: mediaViewerPanel.preferredWidthRatio
+    property alias mediaPanelUserResized: mediaViewerPanel.userResized
 
     signal applicationCloseRequested()
     signal arrayListSuppressionChanged(bool suppressed)
@@ -126,6 +139,9 @@ Rectangle {
             root._connectionHitPending = false
             root.hoveredConnectionId = 0
         }
+    }
+    onCanvasInputBlockedChanged: {
+        if (canvasInputBlocked) root.cancelPointerGesture()
     }
     onWidthChanged: {
         viewport.ensureInitialized()
@@ -156,7 +172,7 @@ Rectangle {
     Item {
         id: contentLayer
         z: 1
-        enabled: !root.isNodePropertiesOpen
+        enabled: !root.canvasInputBlocked
         x: 0
         y: 0
         transformOrigin: Item.TopLeft
@@ -218,7 +234,8 @@ Rectangle {
             z: 3
             property rect targetBounds: Qt.rect(0, 0, 0, 0)
             property real progress: 1.0
-            readonly property real expansion: (2 + 6 * progress)
+            readonly property real expansion:
+                    (2 + (root.appTheme.motionEnabled ? 6 * progress : 0))
                     / Math.max(root.visualDetailScale, 0.12)
 
             x: targetBounds.x - expansion
@@ -242,21 +259,24 @@ Rectangle {
                     Number(bounds[2]),
                     Number(bounds[3])
                 )
-                if (root.appTheme.motionEnabled) {
+                if (root.appTheme.colorMotionEnabled) {
                     focusPulseAnimation.start()
                 }
             }
 
             SequentialAnimation {
                 id: focusPulseAnimation
-                PauseAnimation { duration: 200 }
+                PauseAnimation {
+                    duration: root.appTheme.motionEnabled
+                              ? root.appTheme.durationPress : 0
+                }
                 ScriptAction { script: focusPulse.progress = 0.0 }
                 NumberAnimation {
                     target: focusPulse
                     property: "progress"
                     from: 0.0
                     to: 1.0
-                    duration: 280
+                    duration: root.appTheme.durationState
                     easing.type: Easing.OutCubic
                 }
             }
@@ -266,6 +286,7 @@ Rectangle {
     NodeContextMenu {
         canvasController: root.canvasController
         appTheme: root.appTheme
+        shiftHeld: root.isShiftHeld
         id: canvasContextMenu
         onRequestedTags: function(nodeId, anchorItem) {
             root.openTagPickerForNode(nodeId, anchorItem)
@@ -283,6 +304,7 @@ Rectangle {
 
     CanvasViewport {
         id: viewport
+        enabled: !root.canvasInputBlocked
         anchors.fill: parent
         contentLayer: contentLayer
         preferAngleDelta: root.wheelPreferAngleDelta
@@ -317,7 +339,7 @@ Rectangle {
         connectionModel: root.connectionModel
         canvasController: root.canvasController
         id: inputLayer
-        enabled: !root.isNodePropertiesOpen
+        enabled: !root.canvasInputBlocked
         anchors.fill: parent
         focus: true
         contentLayer: contentLayer
@@ -400,7 +422,13 @@ Rectangle {
         height: parent.height
         x: parent.width - width + slideOffset
 
-        Behavior on slideOffset { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
+        Behavior on slideOffset {
+            NumberAnimation {
+                duration: root.appTheme.motionEnabled
+                          ? root.appTheme.durationPanel : 0
+                easing.type: Easing.OutCubic
+            }
+        }
 
         onRequestedCenter: function(nodeId) {
             root.centerOnNodeForEditor(nodeId)
@@ -549,6 +577,16 @@ Rectangle {
             root._pendingConnectionRevealIds = pending
             connectionRevealExpiry.restart()
         }
+        function onInitial_load_finished() {
+            root.initialLoadComplete = true
+        }
+        function onInitial_load_failed() {
+            root.initialLoadComplete = true
+        }
+        function onResultRevealRequested(nodeIds, message, kind) {
+            var bounds = root.nodeModel.get_nodes_bounds(nodeIds)
+            if (bounds && bounds.length >= 4) focusPulse.showForBounds(bounds)
+        }
     }
 
     Connections {
@@ -563,6 +601,7 @@ Rectangle {
 
     HoverHandler {
         id: globalHover
+        enabled: !root.canvasInputBlocked
         onHoveredChanged: {
             if (!hovered) {
                 root._connectionHitPending = false
@@ -591,12 +630,6 @@ Rectangle {
     Connections {
         target: root.frameClock
         function onTick(frameTime) {
-            if (root.activeNodeDragController) {
-                root.activeNodeDragController.advanceDragFrame()
-            }
-            if (root.activeNodeResizeController) {
-                root.activeNodeResizeController.advanceResizeFrame()
-            }
             viewport.advanceFrame(frameTime)
             if (root._connectionHitPending && !root.isNodeTransforming) {
                 root._connectionHitPending = false
@@ -673,6 +706,22 @@ Rectangle {
             visible.x + visible.width,
             visible.y + visible.height
         )
+    }
+
+    function retainTransformNodes(nodeIds) {
+        if (root.nodeViewportModel
+                && typeof root.nodeViewportModel.retainTransformNodes
+                   === "function") {
+            root.nodeViewportModel.retainTransformNodes(nodeIds || [])
+        }
+    }
+
+    function releaseTransformNodes() {
+        if (root.nodeViewportModel
+                && typeof root.nodeViewportModel.releaseTransformNodes
+                   === "function") {
+            root.nodeViewportModel.releaseTransformNodes()
+        }
     }
 
     function scheduleViewportUpdate() {
@@ -804,7 +853,22 @@ Rectangle {
     }
 
     function cancelPointerGesture() {
+        var dragController = root.activeNodeDragController
+        if (dragController
+                && typeof dragController.cancelDrag === "function") {
+            dragController.cancelDrag()
+        }
+        var resizeController = root.activeNodeResizeController
+        if (resizeController
+                && typeof resizeController.cancelResize === "function") {
+            resizeController.cancelResize(null)
+        }
         inputLayer.cancelPointerGesture()
+    }
+
+    function setExternalInputBlocked(blocked) {
+        externalInputBlocked = Boolean(blocked)
+        if (externalInputBlocked) root.cancelPointerGesture()
     }
 
     function screenToCanvas(screenX, screenY) {
@@ -817,6 +881,31 @@ Rectangle {
 
     function visibleCanvasRect(margin) {
         return viewport.visibleCanvasRect(margin)
+    }
+
+    function resetZoom() {
+        viewport.setZoomScale(
+            root.width / 2,
+            root.height / 2,
+            1.0,
+            root.appTheme.motionEnabled
+        )
+    }
+
+    function restorePanelLayout(searchWidth, editorWidth, mediaRatio,
+                                mediaUserResized) {
+        if (Number(searchWidth) > 0)
+            searchPanel.preferredWidth = Number(searchWidth)
+        if (Number(editorWidth) > 0)
+            textEditorPanel.preferredWidth = Number(editorWidth)
+        if (Boolean(mediaUserResized) && Number(mediaRatio) > 0) {
+            mediaViewerPanel.preferredWidthRatio = Math.max(
+                0.25, Math.min(0.75, Number(mediaRatio))
+            )
+            mediaViewerPanel.userResized = true
+        } else {
+            mediaViewerPanel.userResized = false
+        }
     }
 
     function openEditorForNode(nodeId) {
@@ -953,12 +1042,17 @@ Rectangle {
         }
 
         root.nodeModel.set_selection([nodeId])
-        focusPulse.showForBounds(bounds)
 
         var targetX = bounds[0] + bounds[2] / 2
         var targetY = bounds[1] + bounds[3] / 2
         _searchCameraOffsetActive = true
-        viewport.smoothCenterOnScreen(targetX, targetY, _availableScreenCenterX(), root.height / 2)
+        viewport.smoothCenterOnScreen(
+            targetX,
+            targetY,
+            _availableScreenCenterX(),
+            root.height / 2,
+            function() { focusPulse.showForBounds(bounds) }
+        )
     }
 
     function compensateSearchClose(panelWidth) {
@@ -979,11 +1073,125 @@ Rectangle {
         return leftInset + usableWidth / 2
     }
 
+    Item {
+        id: emptyCanvasHint
+        z: 10
+        anchors.centerIn: parent
+        width: 330
+        height: 112
+        visible: root.initialLoadComplete
+                 && root.nodeModel
+                 && root.nodeModel.nodeCount === 0
+                 && !root.isTextEditorOpen
+                 && !root.isFrameEditorOpen
+                 && !root.isMediaViewerOpen
+        opacity: visible ? 1 : 0
+        Accessible.role: Accessible.StaticText
+        Accessible.name: "Empty canvas. Create a note with Control N, drop files, or right-click."
+
+        Rectangle {
+            anchors.fill: parent
+            radius: 8
+            color: root.appTheme.bgPanel
+            border.width: 1
+            border.color: root.appTheme.borderSubtle
+        }
+
+        Column {
+            anchors.centerIn: parent
+            spacing: 8
+            Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: "Start your knowledge map"
+                color: root.appTheme.textMain
+                font.family: "Segoe UI Semibold"
+                font.pointSize: 11
+            }
+            Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: "Ctrl+N  New note   ·   Drop files   ·   Right-click"
+                color: root.appTheme.textMuted
+                font.family: "Segoe UI"
+                font.pointSize: 9
+            }
+        }
+
+        Behavior on opacity {
+            NumberAnimation { duration: root.appTheme.durationState }
+        }
+    }
+
+    TransformBadge {
+        id: transformBadge
+        z: 90
+        appTheme: root.appTheme
+        active: root.isNodeTransforming
+        gridActive: root.snapToGrid
+        line1: root.transformLine1()
+        line2: root.transformLine2()
+        anchorX: root.transformAnchor().x
+        anchorY: root.transformAnchor().y
+    }
+
+    function signedTransformDelta(value) {
+        var rounded = Math.round(value)
+        return (rounded >= 0 ? "+" : "") + rounded
+    }
+
+    function transformLine1() {
+        if (root.activeNodeDragController) {
+            var position = root.activeNodeDragController.currentNodePosition()
+            var delta = root.activeNodeDragController.appliedDragDelta()
+            return "X: " + Math.round(position.x)
+                    + " (" + root.signedTransformDelta(delta.x) + ")"
+        }
+        if (root.activeNodeResizeController) {
+            return Math.round(root.activeNodeResizeController._pendingWidth)
+                    + " × "
+                    + Math.round(root.activeNodeResizeController._pendingHeight)
+        }
+        return transformBadge._displayLine1
+    }
+
+    function transformLine2() {
+        if (root.activeNodeDragController) {
+            var position = root.activeNodeDragController.currentNodePosition()
+            var delta = root.activeNodeDragController.appliedDragDelta()
+            return "Y: " + Math.round(position.y)
+                    + " (" + root.signedTransformDelta(delta.y) + ")"
+        }
+        if (root.activeNodeResizeController) return ""
+        return transformBadge._displayLine2
+    }
+
+    function transformAnchor() {
+        var controller = root.activeNodeDragController
+                         || root.activeNodeResizeController
+        if (!controller || !controller.delegateItem)
+            return Qt.point(
+                transformBadge._displayAnchorX,
+                transformBadge._displayAnchorY
+            )
+        return viewport.canvasToScreen(
+            controller.delegateItem.x + controller.delegateItem.width / 2,
+            controller.delegateItem.y + controller.delegateItem.height / 2
+        )
+    }
+
     // Drag & Drop
 
     DropArea {
+        id: canvasDropArea
+        z: 80
+        enabled: !root.canvasInputBlocked
         anchors.fill: parent
         keys: ["text/uri-list"]
+        property int droppedFileCount: 0
+
+        onEntered: function(drag) {
+            droppedFileCount = drag.urls ? drag.urls.length : 1
+        }
+        onExited: droppedFileCount = 0
 
         onDropped: function(drop) {
             if (drop.hasUrls) {
@@ -994,6 +1202,53 @@ Rectangle {
                     canvasPoint.y
                 )
                 drop.accept()
+            }
+            droppedFileCount = 0
+        }
+
+        Rectangle {
+            anchors.fill: parent
+            visible: opacity > 0.001
+            color: root.appTheme.overlayDim
+            opacity: canvasDropArea.containsDrag ? 0.38 : 0
+
+            Behavior on opacity {
+                NumberAnimation { duration: root.appTheme.durationState }
+            }
+        }
+
+        Rectangle {
+            anchors.fill: parent
+            anchors.margins: 12
+            visible: opacity > 0.001
+            color: "transparent"
+            border.width: 2
+            border.color: root.appTheme.accentMain
+            radius: 8
+            opacity: canvasDropArea.containsDrag ? 1 : 0
+
+            Rectangle {
+                anchors.centerIn: parent
+                width: dropText.implicitWidth + 24
+                height: 34
+                radius: 7
+                color: root.appTheme.bgPopover
+                border.width: 1
+                border.color: root.appTheme.accentMain
+
+                Text {
+                    id: dropText
+                    anchors.centerIn: parent
+                    text: "Drop " + Math.max(1, canvasDropArea.droppedFileCount)
+                          + " files"
+                    color: root.appTheme.textMain
+                    font.family: "Segoe UI Semibold"
+                    font.pointSize: 10
+                }
+            }
+
+            Behavior on opacity {
+                NumberAnimation { duration: root.appTheme.durationState }
             }
         }
     }

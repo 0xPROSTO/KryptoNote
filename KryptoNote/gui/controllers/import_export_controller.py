@@ -38,6 +38,7 @@ class ImportExportController(QObject):
     status_message = Signal(str, str)
     progress_updated = Signal(float, str)
     progress_finished = Signal(str)
+    nodes_imported = Signal(object)
 
     def __init__(self, node_model, service, auto_fit_callback, parent=None,
                  operation_coordinator=None):
@@ -49,6 +50,7 @@ class ImportExportController(QObject):
         self._active_media_import_thread = None
         self._active_media_import_worker = None
         self._media_import_token = None
+        self._imported_node_ids = []
         self._active_media_export_thread = None
         self._active_media_export_worker = None
         self._media_export_token = None
@@ -179,6 +181,7 @@ class ImportExportController(QObject):
             QMessageBox.information(None, "Import", "Another database operation is active.")
             return
         self._media_import_token = token
+        self._imported_node_ids = []
         thread = None
         try:
             self._service.commit_changes()
@@ -231,23 +234,30 @@ class ImportExportController(QObject):
     @Slot(object)
     def _on_async_media_item_imported(self, item):
         self._add_imported_media_node(item)
+        self._imported_node_ids.append(int(item.node_id))
 
     @Slot(int)
     def _on_async_media_import_finished(self, imported_count):
+        imported_ids = list(self._imported_node_ids)
+        self._imported_node_ids = []
         self.status_message.emit(
             f"Imported {imported_count} media file(s).", "normal"
         )
+        if imported_ids:
+            self.nodes_imported.emit(imported_ids)
         self._finish_media_import()
         self.progress_finished.emit("")
 
     @Slot()
     def _on_async_media_import_cancelled(self):
+        self._imported_node_ids = []
         self.status_message.emit("Media import cancelled.", "warning")
         self._finish_media_import()
         self.progress_finished.emit("")
 
     @Slot(str)
     def _on_async_media_import_failed(self, message):
+        self._imported_node_ids = []
         self.status_message.emit(f"Import failed: {message}", "error")
         self._finish_media_import()
         self.progress_finished.emit("")
