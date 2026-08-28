@@ -56,7 +56,7 @@ class _ClampedSpinBox(QSpinBox):
         return max(self.minimum(), min(self.maximum(), value))
 
 
-class _DirectionalSpinBox(QSpinBox):
+class _DirectionalSpinBox(_ClampedSpinBox):
     navigateLeft = Signal()
     navigateRight = Signal()
 
@@ -280,8 +280,8 @@ class ZoomToDialog(_CanvasNavigationDialog):
 
 
 class GoToDialog(_CanvasNavigationDialog):
-    COORDINATE_MINIMUM = -(2**31)
-    COORDINATE_MAXIMUM = 2**31 - 1
+    COORDINATE_MINIMUM = -(2**22)
+    COORDINATE_MAXIMUM = 2**22
 
     def __init__(self, current_x, current_y, parent=None):
         super().__init__(
@@ -363,4 +363,6 @@ class GoToDialog(_CanvasNavigationDialog):
 
     @property
     def coordinates(self):
+        self.x_input.interpretText()
+        self.y_input.interpretText()
         return self.x_input.value(), self.y_input.value()

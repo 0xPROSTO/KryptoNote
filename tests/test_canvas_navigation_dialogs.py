@@ -52,6 +52,10 @@ def test_go_to_enter_and_arrow_navigation_follow_the_field_contract(qt_applicati
     dialog = GoToDialog(12.6, -8.6)
     _show(dialog, qt_application)
 
+    assert dialog.x_input.minimum() == -(2**22)
+    assert dialog.x_input.maximum() == 2**22
+    assert dialog.y_input.minimum() == -(2**22)
+    assert dialog.y_input.maximum() == 2**22
     assert dialog.coordinates == (13, -9)
     assert _has_field_focus(dialog.x_input)
     assert dialog.x_input.lineEdit().selectedText() == "13"
@@ -77,15 +81,15 @@ def test_go_to_enter_and_arrow_navigation_follow_the_field_contract(qt_applicati
     assert dialog.coordinates == (-42, 88)
 
 
-def test_go_to_button_applies_both_values_from_the_first_field(qt_application):
+def test_go_to_button_clamps_both_values_from_the_first_field(qt_application):
     dialog = GoToDialog(0, 0)
     _show(dialog, qt_application)
-    dialog.x_input.setValue(-101)
-    dialog.y_input.setValue(202)
+    dialog.x_input.lineEdit().setText("9000000")
+    dialog.y_input.lineEdit().setText("-9000000")
     dialog.x_input.setFocus()
 
     dialog.action_button.click()
     qt_application.processEvents()
 
     assert dialog.result() == QDialog.DialogCode.Accepted
-    assert dialog.coordinates == (-101, 202)
+    assert dialog.coordinates == (2**22, -(2**22))
