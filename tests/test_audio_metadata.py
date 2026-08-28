@@ -1,7 +1,17 @@
+import os
+import subprocess
+import sys
+import time
+import zlib
+from pathlib import Path
+from types import SimpleNamespace
+
 import cv2
 from mutagen.id3 import TPE1, USLT
 from PIL import Image, PngImagePlugin
 
+import KryptoNote.utils.media_proc as media_proc
+import KryptoNote.utils.secure_temp as secure_temp
 from KryptoNote.core.crypto import CryptoManager
 from KryptoNote.core.database.connection import DatabaseConnection
 from KryptoNote.core.database.repository import NodeRepository
@@ -14,8 +24,10 @@ from KryptoNote.utils.media_proc import (
     _metadata_label,
     _metadata_text_values,
     read_media_metadata,
+    read_mutagen_metadata,
     read_video_embedded_metadata,
 )
+from KryptoNote.utils.secure_temp import cleanup_stale_metadata_temp_dirs
 
 
 def test_artist_and_lyrics_metadata_remain_lossless_in_encrypted_payload():
@@ -125,6 +137,166 @@ def test_video_technical_metadata_is_extracted_for_properties():
     assert values_by_label["Frame count"] == ["240"]
     assert values_by_label["Video codec"] == ["avc1"]
     assert values_by_label["Video bitrate"] == ["4200 kbps"]
+
+
+def test_compressed_id3_metadata_has_one_aggregate_output_budget(
+    monkeypatch,
+    tmp_path,
+):
+    original_zlib = media_proc._mutagen_id3_frames.zlib
+    monkeypatch.setattr(
+        media_proc,
+        "_MAX_MUTAGEN_ID3_DECOMPRESSED_BYTES",
+        64,
+    )
+
+    def oversized_frame(_path, *, easy):
+        assert easy is False
+        media_proc._mutagen_id3_frames.zlib.decompress(
+            zlib.compress(b"A" * 65)
+        )
+
+    monkeypatch.setattr(media_proc, "MutagenFile", oversized_frame)
+    assert read_mutagen_metadata(tmp_path / "oversized.mp3") == ()
+    assert media_proc._mutagen_id3_frames.zlib is original_zlib
+
+    def cumulative_frames(_path, *, easy):
+        assert easy is False
+        bounded_zlib = media_proc._mutagen_id3_frames.zlib
+        bounded_zlib.decompress(zlib.compress(b"A" * 40))
+        bounded_zlib.decompress(zlib.compress(b"B" * 40))
+
+    monkeypatch.setattr(media_proc, "MutagenFile", cumulative_frames)
+    assert read_mutagen_metadata(tmp_path / "cumulative.mp3") == ()
+    assert media_proc._mutagen_id3_frames.zlib is original_zlib
+
+    def bounded_frame(_path, *, easy):
+        assert easy is False
+        decoded = media_proc._mutagen_id3_frames.zlib.decompress(
+            zlib.compress(b"safe metadata")
+        )
+        assert decoded == b"safe metadata"
+        return SimpleNamespace(
+            tags={"TIT2": "Evidence"},
+            info=None,
+            pictures=(),
+        )
+
+    monkeypatch.setattr(media_proc, "MutagenFile", bounded_frame)
+    entries = read_mutagen_metadata(tmp_path / "bounded.mp3")
+    assert entries[0]["label"] == "Title"
+    assert entries[0]["values"] == ["Evidence"]
+    assert media_proc._mutagen_id3_frames.zlib is original_zlib
+
+
+def test_startup_cleanup_removes_plaintext_from_dead_session(tmp_path):
+    session = tmp_path / "kryptonote-meta-424242-0123456789abcdef"
+    session.mkdir()
+    plaintext = session / "media-evidence.mp3"
+    plaintext.write_bytes(b"decrypted evidence")
+    active = tmp_path / "kryptonote-meta-434343-fedcba9876543210"
+    active.mkdir()
+    active_plaintext = active / "media-active.mp3"
+    active_plaintext.write_bytes(b"active evidence")
+    ready = tmp_path / "active-lock-ready"
+    release = tmp_path / "active-lock-release"
+    repository_root = Path(__file__).resolve().parents[1]
+    holder_script = "\n".join(
+        (
+            "import sys",
+            "import time",
+            "from pathlib import Path",
+            "import KryptoNote.utils.secure_temp as secure_temp",
+            "session, ready, release = map(Path, sys.argv[1:4])",
+            "lock = secure_temp._try_lock_session(session, create=True)",
+            "if lock is None: raise SystemExit(3)",
+            "ready.write_text('ready', encoding='utf-8')",
+            "deadline = time.monotonic() + 10.0",
+            "while not release.exists() and time.monotonic() < deadline: time.sleep(0.05)",
+            "secure_temp._release_session_lock(lock)",
+        )
+    )
+    holder = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            holder_script,
+            str(active),
+            str(ready),
+            str(release),
+        ],
+        cwd=repository_root,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        deadline = time.monotonic() + 5.0
+        while not ready.exists() and time.monotonic() < deadline:
+            if holder.poll() is not None:
+                break
+            time.sleep(0.05)
+        assert ready.exists()
+
+        removed = cleanup_stale_metadata_temp_dirs(tmp_path)
+
+        assert removed == 1
+        assert not session.exists()
+        assert active_plaintext.exists()
+    finally:
+        release.write_text("release", encoding="utf-8")
+        try:
+            holder.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            holder.kill()
+            holder.wait(timeout=5)
+            raise
+        cleanup_stale_metadata_temp_dirs(tmp_path)
+
+    assert not active.exists()
+
+
+def test_metadata_watchdog_removes_plaintext_after_abnormal_exit(tmp_path):
+    handoff = tmp_path / "metadata-temp-path.txt"
+    repository_root = Path(__file__).resolve().parents[1]
+    script = "\n".join(
+        (
+            "import os",
+            "import sys",
+            "from pathlib import Path",
+            "from KryptoNote.utils.secure_temp import create_guarded_metadata_temp_file",
+            "descriptor, temp_path = create_guarded_metadata_temp_file('.mp3')",
+            "os.write(descriptor, b'decrypted evidence')",
+            "os.close(descriptor)",
+            "Path(sys.argv[1]).write_text(temp_path, encoding='utf-8')",
+            "os._exit(23)",
+        )
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(handoff)],
+        cwd=repository_root,
+        timeout=15,
+        check=False,
+    )
+
+    assert result.returncode == 23
+    temp_path = Path(handoff.read_text(encoding="utf-8"))
+    deadline = time.monotonic() + 5.0
+    while temp_path.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+
+    try:
+        assert not temp_path.exists()
+    finally:
+        try:
+            temp_path.unlink()
+        except FileNotFoundError:
+            pass
+        try:
+            temp_path.parent.rmdir()
+        except OSError:
+            pass
 
 
 def test_existing_image_metadata_is_backfilled_and_persisted_encrypted(tmp_path):

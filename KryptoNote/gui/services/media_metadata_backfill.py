@@ -1,7 +1,6 @@
 import os
 import shutil
 import sqlite3
-import tempfile
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot
@@ -9,6 +8,11 @@ from PySide6.QtCore import QObject, QThread, Signal, Slot
 from ...core.constants import MEDIA_CHUNK_SIZE
 from ...core.io.stream import BlockEncryptedStream
 from ...utils.media_proc import read_media_metadata, read_mutagen_metadata
+from ...utils.secure_temp import (
+    create_guarded_metadata_temp_file,
+    discard_guarded_metadata_temp_file,
+    metadata_temp_directory,
+)
 
 
 class MediaMetadataBackfillWorker(QObject):
@@ -121,17 +125,15 @@ class MediaMetadataBackfillWorker(QObject):
         temp_path = ""
         try:
             self._raise_if_cancelled()
-            temp_dir = tempfile.gettempdir()
+            temp_dir = metadata_temp_directory()
             if self._total_size > 0:
                 free_bytes = shutil.disk_usage(temp_dir).free
                 if free_bytes < self._total_size + 64 * 1024 * 1024:
                     raise OSError(
                         "Not enough temporary disk space to index media metadata"
                     )
-            descriptor, temp_path = tempfile.mkstemp(
-                prefix="kryptonote-meta-",
-                suffix=self._suffix(),
-                dir=temp_dir,
+            descriptor, temp_path = create_guarded_metadata_temp_file(
+                self._suffix(),
             )
             with os.fdopen(descriptor, "wb") as output:
                 if self._is_chunked:
@@ -158,7 +160,4 @@ class MediaMetadataBackfillWorker(QObject):
             )
         finally:
             if temp_path:
-                try:
-                    os.remove(temp_path)
-                except OSError:
-                    pass
+                discard_guarded_metadata_temp_file(temp_path)

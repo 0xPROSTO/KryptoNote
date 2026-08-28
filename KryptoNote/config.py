@@ -10,7 +10,7 @@ CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 class AppConfig:
 
     APP_NAME = "ZeroXX-KryptoNote"
-    VERSION = "3.10.1"
+    VERSION = "3.10.2"
     COMPANY_NAME = "ZeroXWare"
 
     CHUNK_SIZE = MEDIA_CHUNK_SIZE

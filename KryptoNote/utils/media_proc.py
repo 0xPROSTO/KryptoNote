@@ -1,13 +1,16 @@
 import io
 import math
 import struct
+import threading
 import time
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
 import numpy as np
 from mutagen import File as MutagenFile
+from mutagen.id3 import _frames as _mutagen_id3_frames
 from PIL import ExifTags, Image, ImageOps
 
 from ..core.constants import (
@@ -18,6 +21,8 @@ from ..core.constants import (
 
 _MAX_DECODE_BYTES = 256 * 1024 * 1024
 _MAX_DECODE_PIXELS = _MAX_DECODE_BYTES // 4
+_MAX_MUTAGEN_ID3_DECOMPRESSED_BYTES = 16 * 1024 * 1024
+_MUTAGEN_PARSE_LOCK = threading.RLock()
 # Pillow raises DecompressionBombError above twice this value, keeping a
 # worst-case RGBA decode within the same 256 MiB ceiling as QImageReader.
 Image.MAX_IMAGE_PIXELS = _MAX_DECODE_PIXELS // 2
@@ -428,6 +433,49 @@ def _technical_metadata_values(name, value):
     return _metadata_text_values(value)
 
 
+def _decompress_id3_frame_with_limit(data, limit):
+    if limit <= 0:
+        raise zlib.error("ID3 decompressed metadata budget exhausted")
+    decompressor = zlib.decompressobj()
+    output = decompressor.decompress(data, limit + 1)
+    if len(output) > limit or decompressor.unconsumed_tail:
+        raise zlib.error("ID3 decompressed metadata exceeds the safety limit")
+    output += decompressor.flush(limit + 1 - len(output))
+    if len(output) > limit:
+        raise zlib.error("ID3 decompressed metadata exceeds the safety limit")
+    if not decompressor.eof:
+        raise zlib.error("Incomplete compressed ID3 metadata")
+    return output
+
+
+class _BoundedMutagenId3Zlib:
+    error = zlib.error
+
+    def __init__(self, limit):
+        self._remaining = max(0, int(limit))
+
+    def decompress(self, data):
+        output = _decompress_id3_frame_with_limit(data, self._remaining)
+        self._remaining -= len(output)
+        return output
+
+
+def _load_mutagen_file(file_path):
+    # Mutagen 1.47 expands compressed ID3 frames through module-level
+    # zlib.decompress calls. Swap only that module binding while parsing and
+    # serialize callers so every ID3 route shares one aggregate output budget.
+    with _MUTAGEN_PARSE_LOCK:
+        original_zlib = _mutagen_id3_frames.zlib
+        bounded_zlib = _BoundedMutagenId3Zlib(
+            _MAX_MUTAGEN_ID3_DECOMPRESSED_BYTES
+        )
+        _mutagen_id3_frames.zlib = bounded_zlib
+        try:
+            return MutagenFile(file_path, easy=False)
+        finally:
+            _mutagen_id3_frames.zlib = original_zlib
+
+
 def read_mutagen_metadata(file_path):
     """Return every displayable tag and technical field Mutagen exposes.
 
@@ -437,7 +485,7 @@ def read_mutagen_metadata(file_path):
     """
 
     try:
-        media = MutagenFile(file_path, easy=False)
+        media = _load_mutagen_file(file_path)
     except Exception:
         return ()
     if media is None:

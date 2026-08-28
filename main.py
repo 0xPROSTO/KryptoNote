@@ -1,15 +1,28 @@
 import sys
 
-from PySide6.QtCore import QEventLoop, Qt
-from PySide6.QtGui import QIcon, QImageReader
-from PySide6.QtWidgets import QApplication, QDialog
+from KryptoNote.utils.secure_temp import (
+    METADATA_TEMP_WATCHDOG_ARG,
+    cleanup_stale_metadata_temp_dirs,
+    run_metadata_temp_watchdog,
+)
 
-from KryptoNote.config import Config
-from KryptoNote.gui.theme.theme_manager import get_theme_manager
 
+def main(argv=None):
+    argv = list(sys.argv if argv is None else argv)
+    if len(argv) > 1 and argv[1] == METADATA_TEMP_WATCHDOG_ARG:
+        if len(argv) != 4:
+            return 2
+        return run_metadata_temp_watchdog(argv[2], argv[3])
 
-def main():
-    app = QApplication(sys.argv)
+    from PySide6.QtCore import QEventLoop, Qt
+    from PySide6.QtGui import QIcon, QImageReader
+    from PySide6.QtWidgets import QApplication, QDialog
+
+    from KryptoNote.config import Config
+    from KryptoNote.gui.theme.theme_manager import get_theme_manager
+
+    cleanup_stale_metadata_temp_dirs()
+    app = QApplication(argv)
     QImageReader.setAllocationLimit(256)
     app.setStyle("Fusion")
 
@@ -47,8 +60,8 @@ def main():
         else:
             break
 
-    sys.exit()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
