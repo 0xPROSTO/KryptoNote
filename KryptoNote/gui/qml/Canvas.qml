@@ -31,10 +31,15 @@ Rectangle {
 
     property alias contentScale: viewport.contentScale
     readonly property real minimumScale: viewport.minScale
+    readonly property real maximumScale: viewport.maxScale
     property real _visualDetailScale: 1.0
     readonly property real visualDetailScale: _visualDetailScale
     readonly property real cameraOffsetX: viewport.cameraOffsetX
     readonly property real cameraOffsetY: viewport.cameraOffsetY
+    readonly property point navigationCenter: viewport.screenToCanvas(
+        root._availableScreenCenterX(),
+        root.height / 2
+    )
     property real gridSize: 100.0
     property real gridMain: 500.0
     property bool snapToGrid: root.canvasController ? root.canvasController.snap_to_grid : false
@@ -894,6 +899,31 @@ Rectangle {
             root.width / 2,
             root.height / 2,
             1.0,
+            root.appTheme.motionEnabled
+        )
+    }
+
+    function zoomToPercent(percent) {
+        var targetPercent = Number(percent)
+        if (!isFinite(targetPercent)) return false
+        viewport.setZoomScale(
+            root._availableScreenCenterX(),
+            root.height / 2,
+            targetPercent / 100.0,
+            root.appTheme.motionEnabled
+        )
+        return true
+    }
+
+    function goToCoordinates(targetX, targetY) {
+        targetX = Number(targetX)
+        targetY = Number(targetY)
+        if (!isFinite(targetX) || !isFinite(targetY)) return false
+        return viewport.setCenterOnScreen(
+            targetX,
+            targetY,
+            root._availableScreenCenterX(),
+            root.height / 2,
             root.appTheme.motionEnabled
         )
     }

@@ -50,9 +50,17 @@ class _FakeWindow:
 
     def __init__(self):
         self.dashboard_count = 0
+        self.zoom_to_count = 0
+        self.go_to_count = 0
 
     def open_dashboard(self):
         self.dashboard_count += 1
+
+    def open_zoom_to(self):
+        self.zoom_to_count += 1
+
+    def open_go_to(self):
+        self.go_to_count += 1
 
 
 class _FakeNodeModel:
@@ -168,10 +176,32 @@ def test_command_ranking_favorites_and_action_execution():
 
 
 def test_context_commands_follow_the_current_selection():
-    controller, _window = _controller(
+    controller, window = _controller(
         ({"id": 7, "type": "frame", "selected": True},)
     )
     controller.register_context_commands()
+
+    assert [row["id"] for row in controller.query_commands("exact zoom")] == [
+        "zoom-to"
+    ]
+    assert [row["id"] for row in controller.query_commands("coordinates")] == [
+        "go-to"
+    ]
+    assert [row["id"] for row in controller.query_commands("Go To")] == [
+        "go-to"
+    ]
+    assert [row["id"] for row in controller.query_commands("goto")] == [
+        "go-to"
+    ]
+    assert controller.execute_command("zoom-to")
+    assert controller.execute_command("go-to")
+    assert window.zoom_to_count == 1
+    assert window.go_to_count == 1
+
+    controller._operations.is_busy = True
+    assert not controller.execute_command("zoom-to")
+    assert window.zoom_to_count == 1
+    controller._operations.is_busy = False
 
     frame_commands = {
         row["id"] for row in controller.query_commands("frame")

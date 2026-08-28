@@ -185,6 +185,22 @@ class CommandPaletteController(QObject):
             safe_while_surface_open=True,
         )
         self.register_command(
+            "zoom-to",
+            self._window.open_zoom_to,
+            label="Zoom To",
+            icon="zoom-in",
+            aliases=("set zoom", "exact zoom"),
+            keywords=("canvas", "scale", "percent"),
+        )
+        self.register_command(
+            "go-to",
+            self._window.open_go_to,
+            label="Go To",
+            icon="fit",
+            aliases=("goto", "go to coordinates", "jump to coordinates"),
+            keywords=("canvas", "navigate", "position"),
+        )
+        self.register_command(
             "undo",
             self._canvas.undo_graph,
             label="Undo graph action",

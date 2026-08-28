@@ -64,11 +64,20 @@ Item {{
     function advance(dt) {{ viewport.advanceFrame(dt) }}
     function stopMotion() {{ viewport.stopMotion() }}
     function pan(dx, dy) {{ viewport.panBy(dx, dy) }}
+    function setExactZoom(x, y, scale, animated) {{
+        viewport.setZoomScale(x, y, scale, animated)
+    }}
+    function centerOn(x, y, screenX, screenY, animated) {{
+        return viewport.setCenterOnScreen(
+            x, y, screenX, screenY, animated
+        )
+    }}
     function agePointerPan(milliseconds) {{
         viewport._lastPointerPanTime = Date.now() - milliseconds
     }}
     function releasePan() {{ return viewport.startInertiaIfNeeded() }}
     function inertiaRunning() {{ return viewport._inertiaRunning }}
+    function panRunning() {{ return viewport._panRunning }}
     function inertiaReleaseWindow() {{
         return viewport.inertiaReleaseWindowMs
     }}
@@ -300,6 +309,49 @@ def test_stop_motion_clears_pending_zoom_and_emits_one_terminal_signal():
     assert viewport.finishedCount() == 1
 
 
+def test_exact_zoom_preserves_its_anchor_and_emits_one_terminal_signal():
+    viewport, _engine, _component = _load_viewport()
+    anchor_before = viewport.canvasAt(400, 300)
+
+    viewport.setExactZoom(400, 300, 2.0, False)
+
+    anchor_after = viewport.canvasAt(400, 300)
+    assert viewport.contentScale() == pytest.approx(2.0)
+    assert anchor_after.x() == pytest.approx(anchor_before.x())
+    assert anchor_after.y() == pytest.approx(anchor_before.y())
+    assert viewport.finishedCount() == 1
+
+
+def test_exact_zoom_clamps_to_five_percent_minimum():
+    viewport, _engine, _component = _load_viewport()
+
+    viewport.setExactZoom(400, 300, 0.01, False)
+
+    assert viewport.contentScale() == pytest.approx(0.05)
+
+
+def test_exact_center_preserves_zoom_for_animated_and_immediate_motion():
+    viewport, _engine, _component = _load_viewport()
+    viewport.setExactZoom(400, 300, 1.75, False)
+
+    assert viewport.centerOn(125, -250, 400, 300, False)
+    centered = viewport.canvasAt(400, 300)
+    assert centered.x() == pytest.approx(125)
+    assert centered.y() == pytest.approx(-250)
+    assert viewport.contentScale() == pytest.approx(1.75)
+
+    assert viewport.centerOn(-80, 95, 400, 300, True)
+    for _ in range(30):
+        if not viewport.panRunning():
+            break
+        viewport.advance(1.0 / 120.0)
+    assert not viewport.panRunning()
+    centered = viewport.canvasAt(400, 300)
+    assert centered.x() == pytest.approx(-80)
+    assert centered.y() == pytest.approx(95)
+    assert viewport.contentScale() == pytest.approx(1.75)
+
+
 def test_pointer_pan_inertia_requires_recent_movement():
     viewport, _engine, _component = _load_viewport()
 
@@ -361,6 +413,17 @@ def test_zoom_overlay_bridge_is_only_called_after_motion_finishes():
         "onZoomFinished: function(scale)", 1
     )[1].split("onZoomActiveChanged", 1)[0]
     assert "root.canvasController.report_zoom(scale)" in terminal_block
+
+
+def test_canvas_exposes_exact_zoom_and_coordinate_navigation_bridge():
+    canvas_source = (QML_DIR / "Canvas.qml").read_text(encoding="utf-8")
+
+    assert "readonly property real maximumScale: viewport.maxScale" in canvas_source
+    assert "readonly property point navigationCenter" in canvas_source
+    assert "function zoomToPercent(percent)" in canvas_source
+    assert "viewport.setZoomScale(" in canvas_source
+    assert "function goToCoordinates(targetX, targetY)" in canvas_source
+    assert "viewport.setCenterOnScreen(" in canvas_source
 
 
 def test_viewport_models_are_flushed_once_zoom_finishes():

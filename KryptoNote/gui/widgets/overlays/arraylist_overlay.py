@@ -112,7 +112,7 @@ class ArrayListOverlay(QWidget):
             self.setToolTip(
                 {
                     "snap": "Toggle snap to grid (G)",
-                    "zoom": "Reset zoom to 100% (Ctrl+0)",
+                    "zoom": "Set an exact zoom level (Ctrl+0 resets)",
                     "stats": "Open Knowledge Dashboard",
                 }[row]
             )

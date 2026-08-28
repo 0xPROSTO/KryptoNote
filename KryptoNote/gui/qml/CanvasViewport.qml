@@ -8,7 +8,7 @@ Item {
     // stable angle path on platforms where those deltas are unreliable.
     property bool preferAngleDelta: false
     property real contentScale: 1.0
-    property real minScale: 0.1
+    property real minScale: 0.05
     property real maxScale: 5.0
     property real zoomFactor: 1.20
     property real velocityX: 0
@@ -334,12 +334,39 @@ Item {
 
     function smoothCenterOnScreen(targetX, targetY, screenCenterX, screenCenterY,
                                   onFinished) {
-        stopMotion()
-        _startPan(
-            screenCenterX - targetX * contentScale,
-            screenCenterY - targetY * contentScale,
+        setCenterOnScreen(
+            targetX,
+            targetY,
+            screenCenterX,
+            screenCenterY,
+            true,
             onFinished
         )
+    }
+
+    function setCenterOnScreen(targetX, targetY, screenCenterX, screenCenterY,
+                               animated, onFinished) {
+        targetX = Number(targetX)
+        targetY = Number(targetY)
+        screenCenterX = Number(screenCenterX)
+        screenCenterY = Number(screenCenterY)
+        if (!contentLayer
+                || !isFinite(targetX) || !isFinite(targetY)
+                || !isFinite(screenCenterX) || !isFinite(screenCenterY)) {
+            return false
+        }
+
+        stopMotion()
+        var layerX = screenCenterX - targetX * contentScale
+        var layerY = screenCenterY - targetY * contentScale
+        if (animated) {
+            _startPan(layerX, layerY, onFinished)
+        } else {
+            contentLayer.x = layerX
+            contentLayer.y = layerY
+            if (typeof onFinished === "function") onFinished()
+        }
+        return true
     }
 
     function smoothMoveTo(layerX, layerY, onFinished) {

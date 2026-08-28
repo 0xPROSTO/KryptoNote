@@ -26,8 +26,10 @@ from PySide6.QtGui import (
     QKeySequence,
 )
 from PySide6.QtWidgets import (
+    QDialog,
     QMainWindow,
     QLabel,
+    QPushButton,
     QWidget,
     QVBoxLayout,
     QMessageBox,
@@ -57,6 +59,7 @@ from ..models.viewport_proxy_model import (
     NodeViewportProxyModel,
 )
 from ..widgets.dialogs.about_dialog import AboutDialog, SupportDialog
+from ..widgets.dialogs.canvas_navigation_dialog import GoToDialog, ZoomToDialog
 from ..widgets.dialogs.dashboard_dialog import DashboardDialog
 from ..widgets.dialogs.keybinds_dialog import KeybindsDialog
 from ..widgets.dialogs.theme_dialog import ThemeDialog
@@ -374,7 +377,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self.overlay.set_snap_status(Config.SNAP_TO_GRID)
         self.overlay.set_zoom_status(1.0)
         self.overlay.snap_clicked.connect(self.toggle_snap_to_grid)
-        self.overlay.zoom_clicked.connect(self.reset_zoom)
+        self.overlay.zoom_clicked.connect(self.open_zoom_to)
         self.overlay.stats_clicked.connect(self.open_dashboard)
         self.overlay.raise_()
         self._arraylist_hidden = False
@@ -950,7 +953,6 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             ("add-frame", act_frame, "Add frame", "", "frame", ("new frame",), ("create", "group"), True, False),
             ("search", act_search, "Open search panel", "Ctrl+F", "search", ("search", "find node"), ("notes", "content", "tags"), True, False),
             ("snap-grid", self.act_snap, "Toggle snap to grid", "G", "grid", ("snap to grid",), ("align", "canvas"), False, False),
-            ("reset-zoom", self.act_reset_zoom, "Reset zoom to 100%", "Ctrl+0", "reset", ("actual size", "zoom 100"), ("canvas", "view"), False, False),
             ("keybinds", act_keybinds, "Show all keybinds", "", "keyboard", ("keyboard shortcuts", "hotkeys"), ("help", "keys"), True, True),
             ("about", act_about, "About KryptoNote", "", "info", ("about",), ("version", "help"), True, True),
         )
@@ -989,8 +991,17 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
 
         self.progress_bar = ProgressBarWidget(self)
 
-        self.coords_label = QLabel("X: 0 Y: 0")
-        self.coords_label.setStyleSheet(Theme.Styles.get_status_bar_qss("coords"))
+        self.coords_label = QPushButton("X: 0 Y: 0")
+        self.coords_label.setObjectName("coords_button")
+        self.coords_label.setFlat(True)
+        self.coords_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.coords_label.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        self.coords_label.setToolTip("Go to exact canvas coordinates")
+        self.coords_label.setAccessibleName("Go to canvas coordinates")
+        self.coords_label.setStyleSheet(
+            Theme.Styles.get_coordinate_button_qss()
+        )
+        self.coords_label.clicked.connect(self.open_go_to)
         self.statusBar().setSizeGripEnabled(False)
         self.statusBar().addWidget(self.status_label, 1)
         self.statusBar().addWidget(self.progress_label)
@@ -1172,6 +1183,8 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             self.search_shortcut.setEnabled(enabled)
         if hasattr(self, "overlay"):
             self.overlay.setEnabled(enabled)
+        if hasattr(self, "coords_label"):
+            self.coords_label.setEnabled(enabled)
         if hasattr(self, "view"):
             self.view.setEnabled(not (active and blocking))
         if active and blocking:
@@ -1515,6 +1528,63 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         self._invoke_qml_root("openSearchPanel")
         self._defer_modifier_sync()
 
+    def _navigation_root(self):
+        if self.operation_coordinator.is_busy or not hasattr(self, "view"):
+            return None
+        return self.view.rootObject()
+
+    def open_zoom_to(self):
+        root = self._navigation_root()
+        if root is None:
+            return False
+        try:
+            minimum_percent = int(round(float(root.property("minimumScale")) * 100))
+            maximum_percent = int(round(float(root.property("maximumScale")) * 100))
+        except (TypeError, ValueError):
+            return False
+
+        dialog = ZoomToDialog(
+            minimum_percent,
+            maximum_percent,
+            self,
+        )
+        if (
+            self._exec_dimmed_dialog("zoom-to", dialog)
+            != QDialog.DialogCode.Accepted
+        ):
+            return False
+
+        percent = dialog.zoom_percent
+        self._invoke_qml_root("zoomToPercent", percent)
+        self.status_label.setText(f"Zoom set to {percent}%.")
+        self._defer_modifier_sync()
+        return True
+
+    def open_go_to(self):
+        root = self._navigation_root()
+        if root is None:
+            return False
+
+        center = root.property("navigationCenter")
+        try:
+            current_x = center.x()
+            current_y = center.y()
+        except (AttributeError, TypeError):
+            current_x, current_y = self.canvas_controller.get_viewport_center()
+
+        dialog = GoToDialog(current_x, current_y, self)
+        if (
+            self._exec_dimmed_dialog("go-to", dialog)
+            != QDialog.DialogCode.Accepted
+        ):
+            return False
+
+        target_x, target_y = dialog.coordinates
+        self._invoke_qml_root("goToCoordinates", target_x, target_y)
+        self.status_label.setText(f"Centered on X: {target_x} Y: {target_y}.")
+        self._defer_modifier_sync()
+        return True
+
     def open_about(self):
         dialog = AboutDialog(self)
         self._exec_dimmed_dialog("about", dialog)
@@ -1630,7 +1700,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
                 Theme.Styles.get_status_bar_qss("accent")
             )
             self.coords_label.setStyleSheet(
-                Theme.Styles.get_status_bar_qss("coords")
+                Theme.Styles.get_coordinate_button_qss()
             )
         if hasattr(self, "overlay"):
             self.overlay.update()

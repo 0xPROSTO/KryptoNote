@@ -1148,3 +1148,34 @@ class StyleFactory:
             size = "11px"
 
         return f"padding: {padding}; color: {color}; font-weight: {weight}; font-size: {size};"
+
+    @staticmethod
+    def get_coordinate_button_qss():
+        return f"""
+            QPushButton#coords_button {{
+                padding: 0 10px;
+                color: {Palette.TEXT_MUTED};
+                background: transparent;
+                border: 1px solid transparent;
+                border-radius: 4px;
+                font-family: 'Segoe UI', sans-serif;
+                font-size: 11px;
+                font-weight: bold;
+            }}
+            QPushButton#coords_button:hover {{
+                color: {Palette.TEXT_ACCENT};
+                background: {Palette.ACCENT_LOW};
+            }}
+            QPushButton#coords_button:focus {{
+                color: {Palette.TEXT_MAIN};
+                border-color: {Palette.ACCENT_MAIN};
+            }}
+            QPushButton#coords_button:pressed {{
+                background: {Palette.BG_CONTROL_PRESSED};
+            }}
+            QPushButton#coords_button:disabled {{
+                color: {Palette.TEXT_DISABLED};
+                background: transparent;
+                border-color: transparent;
+            }}
+        """
