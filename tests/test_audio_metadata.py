@@ -149,15 +149,51 @@ def test_compressed_id3_metadata_has_one_aggregate_output_budget(
         "_MAX_MUTAGEN_ID3_DECOMPRESSED_BYTES",
         64,
     )
+    original_decompress = media_proc._decompress_id3_frame_with_limit
+    attempted_limits = []
+
+    def tracked_decompress(data, limit):
+        attempted_limits.append(limit)
+        return original_decompress(data, limit)
+
+    monkeypatch.setattr(
+        media_proc,
+        "_decompress_id3_frame_with_limit",
+        tracked_decompress,
+    )
 
     def oversized_frame(_path, *, easy):
         assert easy is False
-        media_proc._mutagen_id3_frames.zlib.decompress(
-            zlib.compress(b"A" * 65)
-        )
+        bounded_zlib = media_proc._mutagen_id3_frames.zlib
+        for marker in (b"A", b"B", b"C"):
+            try:
+                bounded_zlib.decompress(zlib.compress(marker * 65))
+            except zlib.error:
+                continue
+            raise AssertionError("Oversized ID3 frame was accepted")
 
     monkeypatch.setattr(media_proc, "MutagenFile", oversized_frame)
     assert read_mutagen_metadata(tmp_path / "oversized.mp3") == ()
+    assert attempted_limits == [64, 0, 0]
+    assert media_proc._mutagen_id3_frames.zlib is original_zlib
+
+    def retry_compatible_frame(_path, *, easy):
+        assert easy is False
+        bounded_zlib = media_proc._mutagen_id3_frames.zlib
+        try:
+            bounded_zlib.decompress(b"not-zlib")
+        except zlib.error:
+            pass
+        else:
+            raise AssertionError("Malformed compressed frame was accepted")
+        assert bounded_zlib.decompress(
+            zlib.compress(b"fallback metadata")
+        ) == b"fallback metadata"
+
+    attempted_limits.clear()
+    monkeypatch.setattr(media_proc, "MutagenFile", retry_compatible_frame)
+    assert read_mutagen_metadata(tmp_path / "retry-compatible.mp3") == ()
+    assert attempted_limits == [64, 64]
     assert media_proc._mutagen_id3_frames.zlib is original_zlib
 
     def cumulative_frames(_path, *, easy):

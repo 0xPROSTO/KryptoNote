@@ -433,18 +433,48 @@ def _technical_metadata_values(name, value):
     return _metadata_text_values(value)
 
 
+class _Id3DecompressionError(zlib.error):
+    def __init__(self, message, *, output_size=0, budget_exhausted=False):
+        super().__init__(message)
+        self.output_size = max(0, int(output_size))
+        self.budget_exhausted = bool(budget_exhausted)
+
+
 def _decompress_id3_frame_with_limit(data, limit):
     if limit <= 0:
-        raise zlib.error("ID3 decompressed metadata budget exhausted")
+        raise _Id3DecompressionError(
+            "ID3 decompressed metadata budget exhausted",
+            budget_exhausted=True,
+        )
     decompressor = zlib.decompressobj()
-    output = decompressor.decompress(data, limit + 1)
+    try:
+        output = decompressor.decompress(data, limit + 1)
+    except zlib.error as exc:
+        raise _Id3DecompressionError(str(exc)) from exc
     if len(output) > limit or decompressor.unconsumed_tail:
-        raise zlib.error("ID3 decompressed metadata exceeds the safety limit")
-    output += decompressor.flush(limit + 1 - len(output))
+        raise _Id3DecompressionError(
+            "ID3 decompressed metadata exceeds the safety limit",
+            output_size=len(output),
+            budget_exhausted=True,
+        )
+    try:
+        output += decompressor.flush(limit + 1 - len(output))
+    except zlib.error as exc:
+        raise _Id3DecompressionError(
+            str(exc),
+            output_size=len(output),
+        ) from exc
     if len(output) > limit:
-        raise zlib.error("ID3 decompressed metadata exceeds the safety limit")
+        raise _Id3DecompressionError(
+            "ID3 decompressed metadata exceeds the safety limit",
+            output_size=len(output),
+            budget_exhausted=True,
+        )
     if not decompressor.eof:
-        raise zlib.error("Incomplete compressed ID3 metadata")
+        raise _Id3DecompressionError(
+            "Incomplete compressed ID3 metadata",
+            output_size=len(output),
+        )
     return output
 
 
@@ -455,7 +485,15 @@ class _BoundedMutagenId3Zlib:
         self._remaining = max(0, int(limit))
 
     def decompress(self, data):
-        output = _decompress_id3_frame_with_limit(data, self._remaining)
+        try:
+            output = _decompress_id3_frame_with_limit(data, self._remaining)
+        except _Id3DecompressionError as exc:
+            self._remaining = max(0, self._remaining - exc.output_size)
+            if exc.budget_exhausted:
+                # Mutagen treats frame errors as recoverable and keeps parsing.
+                # Prevent later frames from repeating near-limit work.
+                self._remaining = 0
+            raise
         self._remaining -= len(output)
         return output
 
