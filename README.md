@@ -4,7 +4,7 @@
   <p><strong>Локальная визуальная база знаний для заметок, изображений, видео, аудио и связей между ними.</strong></p>
   <p>Собирайте идеи на бесконечном холсте, превращайте их в понятный граф и храните содержимое проекта на своём устройстве — без регистрации, подписки и обязательного облака.</p>
   <p>
-    <img src="https://img.shields.io/badge/version-3.10.2-e6158b?style=flat-square" alt="Версия 3.10.2">
+    <img src="https://img.shields.io/badge/version-3.10.3-e6158b?style=flat-square" alt="Версия 3.10.3">
     <img src="https://img.shields.io/badge/Python-3-3776ab?style=flat-square&logo=python&logoColor=white" alt="Python 3">
     <img src="https://img.shields.io/badge/dependencies-uv-de5fe9?style=flat-square&logo=astral&logoColor=white" alt="Зависимости управляются uv">
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-38a169?style=flat-square" alt="Лицензия MIT"></a>

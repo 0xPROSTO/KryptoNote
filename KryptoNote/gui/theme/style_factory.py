@@ -315,9 +315,90 @@ class StyleFactory:
                 line-height: 1.5;
                 margin-bottom: 20px;
             }}
-            QLabel#github_link {{
+            QPushButton#about_action_link {{
                 color: {Palette.ACCENT_MAIN};
-                margin-bottom: 20px;
+                background: transparent;
+                border: none;
+                outline: none;
+                padding: 0;
+                margin: 0;
+                min-height: 18px;
+                max-height: 18px;
+                font-size: 12px;
+                font-weight: 400;
+            }}
+            QPushButton#about_action_link:hover,
+            QPushButton#about_action_link:focus {{
+                color: {Palette.ACCENT_HIGH};
+                background: transparent;
+                border: none;
+                outline: none;
+            }}
+            QPushButton#about_action_link:pressed {{
+                color: {Palette.ACCENT_HOVER};
+                background: transparent;
+                border: none;
+            }}
+            QLabel#about_action_separator {{
+                color: {Palette.TEXT_MUTED};
+            }}
+            QLabel#support_title {{
+                color: {Palette.ACCENT_MAIN};
+                font-size: 20px;
+                font-weight: 700;
+            }}
+            QLabel#support_intro {{
+                color: {Palette.TEXT_DIM};
+                font-size: 12px;
+            }}
+            QFrame#wallet_card {{
+                background: {Palette.BG_NODE};
+                border: 1px solid {Palette.BORDER_DEFAULT};
+                border-radius: 8px;
+            }}
+            QLabel#wallet_network {{
+                color: {Palette.TEXT_MAIN};
+                font-size: 13px;
+                font-weight: 700;
+            }}
+            QLabel#wallet_asset {{
+                color: {Palette.TEXT_MUTED};
+                font-size: 12px;
+            }}
+            QLineEdit#wallet_address {{
+                min-height: 30px;
+                padding: 0 9px;
+                color: {Palette.TEXT_MAIN};
+                background: {Palette.BG_INPUT};
+                border: 1px solid {Palette.BORDER_SUBTLE};
+                border-radius: 4px;
+                font-family: Consolas, monospace;
+                font-size: 12px;
+                selection-color: {Palette.ON_ACCENT};
+                selection-background-color: {Palette.ACCENT_MAIN};
+            }}
+            QLineEdit#wallet_address:focus {{
+                border-color: {Palette.ACCENT_MAIN};
+            }}
+            QPushButton#wallet_copy {{
+                min-width: 66px;
+                min-height: 30px;
+                padding: 0 10px;
+                color: {Palette.TEXT_MAIN};
+                background: {Palette.BG_CONTROL};
+                border: 1px solid {Palette.BORDER_DEFAULT};
+                border-radius: 4px;
+                outline: none;
+                font-size: 12px;
+                font-weight: 600;
+            }}
+            QPushButton#wallet_copy:hover,
+            QPushButton#wallet_copy:focus {{
+                background: {Palette.BG_CONTROL_HOVER};
+                border-color: {Palette.ACCENT_MAIN};
+            }}
+            QPushButton#wallet_copy:pressed {{
+                background: {Palette.BG_CONTROL_PRESSED};
             }}
             QPushButton#btn_close {{
                 background: transparent;

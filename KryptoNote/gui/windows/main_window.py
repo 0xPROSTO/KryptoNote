@@ -56,7 +56,7 @@ from ..models.viewport_proxy_model import (
     ConnectionViewportProxyModel,
     NodeViewportProxyModel,
 )
-from ..widgets.dialogs.about_dialog import AboutDialog
+from ..widgets.dialogs.about_dialog import AboutDialog, SupportDialog
 from ..widgets.dialogs.dashboard_dialog import DashboardDialog
 from ..widgets.dialogs.keybinds_dialog import KeybindsDialog
 from ..widgets.dialogs.theme_dialog import ThemeDialog
@@ -1518,6 +1518,9 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
     def open_about(self):
         dialog = AboutDialog(self)
         self._exec_dimmed_dialog("about", dialog)
+        if dialog.support_requested:
+            support_dialog = SupportDialog(self)
+            self._exec_dimmed_dialog("support", support_dialog)
 
     def open_keybinds(self):
         dialog = KeybindsDialog(self)
