@@ -1,12 +1,14 @@
 import os
+import sys
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QObject, QPoint, QUrl, Qt
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtCore import QEvent, QObject, QPoint, QUrl, Qt
+from PySide6.QtGui import QGuiApplication, QKeyEvent
 from PySide6.QtQml import QQmlComponent, QQmlEngine, QQmlExpression
 from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QMainWindow
 
 from KryptoNote.gui.controllers.command_palette_controller import (
     CommandPaletteController,
@@ -215,6 +217,64 @@ def test_double_right_shift_requires_release_and_rejects_left_or_repeat():
     )
 
 
+def test_context_menu_keeps_canvas_modifier_state_in_sync():
+    from KryptoNote.gui.windows.main_window import ZeroXXWindow
+
+    class BareWindow(ZeroXXWindow):
+        def __init__(self):
+            QMainWindow.__init__(self)
+
+    class Detector:
+        def handle_release(self, event, platform):
+            right_shift_releases.append((event.key(), platform))
+
+    modifier_events = []
+    global_events = []
+    right_shift_releases = []
+    window = BareWindow()
+    window._detached_view = None
+    window._should_suppress_canvas_mouse_event = lambda *_args: False
+    window._handle_command_palette_key_press = lambda _event: False
+    window._is_qml_command_palette_open = lambda: False
+    window._is_qml_context_menu_open = lambda: True
+    window._handle_global_modifier_press = lambda event: modifier_events.append(
+        ("press", event.key())
+    )
+    window._handle_global_modifier_release = lambda event: modifier_events.append(
+        ("release", event.key())
+    )
+    window._handle_global_key_press = lambda event: global_events.append(event)
+    window._handle_global_key_release = lambda event: global_events.append(event)
+    window._right_shift_detector = Detector()
+
+    try:
+        window.eventFilter(
+            window,
+            QKeyEvent(
+                QEvent.Type.KeyPress,
+                Qt.Key.Key_Shift,
+                Qt.KeyboardModifier.ShiftModifier,
+            ),
+        )
+        window.eventFilter(
+            window,
+            QKeyEvent(
+                QEvent.Type.KeyRelease,
+                Qt.Key.Key_Shift,
+                Qt.KeyboardModifier.NoModifier,
+            ),
+        )
+    finally:
+        window.deleteLater()
+
+    assert modifier_events == [
+        ("press", Qt.Key.Key_Shift),
+        ("release", Qt.Key.Key_Shift),
+    ]
+    assert not global_events
+    assert right_shift_releases == [(Qt.Key.Key_Shift, sys.platform)]
+
+
 def _load_palette():
     QGuiApplication.instance() or QGuiApplication([])
     engine = QQmlEngine()
@@ -368,6 +428,8 @@ ApplicationWindow {{
     height: 480
     visible: true
     property bool shiftHeld: false
+    property int deletedNodeId: 0
+    property bool deleteBypass: false
 
     Item {{ id: sourceItem; width: 120; height: 80 }}
 
@@ -401,7 +463,10 @@ ApplicationWindow {{
         function paste_from_system_clipboard() {{}}
         function show_node_properties(nodeId) {{}}
         function request_animated_delete(nodeId) {{}}
-        function delete_node_from_context(nodeId, bypassConfirmation) {{}}
+        function delete_node_from_context(nodeId, bypassConfirmation) {{
+            root.deletedNodeId = nodeId
+            root.deleteBypass = bypassConfirmation
+        }}
     }}
 
     App.NodeContextMenu {{
@@ -417,6 +482,26 @@ ApplicationWindow {{
     }}
     function focusedMenuIndex() {{
         return contextMenu.menuEntries().indexOf(root.activeFocusItem)
+    }}
+    function deleteLabel() {{
+        var entries = contextMenu.menuEntries()
+        for (var i = 0; i < entries.length; i++) {{
+            if (entries[i].text === "Delete"
+                    || entries[i].text === "Delete Immediately")
+                return entries[i].text
+        }}
+        return ""
+    }}
+    function triggerDelete(modifiers) {{
+        var entries = contextMenu.menuEntries()
+        for (var i = 0; i < entries.length; i++) {{
+            if (entries[i].text === "Delete"
+                    || entries[i].text === "Delete Immediately") {{
+                entries[i].activate(modifiers)
+                return true
+            }}
+        }}
+        return false
     }}
 }}
 '''.encode()
@@ -481,6 +566,57 @@ def test_pointer_opened_context_menu_starts_neutral_and_accepts_down():
     QTest.keyClick(window, Qt.Key.Key_Down)
     assert menu.property("keyboardNavigationActive")
     assert window.focusedMenuIndex() == 0
+
+
+def test_context_menu_preserves_shift_held_before_open_for_delete():
+    window, _menu, _engine, _component = _load_context_menu()
+    window.setProperty("shiftHeld", True)
+    window.openNodeMenu()
+    QTest.qWait(30)
+
+    # Canvas loses active focus to the popup and resets its modifier aliases.
+    # Delete must use the activation event, not the reset Canvas alias.
+    window.setProperty("shiftHeld", False)
+    assert window.triggerDelete(Qt.KeyboardModifier.ShiftModifier.value)
+    QTest.qWait(20)
+
+    assert window.property("deletedNodeId") == 1
+    assert window.property("deleteBypass")
+
+
+def test_context_menu_delete_label_tracks_held_shift():
+    window, _menu, _engine, _component = _load_context_menu()
+    window.setProperty("shiftHeld", True)
+    window.openNodeMenu()
+    QTest.qWait(30)
+
+    assert window.deleteLabel() == "Delete Immediately"
+    window.setProperty("shiftHeld", False)
+    assert window.deleteLabel() == "Delete"
+
+
+def test_canvas_preserves_modifiers_while_context_menu_owns_focus():
+    canvas_source = (QML_DIR / "Canvas.qml").read_text(encoding="utf-8")
+    focus_handler = canvas_source.split("onActiveFocusChanged:", 1)[1].split(
+        "Keys.onPressed:", 1
+    )[0]
+
+    assert "Qt.callLater" in focus_handler
+    assert "!root.isContextMenuOpen" in focus_handler
+
+
+def test_context_menu_does_not_reuse_shift_after_it_was_released():
+    window, _menu, _engine, _component = _load_context_menu()
+    window.setProperty("shiftHeld", True)
+    window.openNodeMenu()
+    QTest.qWait(30)
+
+    window.setProperty("shiftHeld", False)
+    assert window.triggerDelete(Qt.KeyboardModifier.NoModifier.value)
+    QTest.qWait(20)
+
+    assert window.property("deletedNodeId") == 1
+    assert not window.property("deleteBypass")
 
 
 def test_qml_palette_caps_the_viewport_and_keeps_overflow_scrollable():

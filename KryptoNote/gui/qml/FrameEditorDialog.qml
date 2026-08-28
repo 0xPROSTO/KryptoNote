@@ -357,27 +357,11 @@ Popup {
                 height: 38
                 spacing: 8
 
-                Rectangle {
-                    width: 38
-                    height: 38
-                    radius: 8
-                    color: editor.effectiveColor
-                    border.width: 1
-                    border.color: editor.appTheme.borderHover
-
-                    Rectangle {
-                        anchors.fill: parent
-                        radius: parent.radius
-                        color: "transparent"
-                        border.width: editor.selectedColor.length === 0 ? 2 : 0
-                        border.color: editor.appTheme.textMuted
-                    }
-                }
-
                 ToolButton {
                     id: chooseColorButton
-                    width: parent.width - resetButton.width - 54
+                    width: parent.width - resetButton.width - parent.spacing
                     height: parent.height
+                    leftPadding: 46
                     hoverEnabled: true
                     focusPolicy: Qt.TabFocus
                     display: AbstractButton.TextBesideIcon
@@ -405,7 +389,29 @@ Popup {
                         border.color: chooseColorButton.visualFocus
                                       ? editor.appTheme.accentMain
                                       : editor.appTheme.borderDefault
+
+                        Rectangle {
+                            width: 36
+                            height: 36
+                            anchors.left: parent.left
+                            anchors.leftMargin: 1
+                            anchors.verticalCenter: parent.verticalCenter
+                            radius: 7
+                            color: editor.effectiveColor
+                            border.width: 1
+                            border.color: editor.appTheme.borderHover
+
+                            Rectangle {
+                                anchors.fill: parent
+                                radius: parent.radius
+                                color: "transparent"
+                                border.width: editor.selectedColor.length === 0
+                                              ? 2 : 0
+                                border.color: editor.appTheme.textMuted
+                            }
+                        }
                     }
+                    Accessible.name: "Choose frame color, " + text
                     onClicked: colorPopup.openForColor(
                         editor.effectiveColor
                     )

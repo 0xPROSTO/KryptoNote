@@ -63,6 +63,17 @@ Item {{
     }}
     function advance(dt) {{ viewport.advanceFrame(dt) }}
     function stopMotion() {{ viewport.stopMotion() }}
+    function pan(dx, dy) {{ viewport.panBy(dx, dy) }}
+    function agePointerPan(milliseconds) {{
+        viewport._lastPointerPanTime = Date.now() - milliseconds
+    }}
+    function releasePan() {{ return viewport.startInertiaIfNeeded() }}
+    function inertiaRunning() {{ return viewport._inertiaRunning }}
+    function inertiaReleaseWindow() {{
+        return viewport.inertiaReleaseWindowMs
+    }}
+    function layerX() {{ return viewport.contentLayer.x }}
+    function pointerVelocityX() {{ return viewport.velocityX }}
     function contentScale() {{ return viewport.contentScale }}
     function targetScale() {{ return viewport._zoomTo }}
     function sourceScale() {{ return viewport._zoomFrom }}
@@ -287,6 +298,29 @@ def test_stop_motion_clears_pending_zoom_and_emits_one_terminal_signal():
 
     viewport.stopMotion()
     assert viewport.finishedCount() == 1
+
+
+def test_pointer_pan_inertia_requires_recent_movement():
+    viewport, _engine, _component = _load_viewport()
+
+    viewport.pan(12, 0)
+    stopped_x = viewport.layerX()
+    viewport.agePointerPan(viewport.inertiaReleaseWindow() + 1)
+
+    assert not viewport.releasePan()
+    assert not viewport.inertiaRunning()
+    assert viewport.pointerVelocityX() == pytest.approx(0.0)
+    viewport.advance(1.0 / 60.0)
+    assert viewport.layerX() == pytest.approx(stopped_x)
+
+    viewport.pan(12, 0)
+    released_x = viewport.layerX()
+    viewport.agePointerPan(0)
+
+    assert viewport.releasePan()
+    assert viewport.inertiaRunning()
+    viewport.advance(1.0 / 60.0)
+    assert viewport.layerX() > released_x
 
 
 def test_visual_detail_and_connection_geometry_do_not_follow_tween_frames():

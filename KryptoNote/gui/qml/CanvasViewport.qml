@@ -21,6 +21,7 @@ Item {
     property real keyboardTurnAcceleration: 36000
     readonly property real referenceFrameTime: 1.0 / 60.0
     readonly property real inertiaDecayPerReferenceFrame: 0.82
+    readonly property real inertiaReleaseWindowMs: 50.0
     property bool keyboardPanLeft: false
     property bool keyboardPanRight: false
     property bool keyboardPanUp: false
@@ -33,6 +34,7 @@ Item {
     property bool _continuousZoomGestureActive: false
     property bool _panRunning: false
     property bool _initialized: false
+    property double _lastPointerPanTime: 0.0
     property real _lastViewportWidth: 0.0
     property real _lastViewportHeight: 0.0
     readonly property bool zoomActive: _zoomRunning
@@ -168,6 +170,7 @@ Item {
         keyboardPanDown = false
         velocityX = 0
         velocityY = 0
+        _lastPointerPanTime = 0.0
         keyboardVelocityX = 0
         keyboardVelocityY = 0
         _pendingZoomLog = 0.0
@@ -185,15 +188,34 @@ Item {
         contentLayer.x += dx
         contentLayer.y += dy
         if (updateVelocity) {
+            var now = Date.now()
+            if (_lastPointerPanTime > 0
+                    && now - _lastPointerPanTime
+                       > inertiaReleaseWindowMs) {
+                velocityX = 0
+                velocityY = 0
+            }
             velocityX = velocityX * 0.4 + dx * 1.85
             velocityY = velocityY * 0.4 + dy * 1.85
+            if (Math.abs(dx) + Math.abs(dy) > 0.0001)
+                _lastPointerPanTime = now
         }
     }
 
     function startInertiaIfNeeded() {
-        if (Math.abs(velocityX) + Math.abs(velocityY) > 2) {
+        var inputAge = _lastPointerPanTime > 0
+                ? Math.max(0.0, Date.now() - _lastPointerPanTime)
+                : Infinity
+        _lastPointerPanTime = 0.0
+        _inertiaRunning = false
+        if (inputAge <= inertiaReleaseWindowMs
+                && Math.abs(velocityX) + Math.abs(velocityY) > 2) {
             _inertiaRunning = true
+            return true
         }
+        velocityX = 0
+        velocityY = 0
+        return false
     }
 
     function zoomAt(mouseX, mouseY, zoomIn) {

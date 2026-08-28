@@ -7,6 +7,10 @@ from PySide6.QtCore import QObject, QSettings, Signal
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QApplication
 
+from ...core.constants import (
+    DEFAULT_VACUUM_THRESHOLD_BYTES,
+    VACUUM_THRESHOLD_OPTIONS_BYTES,
+)
 from ...core.connection_geometry import (
     CONNECTION_ANCHOR_MODES,
     CONNECTION_CORNER_STYLES,
@@ -421,6 +425,7 @@ class ThemeManager(QObject):
         self._committed_font_family = SYSTEM_DEFAULT_FONT
         self._motion_mode = DEFAULT_MOTION_MODE
         self._committed_motion_mode = DEFAULT_MOTION_MODE
+        self._vacuum_threshold_bytes = DEFAULT_VACUUM_THRESHOLD_BYTES
 
     @property
     def settings(self):
@@ -452,6 +457,12 @@ class ThemeManager(QObject):
     def committed_motion_mode(self):
         return self._committed_motion_mode
 
+    @property
+    def vacuum_threshold_bytes(self):
+        """Global threshold for automatic post-delete database compaction."""
+
+        return self._vacuum_threshold_bytes
+
     @staticmethod
     def font_choices():
         return Typography.available_font_choices()
@@ -465,6 +476,18 @@ class ThemeManager(QObject):
     def validate_motion_mode(value):
         value = str(value or DEFAULT_MOTION_MODE).strip().lower()
         return value if value in MOTION_MODES else DEFAULT_MOTION_MODE
+
+    @staticmethod
+    def validate_vacuum_threshold_bytes(value):
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            return DEFAULT_VACUUM_THRESHOLD_BYTES
+        return (
+            value
+            if value in VACUUM_THRESHOLD_OPTIONS_BYTES
+            else DEFAULT_VACUUM_THRESHOLD_BYTES
+        )
 
     @staticmethod
     def defaults():
@@ -567,12 +590,21 @@ class ThemeManager(QObject):
         self._store.beginGroup("motion")
         stored_motion = self._store.value("mode", DEFAULT_MOTION_MODE)
         self._store.endGroup()
+        self._store.beginGroup("maintenance")
+        stored_vacuum_threshold = self._store.value(
+            "vacuum_threshold_bytes",
+            DEFAULT_VACUUM_THRESHOLD_BYTES,
+        )
+        self._store.endGroup()
         loaded = self.validate(values)
         self._committed = loaded
         self._font_family = self.validate_font_family(stored_font)
         self._committed_font_family = self._font_family
         self._motion_mode = self.validate_motion_mode(stored_motion)
         self._committed_motion_mode = self._motion_mode
+        self._vacuum_threshold_bytes = self.validate_vacuum_threshold_bytes(
+            stored_vacuum_threshold
+        )
         self._apply(loaded)
         self.fontChanged.emit()
         self.motionChanged.emit()
@@ -644,6 +676,15 @@ class ThemeManager(QObject):
 
     def reset_motion_mode(self):
         self.preview_motion_mode(DEFAULT_MOTION_MODE)
+
+    def commit_vacuum_threshold_bytes(self, value):
+        value = self.validate_vacuum_threshold_bytes(value)
+        self._store.beginGroup("maintenance")
+        self._store.setValue("vacuum_threshold_bytes", value)
+        self._store.endGroup()
+        self._store.sync()
+        self._vacuum_threshold_bytes = value
+        return value
 
     def restore_committed(self):
         self.preview(self._committed)

@@ -732,13 +732,16 @@ Popup {
         }
 
         MenuButton {
-            text: "Delete"
+            id: deleteMenuButton
+            text: contextPopup.shiftHeld ? "Delete Immediately" : "Delete"
             iconSource: "../assets/icons/delete.svg"
             textColor: contextPopup.appTheme.btnCancelText
             visible: contextPopup.targetKind === "node"
             onClicked: {
                 contextPopup.pendingDeleteNodeId = contextPopup.nodeId
-                contextPopup.pendingDeleteBypass = contextPopup.shiftHeld
+                contextPopup.pendingDeleteBypass = Boolean(
+                    deleteMenuButton.activationModifiers & Qt.ShiftModifier
+                )
                 contextPopup.close()
             }
         }
@@ -787,7 +790,13 @@ Popup {
         property alias rightText: shortcutLabel.text
         property color textColor: contextPopup.appTheme.textMain
         property url iconSource: ""
+        property int activationModifiers: Qt.NoModifier
         signal clicked()
+
+        function activate(modifiers) {
+            menuButton.activationModifiers = modifiers
+            menuButton.clicked()
+        }
 
         ToolButton {
             id: menuIcon
@@ -843,13 +852,13 @@ Popup {
             if (contextPopup.handleNavigationKey(event)) return
             if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter
                     || event.key === Qt.Key_Space) {
-                menuButton.clicked()
+                menuButton.activate(event.modifiers)
                 event.accepted = true
             }
         }
         Accessible.role: Accessible.Button
         Accessible.name: text
-        Accessible.onPressAction: menuButton.clicked()
+        Accessible.onPressAction: menuButton.activate(Qt.NoModifier)
 
         MouseArea {
             id: menuMouseArea
@@ -869,7 +878,9 @@ Popup {
                 if (contextPopup.hoveredMenuEntry === menuButton)
                     contextPopup.hoveredMenuEntry = null
             }
-            onClicked: menuButton.clicked()
+            onClicked: function(mouse) {
+                menuButton.activate(mouse.modifiers)
+            }
         }
     }
 }

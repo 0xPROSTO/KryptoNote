@@ -129,3 +129,28 @@ def test_audio_viewer_initial_focus_targets_media_playback_controls():
     assert 'objectName: "audioPlayButton"' in surface
     assert 'objectName: "videoPlayButton"' in surface
     assert "mediaSurface.focusPrimaryMediaControl()" in panel
+
+
+def test_media_viewport_meets_divider_without_padding():
+    surface = (QML_DIR / "MediaViewerSurface.qml").read_text(encoding="utf-8")
+
+    assert "anchors.bottom: descriptionDivider.verticalCenter" in surface
+
+
+def test_manual_description_split_is_scoped_to_media_node():
+    class SignalStub:
+        def emit(self):
+            return None
+
+    class ViewerStub:
+        _node_id = 41
+        _description_split_ratio = 0.20
+        _description_split_ratios = {}
+        sessionChanged = SignalStub()
+
+    viewer = ViewerStub()
+    ViewerController.set_description_split_ratio(viewer, 0.35)
+    viewer._node_id = 42
+    ViewerController.set_description_split_ratio(viewer, 0.60)
+
+    assert viewer._description_split_ratios == {41: 0.35, 42: 0.60}

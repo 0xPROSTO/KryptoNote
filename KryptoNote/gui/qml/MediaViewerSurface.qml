@@ -690,7 +690,7 @@ FocusScope {
                 anchors.leftMargin: 1
                 anchors.rightMargin: 1
                 anchors.topMargin: 1
-                anchors.bottom: descriptionDivider.top
+                anchors.bottom: descriptionDivider.verticalCenter
                 color: "transparent"
                 clip: true
 

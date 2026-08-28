@@ -116,7 +116,12 @@ def wait_for(qt_app, predicate, timeout=1.0):
     return bool(predicate())
 
 
-def make_controller(node_model, graph=None, parent=None):
+def make_controller(
+    node_model,
+    graph=None,
+    parent=None,
+    vacuum_threshold_provider=None,
+):
     graph = graph or DeferredGraphCommands()
     coordinator = OperationCoordinator()
     controller = DeleteController(
@@ -125,6 +130,7 @@ def make_controller(node_model, graph=None, parent=None):
         graph,
         parent=parent,
         operation_coordinator=coordinator,
+        vacuum_threshold_provider=vacuum_threshold_provider,
     )
     return controller, graph, coordinator
 
@@ -286,9 +292,155 @@ def test_model_reconciliation_exception_still_finishes_and_schedules_resync(qt_a
     assert wait_for(qt_app, lambda: parent.reload_count == 1)
 
 
-def test_vacuum_policy_comes_from_database_type_not_stale_ui_size():
-    assert not NodeRepository._requires_vacuum_for_item("text", 500 * 1024 * 1024)
-    assert NodeRepository._requires_vacuum_for_item("video", 0)
+def test_vacuum_policy_uses_reusable_space_and_can_be_disabled():
+    threshold = 10 * 1024 * 1024
+    predicate = NodeRepository._requires_vacuum_for_reusable_space
+
+    assert not predicate(500 * 1024 * 1024, 0)
+    assert not predicate(threshold - 1, threshold)
+    assert predicate(threshold, threshold)
+
+
+def test_delete_reports_committed_reusable_space(tmp_path):
+    from KryptoNote.core.database.connection import open_sqlite_connection
+
+    db_path = tmp_path / "vacuum-policy.sqlite"
+    connection = open_sqlite_connection(str(db_path))
+    connection.executescript(
+        "CREATE TABLE items ("
+        "id INTEGER PRIMARY KEY, type TEXT, total_size INTEGER, "
+        "storage_state TEXT);"
+        "CREATE TABLE media_chunks ("
+        "id INTEGER PRIMARY KEY, item_id INTEGER, data BLOB);"
+    )
+    connection.execute(
+        "INSERT INTO items VALUES (1, 'image', ?, 'ready')",
+        (512 * 1024,),
+    )
+    connection.execute(
+        "INSERT INTO media_chunks (item_id, data) VALUES (1, zeroblob(?))",
+        (512 * 1024,),
+    )
+    connection.commit()
+    db = SimpleNamespace(
+        db_path=str(db_path),
+        conn=connection,
+        cursor=connection.cursor(),
+    )
+    repository = NodeRepository(db)
+    completed = threading.Event()
+    results = []
+    errors = []
+    try:
+        repository.delete_node_cascade(
+            1,
+            vacuum_threshold_bytes=1,
+            on_success=lambda result: (
+                results.append(result),
+                completed.set(),
+            ),
+            on_error=lambda error: (errors.append(error), completed.set()),
+        )
+        assert completed.wait(2.0)
+        assert not errors
+        assert results[0].reusable_bytes > 0
+        assert results[0].requires_vacuum
+    finally:
+        repository.close()
+        db.cursor.close()
+        connection.close()
+
+
+def test_text_delete_does_not_request_vacuum_with_reusable_space(
+    tmp_path,
+):
+    from KryptoNote.core.database.connection import open_sqlite_connection
+
+    db_path = tmp_path / "text-delete-vacuum-policy.sqlite"
+    connection = open_sqlite_connection(str(db_path))
+    connection.executescript(
+        "CREATE TABLE items ("
+        "id INTEGER PRIMARY KEY, type TEXT, total_size INTEGER, "
+        "storage_state TEXT);"
+        "CREATE TABLE media_chunks ("
+        "id INTEGER PRIMARY KEY, item_id INTEGER, data BLOB);"
+    )
+    connection.execute(
+        "INSERT INTO items VALUES (1, 'text', 0, 'ready')"
+    )
+    connection.execute(
+        "INSERT INTO items VALUES (2, 'image', ?, 'ready')",
+        (512 * 1024,),
+    )
+    connection.execute(
+        "INSERT INTO media_chunks (item_id, data) VALUES (2, zeroblob(?))",
+        (512 * 1024,),
+    )
+    connection.commit()
+    connection.execute("DELETE FROM media_chunks WHERE item_id=2")
+    connection.execute("DELETE FROM items WHERE id=2")
+    connection.commit()
+    db = SimpleNamespace(
+        db_path=str(db_path),
+        conn=connection,
+        cursor=connection.cursor(),
+    )
+    repository = NodeRepository(db)
+    completed = threading.Event()
+    results = []
+    errors = []
+    try:
+        repository.delete_node_cascade(
+            1,
+            vacuum_threshold_bytes=1,
+            on_success=lambda result: (
+                results.append(result),
+                completed.set(),
+            ),
+            on_error=lambda error: (errors.append(error), completed.set()),
+        )
+        assert completed.wait(2.0)
+        assert not errors
+        assert results[0].reusable_bytes > 0
+        assert not results[0].requires_vacuum
+    finally:
+        repository.close()
+        db.cursor.close()
+        connection.close()
+
+
+def test_delete_passes_global_vacuum_threshold_to_repository():
+    node_model = FakeNodeModel("video")
+    controller, graph, _coordinator = make_controller(
+        node_model,
+        vacuum_threshold_provider=lambda: 0,
+    )
+
+    controller.request_animated_delete(1)
+
+    assert graph.delete_calls[0][1]["vacuum_threshold_bytes"] == 0
+
+
+def test_vacuum_threshold_setting_persists_and_validates(tmp_path):
+    from PySide6.QtCore import QSettings
+
+    from KryptoNote.gui.theme.theme_manager import ThemeManager
+
+    settings_path = tmp_path / "maintenance.ini"
+    manager = ThemeManager(
+        store=QSettings(str(settings_path), QSettings.Format.IniFormat)
+    )
+    manager.load()
+    manager.commit_vacuum_threshold_bytes(5 * 1024 * 1024 * 1024)
+
+    reloaded = ThemeManager(
+        store=QSettings(str(settings_path), QSettings.Format.IniFormat)
+    )
+    reloaded.load()
+    assert reloaded.vacuum_threshold_bytes == 5 * 1024 * 1024 * 1024
+
+    reloaded.commit_vacuum_threshold_bytes(123)
+    assert reloaded.vacuum_threshold_bytes == 10 * 1024 * 1024
 
 
 class MemoryDb:

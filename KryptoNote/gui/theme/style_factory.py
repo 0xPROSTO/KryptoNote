@@ -525,6 +525,42 @@ class StyleFactory:
                 selection-background-color: {Palette.ACCENT_LOW};
                 selection-color: {Palette.TEXT_MAIN};
             }}
+            QLabel#maintenance_hint {{
+                color: {Palette.TEXT_MUTED};
+                font-size: 9pt;
+            }}
+            QLabel#vacuum_threshold_value {{
+                color: {Palette.TEXT_MAIN};
+                font-size: 9pt;
+                font-weight: 600;
+            }}
+            QLabel#vacuum_threshold_scale {{
+                color: {Palette.TEXT_MUTED};
+                font-size: 8pt;
+            }}
+            QSlider#vacuum_threshold_slider {{
+                min-height: 28px;
+            }}
+            QSlider#vacuum_threshold_slider::groove:horizontal {{
+                height: 4px;
+                background: {Palette.BORDER_SUBTLE};
+                border-radius: 2px;
+            }}
+            QSlider#vacuum_threshold_slider::sub-page:horizontal {{
+                background: {Palette.ACCENT_MAIN};
+                border-radius: 2px;
+            }}
+            QSlider#vacuum_threshold_slider::handle:horizontal {{
+                width: 16px;
+                margin: -6px 0;
+                background: {Palette.BG_CONTROL_HOVER};
+                border: 2px solid {Palette.ACCENT_MAIN};
+                border-radius: 8px;
+            }}
+            QSlider#vacuum_threshold_slider::handle:horizontal:hover,
+            QSlider#vacuum_threshold_slider::handle:horizontal:focus {{
+                background: {Palette.TEXT_MAIN};
+            }}
             QPushButton:checked {{
                 color: {Palette.TEXT_MAIN};
                 background: {Palette.ACCENT_LOW};
@@ -591,10 +627,18 @@ class StyleFactory:
                 background: {Palette.BG_CONTROL_HOVER};
             }}
             QPushButton#theme_apply {{
+                min-width: 88px;
+                min-height: 34px;
+                padding: 0 14px;
                 color: {Palette.ON_ACCENT};
                 background: {Palette.ACCENT_MAIN};
                 border-color: {Palette.ACCENT_MAIN};
                 font-weight: 600;
+            }}
+            QPushButton[footerAction="true"] {{
+                min-width: 88px;
+                min-height: 34px;
+                padding: 0 14px;
             }}
             QPushButton#theme_apply:hover {{
                 background: {Palette.ACCENT_HOVER};

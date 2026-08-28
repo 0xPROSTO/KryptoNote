@@ -2354,20 +2354,22 @@ class NodeRepository:
         self.conn.commit()
 
     @staticmethod
-    def _requires_vacuum_for_item(item_type, total_size):
-        """Apply the auto-vacuum policy to authoritative DB metadata."""
+    def _requires_vacuum_for_reusable_space(
+        reusable_bytes,
+        threshold_bytes=AUTO_VACUUM_THRESHOLD_BYTES,
+    ):
+        """Return whether SQLite can reclaim the configured amount of space."""
 
-        normalized_type = str(item_type or "").strip().lower()
-        if normalized_type == "text":
-            return False
-        return (
-            normalized_type in PLAYABLE_NODE_TYPES
-            or int(total_size or 0) >= AUTO_VACUUM_THRESHOLD_BYTES
-        )
+        try:
+            threshold = int(threshold_bytes)
+        except (TypeError, ValueError):
+            threshold = AUTO_VACUUM_THRESHOLD_BYTES
+        return threshold > 0 and int(reusable_bytes or 0) >= threshold
 
     def delete_node_cascade(
         self,
         item_id,
+        vacuum_threshold_bytes=AUTO_VACUUM_THRESHOLD_BYTES,
         on_start_vacuum=None,
         on_finish_vacuum=None,
         on_waiting_lock=None,
@@ -2384,10 +2386,6 @@ class NodeRepository:
 
         item_type = str(row[0]) if row else ""
         total_size = int(row[1] or 0) if row else 0
-        requires_vacuum = self._requires_vacuum_for_item(
-            item_type,
-            total_size,
-        )
         result_box = {}
 
         if row:
@@ -2445,11 +2443,22 @@ class NodeRepository:
                 )
 
         def report_success():
+            stats = read_database_space_stats(
+                getattr(self.conn_manager, "db_path", ":memory:")
+            )
+            reusable_bytes = int(stats.reusable_bytes)
             result = DeletionResult(
                 item_ids=(int(item_id),),
                 item_types=(item_type,) if row else (),
                 deleted_bytes=int(result_box.get("deleted_bytes", 0)),
-                requires_vacuum=requires_vacuum,
+                reusable_bytes=reusable_bytes,
+                requires_vacuum=(
+                    str(item_type).strip().lower() in MEDIA_NODE_TYPES
+                    and self._requires_vacuum_for_reusable_space(
+                        reusable_bytes,
+                        vacuum_threshold_bytes,
+                    )
+                ),
             )
             if on_success:
                 on_success(result)
@@ -2473,6 +2482,7 @@ class NodeRepository:
     def delete_nodes_cascade(
         self,
         item_ids,
+        vacuum_threshold_bytes=AUTO_VACUUM_THRESHOLD_BYTES,
         on_start_vacuum=None,
         on_finish_vacuum=None,
         on_waiting_lock=None,
@@ -2518,10 +2528,6 @@ class NodeRepository:
             metadata[0]
             for item_id in item_ids
             if (metadata := row_by_id.get(int(item_id))) is not None
-        )
-        requires_vacuum = any(
-            self._requires_vacuum_for_item(item_type, total_size)
-            for item_type, total_size in row_by_id.values()
         )
         result_box = {}
 
@@ -2601,11 +2607,25 @@ class NodeRepository:
                 )
 
         def report_success():
+            stats = read_database_space_stats(
+                getattr(self.conn_manager, "db_path", ":memory:")
+            )
+            reusable_bytes = int(stats.reusable_bytes)
             result = DeletionResult(
                 item_ids=tuple(int(item_id) for item_id in item_ids),
                 item_types=item_types,
                 deleted_bytes=int(result_box.get("deleted_bytes", 0)),
-                requires_vacuum=requires_vacuum,
+                reusable_bytes=reusable_bytes,
+                requires_vacuum=(
+                    any(
+                        str(item_type).strip().lower() in MEDIA_NODE_TYPES
+                        for item_type in item_types
+                    )
+                    and self._requires_vacuum_for_reusable_space(
+                        reusable_bytes,
+                        vacuum_threshold_bytes,
+                    )
+                ),
             )
             if on_success:
                 on_success(result)

@@ -4,11 +4,11 @@ import threading
 from PySide6.QtCore import QObject, QTimer, Qt, Signal, Slot
 from PySide6.QtWidgets import QDialog, QWidget
 
-from ...core.constants import AUTO_VACUUM_THRESHOLD_BYTES, PLAYABLE_NODE_TYPES
 from ...core.database.operations import DatabaseOperationProgress, DeletionResult
 from ...core.exceptions import InsufficientDiskSpaceError
 from ...utils.gui_utils import center_on_parent_window
 from ..services.operation_coordinator import OperationCoordinator
+from ..theme.theme_manager import get_theme_manager
 from ..widgets.dialogs.confirmation_dialog import ConfirmationDialog
 
 
@@ -41,12 +41,17 @@ class DeleteController(QObject):
         graph_commands,
         parent=None,
         operation_coordinator=None,
+        vacuum_threshold_provider=None,
     ):
         super().__init__(parent)
         self._node_model = node_model
         self._conn_model = connection_model
         self._graph_commands = graph_commands
         self._operations = operation_coordinator or OperationCoordinator(self)
+        self._vacuum_threshold_provider = (
+            vacuum_threshold_provider
+            or (lambda: get_theme_manager().vacuum_threshold_bytes)
+        )
         self._delete_token = None
         self._delete_started_token = None
         self._delete_ids = ()
@@ -168,6 +173,7 @@ class DeleteController(QObject):
             if len(ids) == 1:
                 self._graph_commands.delete_node_after_animation(
                     ids[0],
+                    vacuum_threshold_bytes=self._vacuum_threshold_provider(),
                     on_start_vacuum=on_start,
                     on_finish_vacuum=on_finished,
                     on_waiting_lock=on_waiting_lock,
@@ -178,6 +184,7 @@ class DeleteController(QObject):
             else:
                 self._graph_commands.delete_nodes_after_animation(
                     ids,
+                    vacuum_threshold_bytes=self._vacuum_threshold_provider(),
                     on_start_vacuum=on_start,
                     on_finish_vacuum=on_finished,
                     on_waiting_lock=on_waiting_lock,
@@ -489,18 +496,6 @@ class DeleteController(QObject):
         reload_from_db = getattr(parent, "load_from_db", None)
         if callable(reload_from_db):
             QTimer.singleShot(0, reload_from_db)
-
-    @classmethod
-    def _node_requires_vacuum(cls, node):
-        """Compatibility predicate for callers that still use the helper."""
-
-        if not node or str(node.get("type") or "").lower() == "text":
-            return False
-        return bool(
-            node.get("type") in PLAYABLE_NODE_TYPES
-            or int(node.get("total_size") or 0)
-            >= AUTO_VACUUM_THRESHOLD_BYTES
-        )
 
     @staticmethod
     def _delete_phase(message):

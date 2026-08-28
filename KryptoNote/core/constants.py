@@ -8,7 +8,15 @@ different lists in each layer.
 
 
 MEDIA_CHUNK_SIZE = 4 * 1024 * 1024
-AUTO_VACUUM_THRESHOLD_BYTES = 10 * 1024 * 1024
+MEBIBYTE = 1024 * 1024
+VACUUM_THRESHOLD_OPTIONS_BYTES = tuple(
+    value * MEBIBYTE
+    for value in (0, 10, 25, 50, 100, 200, 500, 1024, 2048, 5120, 10240)
+)
+DEFAULT_VACUUM_THRESHOLD_BYTES = 10 * MEBIBYTE
+# Compatibility name for older callers. The policy now compares this value
+# with SQLite's reusable page space, not with the deleted item's size.
+AUTO_VACUUM_THRESHOLD_BYTES = DEFAULT_VACUUM_THRESHOLD_BYTES
 
 # Extensions understood without probing the platform multimedia backend.
 # ``QMediaFormat`` may expose additional formats at runtime; the importer

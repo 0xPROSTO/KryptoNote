@@ -12,11 +12,16 @@ from PySide6.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
+    QSlider,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
+from KryptoNote.core.constants import (
+    DEFAULT_VACUUM_THRESHOLD_BYTES,
+    VACUUM_THRESHOLD_OPTIONS_BYTES,
+)
 from KryptoNote.core.connection_geometry import (
     connection_path_commands,
 )
@@ -152,6 +157,7 @@ class ThemeDialog(FramelessWindowDragMixin, QDialog):
         self._font_draft = self._original_font_family
         self._original_motion_mode = self._manager.motion_mode
         self._motion_draft = self._original_motion_mode
+        self._vacuum_threshold_draft = self._manager.vacuum_threshold_bytes
         profile = (
             self._project_store.load_project_appearance()
             if self._project_store is not None
@@ -278,6 +284,8 @@ class ThemeDialog(FramelessWindowDragMixin, QDialog):
         self._build_motion_section(general_layout)
         self._separator(general_layout)
         self._build_font_section(general_layout)
+        self._separator(general_layout)
+        self._build_database_maintenance_section(general_layout)
         general_layout.addStretch()
         self._settings_pages.addWidget(general)
 
@@ -311,17 +319,19 @@ class ThemeDialog(FramelessWindowDragMixin, QDialog):
         footer_layout.setSpacing(8)
 
         reset_all = QPushButton("Reset all")
-        reset_all.setAccessibleName("Reset all appearance settings")
+        reset_all.setAccessibleName("Reset all settings")
         reset_all.clicked.connect(self._reset_all)
         footer_layout.addWidget(reset_all)
         footer_layout.addStretch()
 
         cancel = QPushButton("Cancel")
+        cancel.setProperty("footerAction", True)
         cancel.clicked.connect(self.reject)
         footer_layout.addWidget(cancel)
 
         apply_button = QPushButton("Apply")
         apply_button.setObjectName("theme_apply")
+        apply_button.setProperty("footerAction", True)
         apply_button.setDefault(True)
         apply_button.clicked.connect(self._apply_and_accept)
         footer_layout.addWidget(apply_button)
@@ -469,6 +479,72 @@ class ThemeDialog(FramelessWindowDragMixin, QDialog):
             self._set_motion_draft,
         )
         layout.addWidget(row)
+
+    def _build_database_maintenance_section(self, layout):
+        self._section_header(
+            layout,
+            "Automatic cleanup",
+            self._reset_vacuum_threshold,
+        )
+
+        hint = QLabel(
+            "After deleting media, clean up when unused database space "
+            "reaches this amount. Lower values run more often; cleanup "
+            "may take a while, but frees disk space."
+        )
+        hint.setObjectName("maintenance_hint")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(12)
+
+        self._vacuum_slider = QSlider(Qt.Orientation.Horizontal)
+        self._vacuum_slider.setObjectName("vacuum_threshold_slider")
+        self._vacuum_slider.setRange(
+            0,
+            len(VACUUM_THRESHOLD_OPTIONS_BYTES) - 1,
+        )
+        self._vacuum_slider.setSingleStep(1)
+        self._vacuum_slider.setPageStep(1)
+        self._vacuum_slider.setTickInterval(1)
+        self._vacuum_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self._vacuum_slider.valueChanged.connect(
+            self._set_vacuum_threshold_index
+        )
+        row.addWidget(self._vacuum_slider, 1)
+
+        self._vacuum_value_label = QLabel()
+        self._vacuum_value_label.setObjectName("vacuum_threshold_value")
+        self._vacuum_value_label.setMinimumWidth(136)
+        self._vacuum_value_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        row.addWidget(self._vacuum_value_label)
+        layout.addLayout(row)
+
+        scale_row = QHBoxLayout()
+        scale_row.setContentsMargins(0, 0, 148, 0)
+        scale_row.setSpacing(0)
+        for text in (
+            "Never",
+            "10",
+            "25",
+            "50",
+            "100",
+            "200",
+            "500",
+            "1 GB",
+            "2 GB",
+            "5 GB",
+            "10 GB",
+        ):
+            scale = QLabel(text)
+            scale.setObjectName("vacuum_threshold_scale")
+            scale.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            scale_row.addWidget(scale, 1)
+        layout.addLayout(scale_row)
 
     def _build_connections_section(self, layout):
         self._section_header(layout, "Connections", self._reset_connections)
@@ -711,6 +787,14 @@ class ThemeDialog(FramelessWindowDragMixin, QDialog):
         self._motion_draft = self._manager.preview_motion_mode(value)
         self._sync_controls()
 
+    def _set_vacuum_threshold_index(self, index):
+        index = max(
+            0,
+            min(int(index), len(VACUUM_THRESHOLD_OPTIONS_BYTES) - 1),
+        )
+        self._vacuum_threshold_draft = VACUUM_THRESHOLD_OPTIONS_BYTES[index]
+        self._sync_vacuum_controls()
+
     def _switch_scope(self, scope):
         if scope not in self._drafts or scope == self._scope:
             return
@@ -736,6 +820,10 @@ class ThemeDialog(FramelessWindowDragMixin, QDialog):
     def _reset_motion(self):
         self._set_motion_draft(DEFAULT_MOTION_MODE)
 
+    def _reset_vacuum_threshold(self):
+        self._vacuum_threshold_draft = DEFAULT_VACUUM_THRESHOLD_BYTES
+        self._sync_controls()
+
     def _reset_connections(self):
         defaults = ThemeManager.defaults()
         self._set_draft(
@@ -758,6 +846,7 @@ class ThemeDialog(FramelessWindowDragMixin, QDialog):
         self._manager.reset_font_family()
         self._motion_draft = DEFAULT_MOTION_MODE
         self._manager.reset_motion_mode()
+        self._vacuum_threshold_draft = DEFAULT_VACUUM_THRESHOLD_BYTES
         self._sync_controls()
 
     def _choose_custom_color(self):
@@ -805,6 +894,7 @@ class ThemeDialog(FramelessWindowDragMixin, QDialog):
         ):
             blockers.append(QSignalBlocker(button))
         blockers.append(QSignalBlocker(self._font_combo))
+        blockers.append(QSignalBlocker(self._vacuum_slider))
 
         self._scope_buttons[self._scope].setChecked(True)
         self._motion_buttons[self._motion_draft].setChecked(True)
@@ -814,6 +904,13 @@ class ThemeDialog(FramelessWindowDragMixin, QDialog):
             font_index = self._font_combo.findData(SYSTEM_DEFAULT_FONT)
             self._font_draft = SYSTEM_DEFAULT_FONT
         self._font_combo.setCurrentIndex(font_index)
+        vacuum_index = VACUUM_THRESHOLD_OPTIONS_BYTES.index(
+            self._manager.validate_vacuum_threshold_bytes(
+                self._vacuum_threshold_draft
+            )
+        )
+        self._vacuum_slider.setValue(vacuum_index)
+        self._sync_vacuum_controls()
         for color, button in self._accent_buttons.items():
             button.setChecked(self._draft.accent_seed == color)
         self._style_buttons[self._draft.connection_style].setChecked(True)
@@ -905,6 +1002,9 @@ class ThemeDialog(FramelessWindowDragMixin, QDialog):
             self._manager.commit(global_settings)
             self._manager.commit_font_family(self._font_draft)
             self._manager.commit_motion_mode(self._motion_draft)
+            self._manager.commit_vacuum_threshold_bytes(
+                self._vacuum_threshold_draft
+            )
             self._manager.preview(
                 project_settings
                 if self._scope == "project"
@@ -916,12 +1016,27 @@ class ThemeDialog(FramelessWindowDragMixin, QDialog):
             self._manager.preview_motion_mode(self._original_motion_mode)
             QMessageBox.critical(
                 self,
-                "Appearance Settings",
-                f"Could not save appearance settings:\n{error}",
+                "Settings",
+                f"Could not save settings:\n{error}",
             )
             return
         self._applied = True
         super().accept()
+
+    def _sync_vacuum_controls(self):
+        value = self._manager.validate_vacuum_threshold_bytes(
+            self._vacuum_threshold_draft
+        )
+        if value == 0:
+            label = "Never"
+        elif value >= 1024 * 1024 * 1024:
+            label = f"{value // (1024 * 1024 * 1024)} GB unused"
+        else:
+            label = f"{value // (1024 * 1024)} MB unused"
+        self._vacuum_value_label.setText(label)
+        self._vacuum_slider.setAccessibleName(
+            f"Automatic database cleanup: {label}"
+        )
 
     def reject(self):
         self._color_timer.stop()

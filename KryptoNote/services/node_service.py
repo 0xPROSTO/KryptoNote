@@ -184,6 +184,7 @@ class NodeService:
     def delete_node_cascade(
             self,
             item_id,
+            vacuum_threshold_bytes=None,
             on_start_vacuum=None,
             on_finish_vacuum=None,
             on_waiting_lock=None,
@@ -193,6 +194,7 @@ class NodeService:
     ):
         return self.repo.delete_node_cascade(
             item_id,
+            vacuum_threshold_bytes=vacuum_threshold_bytes,
             on_start_vacuum=on_start_vacuum,
             on_finish_vacuum=on_finish_vacuum,
             on_waiting_lock=on_waiting_lock,
@@ -204,6 +206,7 @@ class NodeService:
     def delete_nodes_cascade(
             self,
             item_ids,
+            vacuum_threshold_bytes=None,
             on_start_vacuum=None,
             on_finish_vacuum=None,
             on_waiting_lock=None,
@@ -213,6 +216,7 @@ class NodeService:
     ):
         return self.repo.delete_nodes_cascade(
             item_ids,
+            vacuum_threshold_bytes=vacuum_threshold_bytes,
             on_start_vacuum=on_start_vacuum,
             on_finish_vacuum=on_finish_vacuum,
             on_waiting_lock=on_waiting_lock,

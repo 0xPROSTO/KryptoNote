@@ -33,6 +33,7 @@ class DeletionResult:
     item_ids: tuple[int, ...]
     item_types: tuple[str, ...]
     deleted_bytes: int = 0
+    reusable_bytes: int = 0
     requires_vacuum: bool = False
 
 

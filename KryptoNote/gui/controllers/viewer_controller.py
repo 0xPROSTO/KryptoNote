@@ -602,12 +602,12 @@ class ViewerController(QObject):
         value = max(0.10, min(0.90, value))
         if (
             abs(value - self._description_split_ratio) < 0.0001
-            and self._media_type in self._description_split_ratios
+            and self._node_id in self._description_split_ratios
         ):
             return
         self._description_split_ratio = value
-        if self._media_type:
-            self._description_split_ratios[self._media_type] = value
+        if self._node_id > 0:
+            self._description_split_ratios[self._node_id] = value
         self.sessionChanged.emit()
 
     @Slot(str, result=bool)
@@ -842,7 +842,7 @@ class ViewerController(QObject):
             self._description_dirty = False
         self._audio_waveform = waveform
         media_type = str(node.get("type") or "")
-        manual_split = self._description_split_ratios.get(media_type)
+        manual_split = self._description_split_ratios.get(self._node_id)
         if manual_split is not None:
             self._description_split_ratio = manual_split
         elif media_type == "audio":

@@ -674,7 +674,13 @@ Rectangle {
 
     onActiveFocusChanged: {
         if (!activeFocus) {
-            resetModifiers()
+            // Popup focus stays inside the canvas interaction surface. Keep
+            // modifiers live so context actions can reflect the held keys;
+            // defer the check because Popup.visible settles with the focus.
+            Qt.callLater(function() {
+                if (!root.activeFocus && !root.isContextMenuOpen)
+                    root.resetModifiers()
+            })
         }
     }
 

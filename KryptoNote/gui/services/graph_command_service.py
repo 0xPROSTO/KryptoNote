@@ -18,6 +18,7 @@ class GraphCommandService:
     def delete_node_after_animation(
         self,
         node_id,
+        vacuum_threshold_bytes=None,
         on_start_vacuum=None,
         on_finish_vacuum=None,
         on_waiting_lock=None,
@@ -27,6 +28,7 @@ class GraphCommandService:
     ):
         return self._node_service.delete_node_cascade(
             node_id,
+            vacuum_threshold_bytes=vacuum_threshold_bytes,
             on_start_vacuum=on_start_vacuum,
             on_finish_vacuum=on_finish_vacuum,
             on_waiting_lock=on_waiting_lock,
@@ -38,6 +40,7 @@ class GraphCommandService:
     def delete_nodes_after_animation(
         self,
         node_ids,
+        vacuum_threshold_bytes=None,
         on_start_vacuum=None,
         on_finish_vacuum=None,
         on_waiting_lock=None,
@@ -55,6 +58,7 @@ class GraphCommandService:
 
         return self._node_service.delete_nodes_cascade(
             node_ids,
+            vacuum_threshold_bytes=vacuum_threshold_bytes,
             on_start_vacuum=on_start_vacuum,
             on_finish_vacuum=on_finish_vacuum,
             on_waiting_lock=on_waiting_lock,

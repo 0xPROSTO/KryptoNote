@@ -124,6 +124,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
     def __init__(self, db_path, db_conn=None, crypto=None, repo=None, service=None):
         QMainWindow.__init__(self)
         self.is_windows = sys.platform == "win32"
+        self._initial_canvas_focus_pending = self.is_windows
         self._window_state_service = WindowStateService()
         self._theme_manager = get_theme_manager()
 
@@ -1791,18 +1792,18 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
                 return True
             if self._is_qml_command_palette_open():
                 return super().eventFilter(watched, event)
+            self._handle_global_modifier_press(event)
             if self._is_qml_context_menu_open():
                 return super().eventFilter(watched, event)
-            self._handle_global_modifier_press(event)
             if self._handle_global_key_press(event):
                 return True
         if event.type() == QEvent.Type.KeyRelease:
             self._right_shift_detector.handle_release(event, sys.platform)
             if self._is_qml_command_palette_open():
                 return super().eventFilter(watched, event)
+            self._handle_global_modifier_release(event)
             if self._is_qml_context_menu_open():
                 return super().eventFilter(watched, event)
-            self._handle_global_modifier_release(event)
             if self._handle_global_key_release(event):
                 return True
         return super().eventFilter(watched, event)
@@ -2423,6 +2424,7 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
             self._schedule_qml_render_recovery()
         elif event.type() == QEvent.Type.ActivationChange:
             if self.isActiveWindow():
+                self._schedule_initial_canvas_focus()
                 # Window regained focus — modifiers may have been released
                 # inside a native dialog (QFileDialog, etc.).
                 QTimer.singleShot(0, self._sync_modifier_state)
@@ -2431,8 +2433,30 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
         super().showEvent(event)
         if self.is_windows:
             self._apply_native_dwm_attributes()
+            if self._initial_canvas_focus_pending:
+                # Establish the canvas as this window's focus child before
+                # the first paint. Otherwise Qt may choose the first TabFocus
+                # child, which is the Minimize title-bar button.
+                self.view.setFocus(Qt.FocusReason.ActiveWindowFocusReason)
+            self._schedule_initial_canvas_focus()
         self._connect_frame_clock_screen()
         self._schedule_qml_render_recovery()
+
+    def _schedule_initial_canvas_focus(self):
+        if self._initial_canvas_focus_pending:
+            QTimer.singleShot(0, self._apply_initial_canvas_focus)
+
+    def _apply_initial_canvas_focus(self):
+        if not self._initial_canvas_focus_pending:
+            return
+        if (
+            not self.isVisible()
+            or not self.isActiveWindow()
+            or self.windowState() & Qt.WindowState.WindowMinimized
+        ):
+            return
+        self._initial_canvas_focus_pending = False
+        self.view.setFocus(Qt.FocusReason.ActiveWindowFocusReason)
 
     def _connect_frame_clock_screen(self):
         handle = self.windowHandle()

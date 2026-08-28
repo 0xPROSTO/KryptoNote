@@ -81,11 +81,6 @@ class DashboardDialog(FramelessWindowDragMixin, QDialog):
 
         overview = self._section("Project overview")
         overview_layout = overview.layout()
-        overview_grid = QGridLayout()
-        overview_grid.setContentsMargins(0, 0, 0, 0)
-        overview_grid.setHorizontalSpacing(20)
-        overview_grid.setVerticalSpacing(5)
-
         rows = [
             ("Project created", self.stats.get("project_created_label", "-")),
             ("Last modified", self.stats.get("last_modified_label", "-")),
@@ -104,36 +99,37 @@ class DashboardDialog(FramelessWindowDragMixin, QDialog):
             ("Media payload", self.stats.get("media_size_label", "0 B")),
             ("Last backup", self.stats.get("last_backup_label", "Never")),
         ]
-        for index, (label, value) in enumerate(rows):
-            row = index // 2
-            col = (index % 2) * 2
-            overview_grid.addWidget(self._label(label), row, col)
-            overview_grid.addWidget(self._value(str(value)), row, col + 1)
-        overview_layout.addLayout(overview_grid)
+        overview_columns = QHBoxLayout()
+        overview_columns.setContentsMargins(0, 0, 0, 0)
+        overview_columns.setSpacing(14)
+        overview_columns.addWidget(self._overview_column(rows[::2]), 1)
+        overview_columns.addWidget(self._vertical_divider())
+        overview_columns.addWidget(self._overview_column(rows[1::2]), 1)
+        overview_layout.addLayout(overview_columns)
         layout.addWidget(overview)
 
         graph = self._section("Graph health")
         graph_layout = graph.layout()
-        graph_grid = QGridLayout()
-        graph_grid.setContentsMargins(0, 0, 0, 0)
-        graph_grid.setHorizontalSpacing(10)
-        graph_grid.setVerticalSpacing(0)
+        graph_row = QHBoxLayout()
+        graph_row.setContentsMargins(0, 0, 0, 0)
+        graph_row.setSpacing(10)
         graph_rows = [
             ("Connected nodes", self.stats.get("connected_node_count", 0)),
             ("Orphan nodes", self.stats.get("orphan_node_count", 0)),
             ("Avg links / node", self.stats.get("avg_links_per_node_label", "0.00")),
         ]
-        for column, (label, value) in enumerate(graph_rows):
+        for index, (label, value) in enumerate(graph_rows):
             metric = QWidget()
             metric_layout = QHBoxLayout(metric)
-            metric_layout.setContentsMargins(0, 0, 0, 0)
+            metric_layout.setContentsMargins(4, 0, 4, 0)
             metric_layout.setSpacing(8)
             metric_layout.addWidget(self._label(label))
             metric_layout.addStretch()
             metric_layout.addWidget(self._value(str(value)))
-            graph_grid.addWidget(metric, 0, column)
-            graph_grid.setColumnStretch(column, 1)
-        graph_layout.addLayout(graph_grid)
+            graph_row.addWidget(metric, 1)
+            if index < len(graph_rows) - 1:
+                graph_row.addWidget(self._vertical_divider())
+        graph_layout.addLayout(graph_row)
         layout.addWidget(graph)
 
         types = self._section("Nodes by type")
@@ -181,6 +177,29 @@ class DashboardDialog(FramelessWindowDragMixin, QDialog):
         heading.setObjectName("dashboard_heading")
         layout.addWidget(heading)
         return frame
+
+    def _overview_column(self, rows):
+        column = QWidget()
+        grid = QGridLayout(column)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(5)
+        for row, (label, value) in enumerate(rows):
+            grid.addWidget(self._label(label), row, 0)
+            value_label = self._value(str(value))
+            value_label.setAlignment(
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+            )
+            grid.addWidget(value_label, row, 1)
+        grid.setColumnStretch(0, 1)
+        return column
+
+    @staticmethod
+    def _vertical_divider():
+        divider = QFrame()
+        divider.setObjectName("dashboard_divider")
+        divider.setFixedWidth(1)
+        return divider
 
     @staticmethod
     def _label(text):
@@ -262,6 +281,10 @@ class DashboardDialog(FramelessWindowDragMixin, QDialog):
                 background: {palette.BG_PANEL};
                 border: 1px solid {palette.BORDER_DEFAULT};
                 border-radius: 8px;
+            }}
+            QFrame#dashboard_divider {{
+                background: {palette.BORDER_SUBTLE};
+                border: none;
             }}
             QLabel#dashboard_metric_value {{
                 color: {palette.TEXT_MAIN};

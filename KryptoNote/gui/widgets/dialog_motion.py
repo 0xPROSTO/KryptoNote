@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from PySide6.QtCore import (
+    QEvent,
     QEasingCurve,
     QParallelAnimationGroup,
     Property,
     QPropertyAnimation,
     QRectF,
+    QTimer,
+    Signal,
     Qt,
 )
 from PySide6.QtGui import QPainter
@@ -22,6 +25,7 @@ from PySide6.QtWidgets import (
 ENTER_SCALE = 0.92
 ENTER_OPACITY = 0.0
 EXIT_SCALE = 0.94
+SURFACE_READY_TIMEOUT_MS = 50
 
 
 def _system_motion_enabled(widget=None) -> bool:
@@ -92,6 +96,8 @@ def widget_motion_duration(widget, kind) -> int:
 class _DialogMotionSurface(QWidget):
     """Transient native surface used while the real dialog stays transparent."""
 
+    presentationReady = Signal()
+
     def __init__(self, pixmap):
         super().__init__(
             None,
@@ -104,6 +110,10 @@ class _DialogMotionSurface(QWidget):
         self._pixmap = pixmap
         self._scale = 1.0
         self._surface_opacity = 1.0
+        self._native_window = None
+        self._painted_once = False
+        self._presentation_ready = False
+        self._ready_check_scheduled = False
         self.setAttribute(
             Qt.WidgetAttribute.WA_TranslucentBackground,
             True,
@@ -117,6 +127,57 @@ class _DialogMotionSurface(QWidget):
             True,
         )
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
+    def monitor_presentation(self, native_window):
+        """Track when the proxy has both an exposed window and painted frame."""
+
+        previous = self._native_window
+        if previous is native_window:
+            return
+        if previous is not None:
+            try:
+                previous.removeEventFilter(self)
+            except RuntimeError:
+                pass
+        self._native_window = native_window
+        if native_window is not None:
+            native_window.installEventFilter(self)
+
+    def is_presentation_ready(self):
+        return self._presentation_ready
+
+    def _schedule_ready_check(self):
+        if self._presentation_ready or self._ready_check_scheduled:
+            return
+        self._ready_check_scheduled = True
+        # The queued check runs after QWidget's backing-store flush for the
+        # paint event. Hiding the real dialog earlier can expose a blank DWM
+        # frame even though the proxy already reports QWidget.visible == True.
+        QTimer.singleShot(0, self._confirm_presentation_ready)
+
+    def _confirm_presentation_ready(self):
+        self._ready_check_scheduled = False
+        if self._presentation_ready or not self._painted_once:
+            return
+        native_window = self._native_window
+        if native_window is None:
+            return
+        try:
+            exposed = native_window.isExposed()
+        except RuntimeError:
+            return
+        if not exposed:
+            return
+        self._presentation_ready = True
+        self.presentationReady.emit()
+
+    def eventFilter(self, watched, event):
+        if (
+            watched is self._native_window
+            and event.type() == QEvent.Type.Expose
+        ):
+            self._schedule_ready_check()
+        return super().eventFilter(watched, event)
 
     def _get_scale(self):
         return self._scale
@@ -167,6 +228,9 @@ class _DialogMotionSurface(QWidget):
             self._pixmap,
             QRectF(self._pixmap.rect()),
         )
+        painter.end()
+        self._painted_once = True
+        self._schedule_ready_check()
 
 
 class DialogMotionMixin:
@@ -185,6 +249,10 @@ class DialogMotionMixin:
         self._dialog_motion_group = None
         self._dialog_motion_window = None
         self._dialog_motion_proxy = None
+        self._dialog_motion_proxy_wait_timer = None
+        self._dialog_motion_proxy_wait_target = None
+        self._dialog_motion_proxy_ready_callback = None
+        self._dialog_motion_proxy_timeout_callback = None
         self._dialog_motion_prepared = False
         self._dialog_motion_pending_result = None
         self._dialog_motion_bypass = False
@@ -267,6 +335,7 @@ class DialogMotionMixin:
             self._dialog_motion_proxy = None
 
     def _dialog_motion_clear_proxy(self):
+        self._dialog_motion_cancel_proxy_wait()
         proxy = getattr(self, "_dialog_motion_proxy", None)
         self._dialog_motion_proxy = None
         if proxy is None:
@@ -295,6 +364,7 @@ class DialogMotionMixin:
             proxy.createWinId()
             proxy_window = proxy.windowHandle()
             dialog_window = self._dialog_motion_native_surface()
+            proxy.monitor_presentation(proxy_window)
             if proxy_window is not None and dialog_window is not None:
                 proxy_window.setTransientParent(dialog_window)
         except RuntimeError:
@@ -302,6 +372,67 @@ class DialogMotionMixin:
             return None
         self._dialog_motion_proxy = proxy
         return proxy
+
+    def _dialog_motion_cancel_proxy_wait(self):
+        timer = getattr(self, "_dialog_motion_proxy_wait_timer", None)
+        self._dialog_motion_proxy_wait_timer = None
+        if timer is not None:
+            timer.stop()
+            timer.deleteLater()
+
+        proxy = getattr(self, "_dialog_motion_proxy_wait_target", None)
+        self._dialog_motion_proxy_wait_target = None
+        if proxy is not None:
+            try:
+                proxy.presentationReady.disconnect(
+                    self._dialog_motion_proxy_presented
+                )
+            except (RuntimeError, TypeError):
+                pass
+        self._dialog_motion_proxy_ready_callback = None
+        self._dialog_motion_proxy_timeout_callback = None
+
+    def _dialog_motion_wait_for_proxy(self, ready_callback, timeout_callback):
+        proxy = getattr(self, "_dialog_motion_proxy", None)
+        if proxy is None:
+            return False
+
+        self._dialog_motion_cancel_proxy_wait()
+        self._dialog_motion_proxy_wait_target = proxy
+        self._dialog_motion_proxy_ready_callback = ready_callback
+        self._dialog_motion_proxy_timeout_callback = timeout_callback
+        proxy.presentationReady.connect(self._dialog_motion_proxy_presented)
+
+        if proxy.is_presentation_ready():
+            self._dialog_motion_complete_proxy_wait(ready=True)
+            return True
+
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+        timer.setInterval(SURFACE_READY_TIMEOUT_MS)
+        timer.timeout.connect(self._dialog_motion_proxy_wait_timed_out)
+        self._dialog_motion_proxy_wait_timer = timer
+        timer.start()
+        return True
+
+    def _dialog_motion_proxy_presented(self):
+        proxy = getattr(self, "_dialog_motion_proxy_wait_target", None)
+        if proxy is None or self.sender() is not proxy:
+            return
+        self._dialog_motion_complete_proxy_wait(ready=True)
+
+    def _dialog_motion_proxy_wait_timed_out(self):
+        self._dialog_motion_complete_proxy_wait(ready=False)
+
+    def _dialog_motion_complete_proxy_wait(self, *, ready):
+        callback = (
+            self._dialog_motion_proxy_ready_callback
+            if ready
+            else self._dialog_motion_proxy_timeout_callback
+        )
+        self._dialog_motion_cancel_proxy_wait()
+        if callback is not None:
+            callback()
 
     def _dialog_motion_show_proxy(self):
         proxy = getattr(self, "_dialog_motion_proxy", None)
@@ -315,6 +446,7 @@ class DialogMotionMixin:
             self._dialog_motion_proxy = None
 
     def _dialog_motion_restore_visuals(self):
+        self._dialog_motion_cancel_proxy_wait()
         surface = self._dialog_motion_native_surface()
         if surface is not None:
             try:
@@ -472,7 +604,7 @@ class DialogMotionMixin:
         if self._dialog_motion_bypass:
             super().done(result)
             return
-        if self._dialog_motion_phase == "exit":
+        if self._dialog_motion_phase in {"exit_wait", "exit"}:
             return
         if not self.isVisible() or not self._dialog_motion_allowed():
             self._dialog_motion_notify_dismiss()
@@ -480,7 +612,7 @@ class DialogMotionMixin:
             return
 
         self._dialog_motion_pending_result = result
-        self._dialog_motion_phase = "exit"
+        self._dialog_motion_phase = "exit_wait"
         self._dialog_motion_stop_group()
         surface = self._dialog_motion_native_surface()
         if surface is None:
@@ -493,12 +625,32 @@ class DialogMotionMixin:
             proxy = self._dialog_motion_prepare_proxy(1.0, 1.0)
         if proxy is not None:
             self._dialog_motion_show_proxy()
+        if self._dialog_motion_wait_for_proxy(
+            self._dialog_motion_begin_exit,
+            self._dialog_motion_fallback_exit,
+        ):
+            return
+        self._dialog_motion_fallback_exit()
+
+    def _dialog_motion_begin_exit(self):
+        if self._dialog_motion_phase != "exit_wait":
+            return
+        proxy = self._dialog_motion_proxy
+        if proxy is None or not proxy.is_presentation_ready():
+            self._dialog_motion_fallback_exit()
+            return
+
+        surface = self._dialog_motion_native_surface()
+        if surface is not None:
             try:
+                # The proxy has already painted an exposed native frame. Keep
+                # the live dialog visible until this exact handoff point.
                 surface.setOpacity(0.0)
             except RuntimeError:
                 self._dialog_motion_window = None
+        self._dialog_motion_phase = "exit"
         end_scale = None
-        if proxy is not None and self._dialog_motion_spatial_allowed():
+        if self._dialog_motion_spatial_allowed():
             end_scale = min(EXIT_SCALE, float(proxy.scale))
         started = self._dialog_motion_start_group(
             end_opacity=0.0,
@@ -509,6 +661,32 @@ class DialogMotionMixin:
         )
         self._dialog_motion_notify_dismiss()
         if not started:
+            result = self._dialog_motion_pending_result
+            self._dialog_motion_finish_done(result)
+
+    def _dialog_motion_fallback_exit(self):
+        if self._dialog_motion_phase != "exit_wait":
+            return
+        surface = self._dialog_motion_native_surface()
+        if surface is not None:
+            try:
+                # If the compositor never exposes the proxy, an opacity-only
+                # exit on the real window is preferable to a missing frame.
+                surface.setOpacity(1.0)
+            except RuntimeError:
+                self._dialog_motion_window = None
+        self._dialog_motion_clear_proxy()
+        self._dialog_motion_phase = "exit"
+        started = self._dialog_motion_start_group(
+            end_opacity=0.0,
+            end_scale=None,
+            duration=widget_motion_duration(self, "dialog_exit"),
+            easing=QEasingCurve.Type.InOutCubic,
+            finished=self._dialog_motion_finish_exit,
+        )
+        self._dialog_motion_notify_dismiss()
+        if not started:
+            result = self._dialog_motion_pending_result
             self._dialog_motion_finish_done(result)
 
     def _dialog_motion_finish_exit(self):
@@ -523,6 +701,7 @@ class DialogMotionMixin:
         self._dialog_motion_finish_done(result)
 
     def _dialog_motion_finish_done(self, result):
+        self._dialog_motion_cancel_proxy_wait()
         self._dialog_motion_stop_group()
         self._dialog_motion_pending_result = None
         self._dialog_motion_phase = "idle"
