@@ -2,6 +2,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QDialog
 
+from KryptoNote.core.constants import CANVAS_INTERACTIVE_COORDINATE_LIMIT
 from KryptoNote.gui.widgets.dialogs.canvas_navigation_dialog import (
     GoToDialog,
     ZoomToDialog,
@@ -52,10 +53,10 @@ def test_go_to_enter_and_arrow_navigation_follow_the_field_contract(qt_applicati
     dialog = GoToDialog(12.6, -8.6)
     _show(dialog, qt_application)
 
-    assert dialog.x_input.minimum() == -(2**22)
-    assert dialog.x_input.maximum() == 2**22
-    assert dialog.y_input.minimum() == -(2**22)
-    assert dialog.y_input.maximum() == 2**22
+    assert dialog.x_input.minimum() == -CANVAS_INTERACTIVE_COORDINATE_LIMIT
+    assert dialog.x_input.maximum() == CANVAS_INTERACTIVE_COORDINATE_LIMIT
+    assert dialog.y_input.minimum() == -CANVAS_INTERACTIVE_COORDINATE_LIMIT
+    assert dialog.y_input.maximum() == CANVAS_INTERACTIVE_COORDINATE_LIMIT
     assert dialog.coordinates == (13, -9)
     assert _has_field_focus(dialog.x_input)
     assert dialog.x_input.lineEdit().selectedText() == "13"
@@ -81,7 +82,7 @@ def test_go_to_enter_and_arrow_navigation_follow_the_field_contract(qt_applicati
     assert dialog.coordinates == (-42, 88)
 
 
-def test_go_to_button_clamps_both_values_from_the_first_field(qt_application):
+def test_go_to_accepts_coordinates_beyond_the_old_navigation_guard(qt_application):
     dialog = GoToDialog(0, 0)
     _show(dialog, qt_application)
     dialog.x_input.lineEdit().setText("9000000")
@@ -92,4 +93,24 @@ def test_go_to_button_clamps_both_values_from_the_first_field(qt_application):
     qt_application.processEvents()
 
     assert dialog.result() == QDialog.DialogCode.Accepted
-    assert dialog.coordinates == (2**22, -(2**22))
+    assert dialog.coordinates == (9_000_000, -9_000_000)
+
+
+def test_go_to_uses_whole_values_at_the_interactive_boundary(
+    qt_application,
+):
+    dialog = GoToDialog(0, 0)
+    _show(dialog, qt_application)
+    x_value = CANVAS_INTERACTIVE_COORDINATE_LIMIT - 0.0625
+    y_value = -CANVAS_INTERACTIVE_COORDINATE_LIMIT + 0.125
+    dialog.x_input.lineEdit().setText(format(x_value, ".17g"))
+    dialog.y_input.lineEdit().setText(format(y_value, ".17g"))
+
+    dialog.action_button.click()
+    qt_application.processEvents()
+
+    assert dialog.result() == QDialog.DialogCode.Accepted
+    assert dialog.coordinates == (
+        CANVAS_INTERACTIVE_COORDINATE_LIMIT,
+        -CANVAS_INTERACTIVE_COORDINATE_LIMIT,
+    )

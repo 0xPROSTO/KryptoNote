@@ -1,6 +1,8 @@
 """Buffered viewport proxies used to keep QML Repeater delegate counts bounded."""
 
-from PySide6.QtCore import QRectF, QSortFilterProxyModel, QTimer, Slot
+import math
+
+from PySide6.QtCore import QSortFilterProxyModel, QTimer, Slot
 
 from .connection_list_model import ConnectionRoles
 from .node_list_model import NodeRoles
@@ -14,8 +16,12 @@ class _ViewportProxyModel(QSortFilterProxyModel):
 
     def __init__(self, source_model, parent=None):
         super().__init__(parent)
-        self._viewport = QRectF()
-        self._buffered_request = QRectF()
+        self._viewport_center_x = 0.0
+        self._viewport_center_y = 0.0
+        self._viewport_half_width = 0.0
+        self._viewport_half_height = 0.0
+        self._buffered_request_width = 0.0
+        self._buffered_request_height = 0.0
         self._viewport_ready = False
         self._filter_update_timer = QTimer(self)
         self._filter_update_timer.setSingleShot(True)
@@ -30,42 +36,78 @@ class _ViewportProxyModel(QSortFilterProxyModel):
 
     @Slot(float, float, float, float)
     def updateViewport(self, left, top, right, bottom):
-        requested = QRectF(
-            float(left),
-            float(top),
-            max(0.0, float(right) - float(left)),
-            max(0.0, float(bottom) - float(top)),
+        """Compatibility wrapper for the former edge-based QML contract."""
+        left = float(left)
+        top = float(top)
+        width = max(0.0, float(right) - left)
+        height = max(0.0, float(bottom) - top)
+        self._update_viewport_centered(
+            left + width / 2.0,
+            top + height / 2.0,
+            width,
+            height,
         )
-        if self._viewport_ready and self._viewport.contains(requested):
+
+    @Slot(float, float, float, float)
+    def updateViewportCentered(self, center_x, center_y, width, height):
+        """Update from a world center plus local-sized viewport extents."""
+        self._update_viewport_centered(
+            float(center_x),
+            float(center_y),
+            max(0.0, float(width)),
+            max(0.0, float(height)),
+        )
+
+    def _update_viewport_centered(self, center_x, center_y, width, height):
+        if not all(map(math.isfinite, (center_x, center_y, width, height))):
+            return
+
+        half_width = width / 2.0
+        half_height = height / 2.0
+        if self._viewport_ready and self._contains_request(
+            center_x, center_y, half_width, half_height
+        ):
             width_shrank = (
-                self._buffered_request.width() > 0.0
-                and requested.width()
-                < self._buffered_request.width()
+                self._buffered_request_width > 0.0
+                and width
+                < self._buffered_request_width
                 * self.VIEWPORT_SHRINK_REBUILD_RATIO
             )
             height_shrank = (
-                self._buffered_request.height() > 0.0
-                and requested.height()
-                < self._buffered_request.height()
+                self._buffered_request_height > 0.0
+                and height
+                < self._buffered_request_height
                 * self.VIEWPORT_SHRINK_REBUILD_RATIO
             )
             if not width_shrank and not height_shrank:
                 return
         padding_x = max(
-            requested.width() * self.VIEWPORT_PADDING_RATIO,
+            width * self.VIEWPORT_PADDING_RATIO,
             self.MIN_VIEWPORT_PADDING,
         )
         padding_y = max(
-            requested.height() * self.VIEWPORT_PADDING_RATIO,
+            height * self.VIEWPORT_PADDING_RATIO,
             self.MIN_VIEWPORT_PADDING,
         )
-        self._viewport = requested.adjusted(
-            -padding_x, -padding_y, padding_x, padding_y
-        )
-        self._buffered_request = QRectF(requested)
+        self._viewport_center_x = center_x
+        self._viewport_center_y = center_y
+        self._viewport_half_width = half_width + padding_x
+        self._viewport_half_height = half_height + padding_y
+        self._buffered_request_width = width
+        self._buffered_request_height = height
         self._viewport_ready = True
         self._filter_update_timer.stop()
         self._invalidate_filter()
+
+    def _contains_request(
+        self, center_x, center_y, half_width, half_height
+    ):
+        return (
+            abs(center_x - self._viewport_center_x) + half_width
+            <= self._viewport_half_width
+            and abs(center_y - self._viewport_center_y) + half_height
+            <= self._viewport_half_height
+        )
 
     def _on_source_data_changed(self, _top_left, _bottom_right, roles):
         changed_roles = {int(role) for role in roles}
@@ -160,11 +202,13 @@ class NodeViewportProxyModel(_ViewportProxyModel):
         y = float(node.get("y") or 0.0)
         width = float(node.get("width") or 0.0)
         height = float(node.get("height") or 0.0)
+        relative_x = x - self._viewport_center_x
+        relative_y = y - self._viewport_center_y
         return (
-            x + width > self._viewport.left()
-            and x < self._viewport.right()
-            and y + height > self._viewport.top()
-            and y < self._viewport.bottom()
+            relative_x + width > -self._viewport_half_width
+            and relative_x < self._viewport_half_width
+            and relative_y + height > -self._viewport_half_height
+            and relative_y < self._viewport_half_height
         )
 
 
@@ -205,17 +249,21 @@ class ConnectionViewportProxyModel(_ViewportProxyModel):
         y1 = float(connection.get("start_edge_y") or 0.0)
         x2 = float(connection.get("end_edge_x") or 0.0)
         y2 = float(connection.get("end_edge_y") or 0.0)
-        left = min(x1, x2)
-        right = max(x1, x2)
-        top = min(y1, y2)
-        bottom = max(y1, y2)
+        relative_x1 = x1 - self._viewport_center_x
+        relative_y1 = y1 - self._viewport_center_y
+        relative_x2 = x2 - self._viewport_center_x
+        relative_y2 = y2 - self._viewport_center_y
+        left = min(relative_x1, relative_x2)
+        right = max(relative_x1, relative_x2)
+        top = min(relative_y1, relative_y2)
+        bottom = max(relative_y1, relative_y2)
         if left == right:
             right += 1.0
         if top == bottom:
             bottom += 1.0
         return (
-            right > self._viewport.left()
-            and left < self._viewport.right()
-            and bottom > self._viewport.top()
-            and top < self._viewport.bottom()
+            right > -self._viewport_half_width
+            and left < self._viewport_half_width
+            and bottom > -self._viewport_half_height
+            and top < self._viewport_half_height
         )

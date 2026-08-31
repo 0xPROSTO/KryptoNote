@@ -41,13 +41,20 @@ Rectangle {
             visible = false
             return
         }
-        var first = rubberBand.viewport.screenToCanvas(x, y)
-        var second = rubberBand.viewport.screenToCanvas(x + width, y + height)
+        var first = rubberBand.viewport.screenToRender(x, y)
+        var second = rubberBand.viewport.screenToRender(x + width, y + height)
         var rx1 = first.x
         var ry1 = first.y
         var rx2 = second.x
         var ry2 = second.y
-        var selected = rubberBand.nodeModel.get_nodes_in_rect(rx1, ry1, rx2, ry2)
+        var selected = rubberBand.nodeModel.get_nodes_in_render_rect(
+            rubberBand.viewport.renderOriginX,
+            rubberBand.viewport.renderOriginY,
+            rx1,
+            ry1,
+            rx2,
+            ry2
+        )
         rubberBand.nodeModel.add_selection(selected)
         visible = false
     }

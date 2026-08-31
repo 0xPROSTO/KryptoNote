@@ -12,6 +12,8 @@ Popup {
     required property var nodeModel
     required property Item contentLayer
     required property real contentScale
+    required property double renderOriginX
+    required property double renderOriginY
 
     parent: Overlay.overlay
     width: parent ? parent.width : 0
@@ -58,14 +60,16 @@ Popup {
                 + propertiesPopup.contentLayer.y
                 + propertiesPopup.contentLayer.scale
                 + propertiesPopup.contentScale
+                + propertiesPopup.renderOriginX
+                + propertiesPopup.renderOriginY
         if (transformRevision < -Number.MAX_VALUE
                 || propertiesPopup.nodeBounds.length < 4) {
             return Qt.rect(0, 0, 0, 0)
         }
         return propertiesPopup.contentLayer.mapToItem(
             overlayBody,
-            propertiesPopup.nodeBounds[0],
-            propertiesPopup.nodeBounds[1],
+            propertiesPopup.nodeBounds[0] - propertiesPopup.renderOriginX,
+            propertiesPopup.nodeBounds[1] - propertiesPopup.renderOriginY,
             propertiesPopup.nodeBounds[2],
             propertiesPopup.nodeBounds[3]
         )

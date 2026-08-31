@@ -32,6 +32,7 @@ from .operations import (
 from ..crypto import CryptoManager
 from ..constants import (
     AUTO_VACUUM_THRESHOLD_BYTES,
+    fit_canvas_group_origin,
     MEDIA_CHUNK_SIZE,
     MEDIA_NODE_TYPES,
     PLAYABLE_NODE_TYPES,
@@ -898,11 +899,11 @@ class NodeRepository:
 
     @staticmethod
     def _graph_node_center_inside_frame(node, frame):
-        center_x = node["x"] + node["width"] / 2.0
-        center_y = node["y"] + node["height"] / 2.0
+        center_x = node["x"] - frame["x"] + node["width"] / 2.0
+        center_y = node["y"] - frame["y"] + node["height"] / 2.0
         return (
-            frame["x"] <= center_x <= frame["x"] + frame["width"]
-            and frame["y"] <= center_y <= frame["y"] + frame["height"]
+            0.0 <= center_x <= frame["width"]
+            and 0.0 <= center_y <= frame["height"]
         )
 
     @classmethod
@@ -910,18 +911,16 @@ class NodeRepository:
         if node["type"] != "frame":
             return cls._graph_node_center_inside_frame(node, frame)
 
-        node_left, node_right = sorted(
-            (node["x"], node["x"] + node["width"])
-        )
-        node_top, node_bottom = sorted(
-            (node["y"], node["y"] + node["height"])
-        )
-        frame_left, frame_right = sorted(
-            (frame["x"], frame["x"] + frame["width"])
-        )
-        frame_top, frame_bottom = sorted(
-            (frame["y"], frame["y"] + frame["height"])
-        )
+        node_left, node_right = sorted((
+            node["x"] - frame["x"],
+            node["x"] - frame["x"] + node["width"],
+        ))
+        node_top, node_bottom = sorted((
+            node["y"] - frame["y"],
+            node["y"] - frame["y"] + node["height"],
+        ))
+        frame_left, frame_right = sorted((0.0, frame["width"]))
+        frame_top, frame_bottom = sorted((0.0, frame["height"]))
         return (
             frame_left <= node_left
             and node_right <= frame_right
@@ -1045,8 +1044,23 @@ class NodeRepository:
 
         origin_x = min(item["x"] for item in items)
         origin_y = min(item["y"] for item in items)
-        max_x = max(item["x"] + item["width"] for item in items)
-        max_y = max(item["y"] + item["height"] for item in items)
+        local_bounds = [
+            (
+                item["x"] - origin_x,
+                item["y"] - origin_y,
+                item["width"],
+                item["height"],
+            )
+            for item in items
+        ]
+        max_local_x = max(
+            local_x + width
+            for local_x, _local_y, width, _height in local_bounds
+        )
+        max_local_y = max(
+            local_y + height
+            for _local_x, local_y, _width, height in local_bounds
+        )
 
         frames = [item for item in items if item["type"] == "frame"]
         parent_frame_ids = {}
@@ -1105,8 +1119,8 @@ class NodeRepository:
             "selection_ids": list(selected_ids),
             "origin": {"x": origin_x, "y": origin_y},
             "bounds": {
-                "width": max(0.0, max_x - origin_x),
-                "height": max(0.0, max_y - origin_y),
+                "width": max(0.0, max_local_x),
+                "height": max(0.0, max_local_y),
             },
             "nodes": items,
             "connections": connections,
@@ -1499,6 +1513,19 @@ class NodeRepository:
                 "offset_x": offset_x,
                 "offset_y": offset_y,
             }
+
+        relative_positions = [
+            (
+                float(node.get("relative_x", node.get("x", 0)) or 0),
+                float(node.get("relative_y", node.get("y", 0)) or 0),
+            )
+            for node in nodes
+        ]
+        offset_x, offset_y = fit_canvas_group_origin(
+            offset_x,
+            offset_y,
+            relative_positions,
+        )
 
         source_ids = [int(node["source_id"]) for node in nodes]
         payload_total = sum(

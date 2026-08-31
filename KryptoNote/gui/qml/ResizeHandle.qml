@@ -9,6 +9,9 @@ Item {
     required property var appTheme
     required property int nodeId
     required property Item delegateItem
+    required property double nodeWorldX
+    required property double nodeWorldY
+    required property bool geometryInteractive
 
     property bool nodeHovered: false
     property bool nodeSelected: false
@@ -89,8 +92,9 @@ Item {
             nodeSelected || nodeHovered || passiveSurfaceHovered
             || _pointerHovered || _isActive
     readonly property bool _canResize:
-            handle._resizing
-            || (!handle.canvasRoot.canvasInputBlocked
+        handle._resizing
+            || (handle.geometryInteractive
+            && !handle.canvasRoot.canvasInputBlocked
             && !handle.canvasRoot.isNodeDragging
             && !handle.canvasRoot.isLinkMode
             && !handle.canvasRoot.isPanning
@@ -129,13 +133,22 @@ Item {
         return [position, size]
     }
 
+    function _clampLeadingAxis(geometry, startPosition, startSize,
+                               direction, limit) {
+        if (direction >= 0) return geometry
+        var position = Math.max(-limit, Math.min(limit, geometry[0]))
+        if (position === geometry[0]) return geometry
+        return [position, startPosition + startSize - position]
+    }
+
     function beginResize(region) {
-        if (handle._resizing || !handle._canResize) return
+        if (handle._resizing || !handle._canResize
+                || !handle.geometryInteractive) return
 
         handle._activeRegion = region
         handle._resizing = true
-        handle._startX = handle.delegateItem.x
-        handle._startY = handle.delegateItem.y
+        handle._startX = handle.nodeWorldX
+        handle._startY = handle.nodeWorldY
         handle._startWidth = handle.delegateItem.width
         handle._startHeight = handle.delegateItem.height
         handle._pendingX = handle._startX
@@ -155,27 +168,44 @@ Item {
     function updateResize(region, dragHandler) {
         if (!handle._resizing || handle._activeRegion !== region) return
 
-        var current = handle.canvasRoot.screenToCanvas(
-            dragHandler.centroid.scenePosition.x,
-            dragHandler.centroid.scenePosition.y
-        )
-        var pressed = handle.canvasRoot.screenToCanvas(
-            dragHandler.centroid.scenePressPosition.x,
-            dragHandler.centroid.scenePressPosition.y
-        )
+        var scale = Math.max(Number(handle.canvasRoot.contentScale), 0.0001)
+        var deltaX = (
+            Number(dragHandler.centroid.scenePosition.x)
+            - Number(dragHandler.centroid.scenePressPosition.x)
+        ) / scale
+        var deltaY = (
+            Number(dragHandler.centroid.scenePosition.y)
+            - Number(dragHandler.centroid.scenePressPosition.y)
+        ) / scale
         var horizontal = handle._axisGeometry(
             handle._startX,
             handle._startWidth,
-            current.x - pressed.x,
+            deltaX,
             region.horizontalDirection,
             handle.minimumNodeWidth
         )
         var vertical = handle._axisGeometry(
             handle._startY,
             handle._startHeight,
-            current.y - pressed.y,
+            deltaY,
             region.verticalDirection,
             handle.minimumNodeHeight
+        )
+
+        var limit = Number(handle.canvasRoot.interactiveCoordinateLimit)
+        horizontal = handle._clampLeadingAxis(
+            horizontal,
+            handle._startX,
+            handle._startWidth,
+            region.horizontalDirection,
+            limit
+        )
+        vertical = handle._clampLeadingAxis(
+            vertical,
+            handle._startY,
+            handle._startHeight,
+            region.verticalDirection,
+            limit
         )
 
         if (handle._pendingX !== horizontal[0]

@@ -7,6 +7,9 @@ Item {
     required property var nodeModel
     required property Item contentLayer
     property Item delegateItem
+    required property double nodeWorldX
+    required property double nodeWorldY
+    required property bool geometryInteractive
     property int nodeId: 0
     property string nodeType: ""
     property bool nodeIsSelected: false
@@ -22,7 +25,8 @@ Item {
     readonly property real edgeThickness: 8
     readonly property bool canDrag:
         dragController.dragging
-        || (!dragController.canvasRoot.canvasInputBlocked
+        || (dragController.geometryInteractive
+        && !dragController.canvasRoot.canvasInputBlocked
         && !dragController.canvasRoot.isLinkMode
         && !dragController.canvasRoot.isPanning
         && !dragController.canvasRoot.isEditorResizing
@@ -30,7 +34,7 @@ Item {
         && !dragController.resizing)
 
     function beginDrag() {
-        if (dragController.dragging) return
+        if (dragController.dragging || !dragController.geometryInteractive) return
         dragController.nodeModel.clear_hovered()
         dragController.lastDx = 0
         dragController.lastDy = 0
@@ -50,9 +54,27 @@ Item {
                 || dragController.dragNodes.length === 0) {
             dragController.dragNodes = [{
                 "id": dragController.nodeId,
-                "x": dragController.delegateItem.x,
-                "y": dragController.delegateItem.y
+                "x": dragController.nodeWorldX,
+                "y": dragController.nodeWorldY
             }]
+        }
+        for (var geometryIndex = 0;
+             geometryIndex < dragController.dragNodes.length;
+             geometryIndex++) {
+            var geometryNode = dragController.dragNodes[geometryIndex]
+            var nodeInteractive = Math.abs(Number(geometryNode.x))
+                    <= dragController.canvasRoot.interactiveCoordinateLimit
+                    && Math.abs(Number(geometryNode.y))
+                    <= dragController.canvasRoot.interactiveCoordinateLimit
+            if (typeof dragController.nodeModel.is_geometry_interactive
+                    === "function") {
+                nodeInteractive = dragController.nodeModel
+                        .is_geometry_interactive(geometryNode.id)
+            }
+            if (!nodeInteractive) {
+                dragController.dragNodes = []
+                return
+            }
         }
         var retainedIds = []
         for (var i = 0; i < dragController.dragNodes.length; i++)
@@ -90,8 +112,8 @@ Item {
                 return Qt.point(node.x, node.y)
         }
         return Qt.point(
-            dragController.delegateItem ? dragController.delegateItem.x : 0,
-            dragController.delegateItem ? dragController.delegateItem.y : 0
+            dragController.nodeWorldX,
+            dragController.nodeWorldY
         )
     }
 
@@ -124,17 +146,34 @@ Item {
 
     function updateDrag(handler) {
         if (!dragController.dragging) return
-        var current = dragController.canvasRoot.screenToCanvas(
-            handler.centroid.scenePosition.x,
-            handler.centroid.scenePosition.y
+        var scale = Math.max(
+            Number(dragController.canvasRoot.contentScale),
+            0.0001
         )
-        var pressed = dragController.canvasRoot.screenToCanvas(
-            handler.centroid.scenePressPosition.x,
-            handler.centroid.scenePressPosition.y
-        )
-        dragController.lastDx = current.x - pressed.x
-        dragController.lastDy = current.y - pressed.y
+        dragController.lastDx = (
+            Number(handler.centroid.scenePosition.x)
+            - Number(handler.centroid.scenePressPosition.x)
+        ) / scale
+        dragController.lastDy = (
+            Number(handler.centroid.scenePosition.y)
+            - Number(handler.centroid.scenePressPosition.y)
+        ) / scale
         dragController.previewCurrentPosition()
+    }
+
+    function _snapWorld(value, origin) {
+        if (typeof dragController.canvasRoot.snapWorldCoordinate === "function") {
+            return dragController.canvasRoot.snapWorldCoordinate(
+                value,
+                origin,
+                dragController.canvasRoot.gridSize
+            )
+        }
+        var spacing = Number(dragController.canvasRoot.gridSize)
+        var phase = ((Number(origin) % spacing) + spacing) % spacing
+        var local = Number(value) - Number(origin)
+        return Number(origin)
+                + Math.round((local + phase) / spacing) * spacing - phase
     }
 
     function currentPositionUpdates() {
@@ -147,12 +186,14 @@ Item {
 
         if (snapAsGroup) {
             var origin = dragController.primaryStartPosition()
-            appliedX = Math.round(
-                (origin.x + appliedX) / dragController.canvasRoot.gridSize
-            ) * dragController.canvasRoot.gridSize - origin.x
-            appliedY = Math.round(
-                (origin.y + appliedY) / dragController.canvasRoot.gridSize
-            ) * dragController.canvasRoot.gridSize - origin.y
+            appliedX = dragController._snapWorld(
+                origin.x + appliedX,
+                dragController.canvasRoot.renderOriginX
+            ) - origin.x
+            appliedY = dragController._snapWorld(
+                origin.y + appliedY,
+                dragController.canvasRoot.renderOriginY
+            ) - origin.y
         }
 
         for (var i = 0; i < dragController.dragNodes.length; i++) {
@@ -160,14 +201,47 @@ Item {
             var newX = node.x + appliedX
             var newY = node.y + appliedY
             if (dragController.canvasRoot.snapToGrid && !snapAsGroup) {
-                newX = Math.round(
-                    newX / dragController.canvasRoot.gridSize
-                ) * dragController.canvasRoot.gridSize
-                newY = Math.round(
-                    newY / dragController.canvasRoot.gridSize
-                ) * dragController.canvasRoot.gridSize
+                newX = dragController._snapWorld(
+                    newX,
+                    dragController.canvasRoot.renderOriginX
+                )
+                newY = dragController._snapWorld(
+                    newY,
+                    dragController.canvasRoot.renderOriginY
+                )
             }
             updates.push({"id": node.id, "x": newX, "y": newY})
+        }
+        if (updates.length > 0) {
+            var minimumX = updates[0].x
+            var maximumX = updates[0].x
+            var minimumY = updates[0].y
+            var maximumY = updates[0].y
+            for (var updateIndex = 1;
+                 updateIndex < updates.length;
+                 updateIndex++) {
+                minimumX = Math.min(minimumX, updates[updateIndex].x)
+                maximumX = Math.max(maximumX, updates[updateIndex].x)
+                minimumY = Math.min(minimumY, updates[updateIndex].y)
+                maximumY = Math.max(maximumY, updates[updateIndex].y)
+            }
+            var limit = Number(
+                dragController.canvasRoot.interactiveCoordinateLimit
+            )
+            var correctionX = minimumX < -limit
+                    ? -limit - minimumX
+                    : (maximumX > limit ? limit - maximumX : 0.0)
+            var correctionY = minimumY < -limit
+                    ? -limit - minimumY
+                    : (maximumY > limit ? limit - maximumY : 0.0)
+            if (correctionX !== 0.0 || correctionY !== 0.0) {
+                for (var correctionIndex = 0;
+                     correctionIndex < updates.length;
+                     correctionIndex++) {
+                    updates[correctionIndex].x += correctionX
+                    updates[correctionIndex].y += correctionY
+                }
+            }
         }
         return updates
     }
@@ -264,7 +338,10 @@ Item {
         width: parent.width
         height: dragController.edgeThickness
 
-        HoverHandler { cursorShape: Qt.SizeAllCursor }
+        HoverHandler {
+            enabled: dragController.canDrag
+            cursorShape: Qt.SizeAllCursor
+        }
         DragHandler {
             id: topDrag
             target: null
@@ -287,7 +364,10 @@ Item {
         width: Math.max(0, parent.width - 24)
         height: dragController.edgeThickness
 
-        HoverHandler { cursorShape: Qt.SizeAllCursor }
+        HoverHandler {
+            enabled: dragController.canDrag
+            cursorShape: Qt.SizeAllCursor
+        }
         DragHandler {
             id: bottomDrag
             target: null
@@ -310,7 +390,10 @@ Item {
         width: dragController.edgeThickness
         height: Math.max(0, parent.height - dragController.edgeThickness)
 
-        HoverHandler { cursorShape: Qt.SizeAllCursor }
+        HoverHandler {
+            enabled: dragController.canDrag
+            cursorShape: Qt.SizeAllCursor
+        }
         DragHandler {
             id: leftDrag
             target: null
@@ -336,7 +419,10 @@ Item {
             parent.height - dragController.edgeThickness - 24
         )
 
-        HoverHandler { cursorShape: Qt.SizeAllCursor }
+        HoverHandler {
+            enabled: dragController.canDrag
+            cursorShape: Qt.SizeAllCursor
+        }
         DragHandler {
             id: rightDrag
             target: null

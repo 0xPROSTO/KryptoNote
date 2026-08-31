@@ -1,5 +1,6 @@
 """Compact exact canvas navigation dialogs."""
 
+import math
 import re
 
 from PySide6.QtCore import QSize, QTimer, Signal, Qt
@@ -7,6 +8,7 @@ from PySide6.QtGui import QValidator
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
     QDialog,
+    QDoubleSpinBox,
     QHBoxLayout,
     QLabel,
     QLayout,
@@ -17,6 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from KryptoNote.core.constants import CANVAS_INTERACTIVE_COORDINATE_LIMIT
 from KryptoNote.gui.theme import Theme
 from KryptoNote.gui.theme.icons import SvgIcons
 from KryptoNote.gui.theme.palette import Palette
@@ -64,6 +67,82 @@ class _DirectionalSpinBox(_ClampedSpinBox):
         super().__init__(parent)
         self._navigate_left = bool(navigate_left)
         self._navigate_right = bool(navigate_right)
+
+    def keyPressEvent(self, event):
+        if event.modifiers() == Qt.KeyboardModifier.NoModifier:
+            if event.key() == Qt.Key.Key_Left and self._navigate_left:
+                self.navigateLeft.emit()
+                event.accept()
+                return
+            if event.key() == Qt.Key.Key_Right and self._navigate_right:
+                self.navigateRight.emit()
+                event.accept()
+                return
+        super().keyPressEvent(event)
+
+
+class _DirectionalCoordinateSpinBox(QDoubleSpinBox):
+    navigateLeft = Signal()
+    navigateRight = Signal()
+    _NUMBER_PATTERN = re.compile(
+        r"[+-]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:[eE][+-]?\d+)?"
+    )
+    _INCOMPLETE_EXPONENT_PATTERN = re.compile(
+        r"[+-]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))[eE][+-]?"
+    )
+
+    def __init__(self, *, navigate_left=False, navigate_right=False, parent=None):
+        super().__init__(parent)
+        self._navigate_left = bool(navigate_left)
+        self._navigate_right = bool(navigate_right)
+
+    def _number_text(self, text):
+        number_text = str(text).strip()
+        prefix = self.prefix()
+        suffix = self.suffix()
+        if prefix and number_text.startswith(prefix):
+            number_text = number_text[len(prefix) :]
+        if suffix and number_text.endswith(suffix):
+            number_text = number_text[: -len(suffix)]
+        number_text = number_text.strip()
+        decimal_point = self.locale().decimalPoint()
+        if decimal_point and decimal_point != ".":
+            number_text = number_text.replace(decimal_point, ".")
+        return number_text
+
+    def validate(self, text, position):
+        number_text = self._number_text(text)
+        if number_text in {"", "+", "-"} or (
+            self._INCOMPLETE_EXPONENT_PATTERN.fullmatch(number_text)
+        ):
+            state = QValidator.State.Intermediate
+        elif not self._NUMBER_PATTERN.fullmatch(number_text):
+            state = QValidator.State.Invalid
+        else:
+            try:
+                value = float(number_text)
+            except (TypeError, ValueError, OverflowError):
+                state = QValidator.State.Invalid
+            else:
+                state = (
+                    QValidator.State.Acceptable
+                    if math.isfinite(value)
+                    and self.minimum() <= value <= self.maximum()
+                    else QValidator.State.Invalid
+                )
+        return state, text, position
+
+    def valueFromText(self, text):
+        try:
+            value = float(self._number_text(text))
+        except (TypeError, ValueError, OverflowError):
+            return self.value()
+        if not math.isfinite(value):
+            return self.value()
+        return max(self.minimum(), min(self.maximum(), value))
+
+    def textFromValue(self, value):
+        return format(float(value), ".0f")
 
     def keyPressEvent(self, event):
         if event.modifiers() == Qt.KeyboardModifier.NoModifier:
@@ -188,7 +267,7 @@ class _CanvasNavigationDialog(FramelessWindowDragMixin, QDialog):
                 color: {Palette.TEXT_MAIN};
                 font-family: 'Segoe UI', sans-serif;
             }}
-            QSpinBox {{
+            QSpinBox, QDoubleSpinBox {{
                 background-color: {Palette.BG_INPUT};
                 color: {Palette.TEXT_MAIN};
                 selection-color: {Palette.TEXT_MAIN};
@@ -200,13 +279,13 @@ class _CanvasNavigationDialog(FramelessWindowDragMixin, QDialog):
                 font-size: 14px;
                 font-weight: 600;
             }}
-            QSpinBox:hover {{
+            QSpinBox:hover, QDoubleSpinBox:hover {{
                 border-color: {Palette.BORDER_HOVER};
             }}
-            QSpinBox:focus {{
+            QSpinBox:focus, QDoubleSpinBox:focus {{
                 border-color: {Palette.ACCENT_MAIN};
             }}
-            QSpinBox:disabled {{
+            QSpinBox:disabled, QDoubleSpinBox:disabled {{
                 color: {Palette.TEXT_DISABLED};
                 border-color: {Palette.BORDER_SUBTLE};
             }}
@@ -280,9 +359,6 @@ class ZoomToDialog(_CanvasNavigationDialog):
 
 
 class GoToDialog(_CanvasNavigationDialog):
-    COORDINATE_MINIMUM = -(2**22)
-    COORDINATE_MAXIMUM = 2**22
-
     def __init__(self, current_x, current_y, parent=None):
         super().__init__(
             "Go To",
@@ -296,7 +372,7 @@ class GoToDialog(_CanvasNavigationDialog):
         fields_layout.setContentsMargins(0, 0, 0, 0)
         fields_layout.setSpacing(10)
 
-        self.x_input = _DirectionalSpinBox(
+        self.x_input = _DirectionalCoordinateSpinBox(
             navigate_right=True,
             parent=self.container,
         )
@@ -308,7 +384,7 @@ class GoToDialog(_CanvasNavigationDialog):
         )
         fields_layout.addWidget(self.x_input, 1)
 
-        self.y_input = _DirectionalSpinBox(
+        self.y_input = _DirectionalCoordinateSpinBox(
             navigate_left=True,
             parent=self.container,
         )
@@ -345,15 +421,18 @@ class GoToDialog(_CanvasNavigationDialog):
 
     def _configure_coordinate_input(self, field, accessible_name, prefix, value):
         self._configure_spinbox(field, accessible_name)
-        field.setRange(self.COORDINATE_MINIMUM, self.COORDINATE_MAXIMUM)
+        field.setDecimals(0)
+        field.setRange(
+            -CANVAS_INTERACTIVE_COORDINATE_LIMIT,
+            CANVAS_INTERACTIVE_COORDINATE_LIMIT,
+        )
         field.setSingleStep(1)
         field.setPrefix(prefix)
-        field.setValue(
-            max(
-                self.COORDINATE_MINIMUM,
-                min(self.COORDINATE_MAXIMUM, int(round(float(value)))),
-            )
-        )
+        try:
+            initial_value = float(value)
+        except (TypeError, ValueError, OverflowError):
+            initial_value = 0.0
+        field.setValue(initial_value if math.isfinite(initial_value) else 0.0)
 
     def _focus_x(self):
         self._focus_and_select(self.x_input)

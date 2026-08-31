@@ -73,6 +73,7 @@ from ..widgets.dialog_motion import (
     widget_spatial_motion_enabled,
 )
 from ...config import Config
+from ...core.constants import CANVAS_INTERACTIVE_COORDINATE_LIMIT
 from ...gui.theme import Theme
 from ...gui.theme.icons import SvgIcons
 from ...gui.theme.theme_bridge import ThemeBridge
@@ -1581,7 +1582,11 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
 
         target_x, target_y = dialog.coordinates
         self._invoke_qml_root("goToCoordinates", target_x, target_y)
-        self.status_label.setText(f"Centered on X: {target_x} Y: {target_y}.")
+        self.status_label.setText(
+            "Centered on X: "
+            f"{self._format_canvas_coordinate(target_x)} Y: "
+            f"{self._format_canvas_coordinate(target_y)}."
+        )
         self._defer_modifier_sync()
         return True
 
@@ -1844,8 +1849,18 @@ class ZeroXXWindow(NativeWindowMixin, QMainWindow):
 
     # ── Coords ──────────────────────────────────────────────────────
 
+    @staticmethod
+    def _format_canvas_coordinate(value):
+        value = float(value)
+        if abs(value) > CANVAS_INTERACTIVE_COORDINATE_LIMIT:
+            return format(value, ".0e")
+        return str(int(value))
+
     def update_coords(self, pos):
-        self.coords_label.setText(f"X: {int(pos.x())} Y: {int(pos.y())}")
+        self.coords_label.setText(
+            f"X: {self._format_canvas_coordinate(pos.x())} "
+            f"Y: {self._format_canvas_coordinate(pos.y())}"
+        )
 
     # ── Key Events ──────────────────────────────────────────────────
 

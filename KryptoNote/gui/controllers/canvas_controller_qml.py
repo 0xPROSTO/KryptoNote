@@ -17,7 +17,12 @@ from PySide6.QtGui import QColor, QGuiApplication, QImage
 from PySide6.QtWidgets import QLineEdit
 
 from ...config import Config
-from ...core.constants import MEDIA_NODE_TYPES
+from ...core.constants import (
+    CANVAS_INTERACTIVE_COORDINATE_LIMIT,
+    MEDIA_NODE_TYPES,
+    fit_canvas_group_origin,
+    is_interactive_canvas_position,
+)
 from ..theme.palette import Palette
 from ..services.auto_fit_service import AutoFitService
 from ..services.graph_command_service import GraphCommandService
@@ -31,6 +36,12 @@ from .import_export_controller import ImportExportController
 class QmlCanvasController(QObject):
     _SYSTEM_MIXED_MIME = "application/x-kryptonote-mixed-selection"
     _SYSTEM_TITLE_RE = re.compile(r"^\s*##[ \t]+(.+?)\s*$")
+    _LEGACY_GEOMETRY_MESSAGE = (
+        "Geometry is read-only outside the interactive canvas range."
+    )
+    _CREATION_RANGE_MESSAGE = (
+        "Nodes cannot be created outside the interactive canvas range."
+    )
 
     status_message = Signal(str, str)
     progress_updated = Signal(float, str)
@@ -131,6 +142,41 @@ class QmlCanvasController(QObject):
 
     def _on_size_changed(self, node_id, w, h):
         self._service.update_size(node_id, w, h)
+
+    @Property(float, constant=True)
+    def interactiveCoordinateLimit(self):
+        return CANVAS_INTERACTIVE_COORDINATE_LIMIT
+
+    def _ensure_interactive_creation_origin(self, x, y, message=None):
+        if is_interactive_canvas_position(x, y):
+            return True
+        self.status_message.emit(
+            message or self._CREATION_RANGE_MESSAGE,
+            "warning",
+        )
+        return False
+
+    def _fit_creation_group(self, origin_x, origin_y, relative_positions):
+        if not self._ensure_interactive_creation_origin(origin_x, origin_y):
+            return None
+        try:
+            return fit_canvas_group_origin(
+                origin_x,
+                origin_y,
+                relative_positions,
+            )
+        except (TypeError, ValueError, OverflowError) as exc:
+            self.status_message.emit(f"Invalid canvas position: {exc}", "error")
+            return None
+
+    def _geometry_is_interactive(self, node_ids):
+        return all(
+            self._node_model.is_geometry_interactive(int(node_id))
+            for node_id in node_ids
+        )
+
+    def _warn_legacy_geometry(self):
+        self.status_message.emit(self._LEGACY_GEOMETRY_MESSAGE, "warning")
 
     @Slot(str, str)
     def _relay_status_to_toast(self, message, status_type):
@@ -498,14 +544,25 @@ class QmlCanvasController(QObject):
 
     @Slot(float, float)
     def add_text_node_at(self, center_x, center_y):
-        x = float(center_x) - Config.NODE_DEFAULT_WIDTH / 2
-        y = float(center_y) - Config.NODE_DEFAULT_HEIGHT / 2
+        relative_x = -Config.NODE_DEFAULT_WIDTH / 2.0
+        relative_y = -Config.NODE_DEFAULT_HEIGHT / 2.0
+        fitted = self._fit_creation_group(
+            center_x,
+            center_y,
+            [(relative_x, relative_y)],
+        )
+        if fitted is None:
+            return
+        x = fitted[0] + relative_x
+        y = fitted[1] + relative_y
         node_id = self.create_text_node_at(
             x, y, "", "", 14, 10,
             auto_fit_pending=True,
             draft=True,
             auto_fit_now=False,
         )
+        if not node_id:
+            return
         self._node_model.set_selection([node_id])
         self.resultRevealRequested.emit(
             [node_id], "New note created.", "success"
@@ -518,6 +575,10 @@ class QmlCanvasController(QObject):
             commit=True, created_ids=None,
     ):
         """Actually create the node after editor confirms."""
+        if not self._ensure_interactive_creation_origin(x, y):
+            return 0
+        x = float(x)
+        y = float(y)
         w, h = Config.NODE_DEFAULT_WIDTH, Config.NODE_DEFAULT_HEIGHT
         rid = self._service.add_item(
             "text", x, y, w, h, title=title, text=content,
@@ -545,8 +606,17 @@ class QmlCanvasController(QObject):
     def add_frame_at(self, center_x, center_y):
         width = Config.FRAME_DEFAULT_WIDTH
         height = Config.FRAME_DEFAULT_HEIGHT
-        x = float(center_x) - width / 2
-        y = float(center_y) - height / 2
+        relative_x = -width / 2.0
+        relative_y = -height / 2.0
+        fitted = self._fit_creation_group(
+            center_x,
+            center_y,
+            [(relative_x, relative_y)],
+        )
+        if fitted is None:
+            return
+        x = fitted[0] + relative_x
+        y = fitted[1] + relative_y
         frame_id = self._service.add_item(
             "frame", x, y, width, height, title="New Frame",
             frame_locked=False,
@@ -736,16 +806,6 @@ class QmlCanvasController(QObject):
             return [node_id]
         return selected
 
-    def _paste_offset_for_bounds(self, width, height, cascade=0):
-        center_x, center_y = self.get_viewport_center()
-        return self._paste_offset_for_bounds_at(
-            center_x,
-            center_y,
-            width,
-            height,
-            cascade,
-        )
-
     @staticmethod
     def _paste_offset_for_bounds_at(
         center_x, center_y, width, height, cascade=0
@@ -792,22 +852,19 @@ class QmlCanvasController(QObject):
                 "Another database operation is active.", "warning"
             )
             return False
+        if center is None:
+            center = self.get_viewport_center()
+        if not self._ensure_interactive_creation_origin(center[0], center[1]):
+            return False
         summary = self._last_graph_copy_summary or {}
         bounds = summary.get("bounds") or {}
-        if center is None:
-            offset = self._paste_offset_for_bounds(
-                bounds.get("width", 0.0),
-                bounds.get("height", 0.0),
-                self._graph_paste_count,
-            )
-        else:
-            offset = self._paste_offset_for_bounds_at(
-                center[0],
-                center[1],
-                bounds.get("width", 0.0),
-                bounds.get("height", 0.0),
-                self._graph_paste_count,
-            )
+        offset = self._paste_offset_for_bounds_at(
+            center[0],
+            center[1],
+            bounds.get("width", 0.0),
+            bounds.get("height", 0.0),
+            self._graph_paste_count,
+        )
         try:
             preparation = self._service.prepare_paste_graph(offset=offset)
         except Exception as exc:
@@ -826,6 +883,9 @@ class QmlCanvasController(QObject):
         if not node_ids:
             self.status_message.emit("Select a node to duplicate.", "warning")
             return False
+        if not self._geometry_is_interactive(node_ids):
+            self._warn_legacy_geometry()
+            return False
         if self._operations.is_busy:
             self.status_message.emit(
                 "Another database operation is active.", "warning"
@@ -835,6 +895,11 @@ class QmlCanvasController(QObject):
             preparation = self._service.prepare_duplicate_graph(node_ids)
         except Exception as exc:
             self.status_message.emit(f"Duplicate failed: {exc}", "error")
+            return False
+        blueprint = preparation.get("blueprint") or {}
+        copied_node_ids = blueprint.get("node_ids") or node_ids
+        if not self._geometry_is_interactive(copied_node_ids):
+            self._warn_legacy_geometry()
             return False
         return self._start_graph_clone(
             preparation,
@@ -1442,6 +1507,8 @@ class QmlCanvasController(QObject):
         )
 
     def _paste_from_system_clipboard_at(self, center_x, center_y):
+        if not self._ensure_interactive_creation_origin(center_x, center_y):
+            return False
         clipboard = QGuiApplication.clipboard()
         mime = clipboard.mimeData() if clipboard is not None else None
         if mime is None:
@@ -1453,21 +1520,54 @@ class QmlCanvasController(QObject):
         created_ids = []
         text_ids = []
         try:
+            placements = []
             if not image.isNull():
-                image_x = center_x - 130.0 if paste_mixed and text else center_x
+                placement_thumbnail = image.scaled(
+                    800,
+                    800,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                image_width, image_height = self._auto_fit_service.fit_media(
+                    {"title": "Pasted image"}, placement_thumbnail
+                )
+                image_center_offset = -130.0 if paste_mixed and text else 0.0
+                placements.append((
+                    image_center_offset - image_width / 2.0,
+                    -image_height / 2.0,
+                ))
+            if text and (image.isNull() or paste_mixed):
+                text_center_offset = 130.0 if not image.isNull() else 0.0
+                placements.append((
+                    text_center_offset - Config.NODE_DEFAULT_WIDTH / 2.0,
+                    -Config.NODE_DEFAULT_HEIGHT / 2.0,
+                ))
+            fitted_center = fit_canvas_group_origin(
+                center_x,
+                center_y,
+                placements,
+            )
+            if not image.isNull():
+                image_x = (
+                    fitted_center[0] - 130.0
+                    if paste_mixed and text else fitted_center[0]
+                )
                 self._create_clipboard_image_node(
                     image,
                     image_x,
-                    center_y,
+                    fitted_center[1],
                     commit=False,
                     created_ids=created_ids,
                 )
             if text and (image.isNull() or paste_mixed):
-                text_x = center_x + 130.0 if created_ids else center_x
+                text_x = (
+                    fitted_center[0] + 130.0
+                    if created_ids else fitted_center[0]
+                )
                 text_id = self._create_clipboard_text_node(
                     text,
                     text_x,
-                    center_y,
+                    fitted_center[1],
                     commit=False,
                     created_ids=created_ids,
                 )
@@ -1811,15 +1911,22 @@ class QmlCanvasController(QObject):
         try:
             root = self.parent().view.rootObject()
             if root:
+                center = root.property("navigationCenter")
+                try:
+                    return [float(center.x()), float(center.y())]
+                except (AttributeError, TypeError, ValueError):
+                    pass
                 cx = root.property("width") / 2
                 cy = root.property("height") / 2
                 scale = root.property("contentScale") or 1.0
                 clx = root.property("_contentLayerX")
                 cly = root.property("_contentLayerY")
+                origin_x = root.property("renderOriginX") or 0.0
+                origin_y = root.property("renderOriginY") or 0.0
                 content_layer_x = clx if clx is not None else 0
                 content_layer_y = cly if cly is not None else 0
-                x = (cx - content_layer_x) / scale
-                y = (cy - content_layer_y) / scale
+                x = float(origin_x) + (cx - content_layer_x) / scale
+                y = float(origin_y) + (cy - content_layer_y) / scale
                 return [x, y]
         except Exception:
             pass
@@ -1841,6 +1948,9 @@ class QmlCanvasController(QObject):
     def auto_fit_node(self, node_id):
         node = self._node_model.get_node_data(node_id)
         if not node:
+            return
+        if not self._node_model.is_geometry_interactive(node_id):
+            self._warn_legacy_geometry()
             return
         if node["type"] == "text":
             self._auto_fit_text_node(node_id)

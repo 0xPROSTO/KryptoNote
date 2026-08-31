@@ -11,7 +11,9 @@ from PySide6.QtCore import QObject, QThread, Signal, Slot
 from ...config import Config
 from ...core.constants import (
     AUDIO_EXTENSIONS,
+    fit_canvas_group_origin,
     IMAGE_EXTENSIONS,
+    is_interactive_canvas_position,
     MEDIA_CHUNK_SIZE,
     VIDEO_EXTENSIONS,
 )
@@ -59,6 +61,54 @@ def _encode_media_metadata(metadata):
         ensure_ascii=False,
         separators=(",", ":"),
     ).encode("utf-8")
+
+
+def _media_node_size(media_type):
+    if media_type == "audio":
+        return Config.NODE_AUDIO_WIDTH, Config.NODE_AUDIO_HEIGHT
+    if media_type in {"image", "video"}:
+        return Config.NODE_MEDIA_SIZE, Config.NODE_MEDIA_SIZE
+    raise ValueError(f"Unsupported media type: {media_type}")
+
+
+def prepare_media_import_positions(jobs, center_x, center_y):
+    """Place an import batch as one clamped group around a safe origin."""
+
+    jobs = list(jobs or ())
+    center_x = float(center_x)
+    center_y = float(center_y)
+    if jobs and not is_interactive_canvas_position(center_x, center_y):
+        raise ValueError(
+            "Media cannot be created outside the interactive canvas range."
+        )
+
+    relative_positions = []
+    sizes = []
+    for index, (media_type, _path) in enumerate(jobs):
+        width, height = _media_node_size(str(media_type))
+        offset = index * 25.0
+        relative_positions.append(
+            (offset - width / 2.0, offset - height / 2.0)
+        )
+        sizes.append((float(width), float(height)))
+
+    fitted_x, fitted_y = fit_canvas_group_origin(
+        center_x,
+        center_y,
+        relative_positions,
+    )
+    return [
+        (
+            fitted_x + relative_x,
+            fitted_y + relative_y,
+            width,
+            height,
+        )
+        for (relative_x, relative_y), (width, height) in zip(
+            relative_positions,
+            sizes,
+        )
+    ]
 
 
 class MediaImportService:
@@ -120,6 +170,9 @@ class MediaImportService:
         imported_callback=None,
         cancel_check=None,
     ):
+        paths = list(paths or ())
+        jobs = [(media_type, path) for path in paths]
+        positions = prepare_media_import_positions(jobs, center_x, center_y)
         imported = []
         for index, path in enumerate(paths):
             if cancel_check and cancel_check():
@@ -166,15 +219,7 @@ class MediaImportService:
                 raise OperationCancelledError("Media import cancelled")
             file_size = os.path.getsize(path)
             title = os.path.basename(path)
-            if media_type == "audio":
-                width = Config.NODE_AUDIO_WIDTH
-                height = Config.NODE_AUDIO_HEIGHT
-            else:
-                width = Config.NODE_MEDIA_SIZE
-                height = Config.NODE_MEDIA_SIZE
-            offset = index * 25
-            x = center_x - width / 2 + offset
-            y = center_y - height / 2 + offset
+            x, y, width, height = positions[index]
 
             def chunk_progress(current, total, status="Encrypting"):
                 if progress_callback:
@@ -228,8 +273,11 @@ class MediaImportWorker(QObject):
             (str(media_type), os.fspath(path))
             for media_type, path in jobs
         ]
-        self._center_x = center_x
-        self._center_y = center_y
+        self._positions = prepare_media_import_positions(
+            self._jobs,
+            center_x,
+            center_y,
+        )
 
     @staticmethod
     def _is_cancelled():
@@ -596,15 +644,7 @@ class MediaImportWorker(QObject):
                 self._assert_source_unchanged(
                     path, job_stats[file_index], title
                 )
-                if media_type == "audio":
-                    width = Config.NODE_AUDIO_WIDTH
-                    height = Config.NODE_AUDIO_HEIGHT
-                else:
-                    width = Config.NODE_MEDIA_SIZE
-                    height = Config.NODE_MEDIA_SIZE
-                offset = file_index * 25
-                x = self._center_x - width / 2 + offset
-                y = self._center_y - height / 2 + offset
+                x, y, width, height = self._positions[file_index]
 
                 node_id = self._write_staged_media(
                     conn,

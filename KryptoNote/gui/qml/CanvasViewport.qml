@@ -19,6 +19,12 @@ Item {
     property real keyboardAcceleration: 16000
     property real keyboardBrake: 24000
     property real keyboardTurnAcceleration: 36000
+    // World coordinates remain doubles. Only the nearby render-local values
+    // below are ever sent through Qt Quick item transforms.
+    property double renderOriginX: 0.0
+    property double renderOriginY: 0.0
+    readonly property double renderOriginQuantum: 32768.0
+    readonly property double renderRebaseThreshold: 65536.0
     readonly property real referenceFrameTime: 1.0 / 60.0
     readonly property real inertiaDecayPerReferenceFrame: 0.82
     readonly property real inertiaReleaseWindowMs: 50.0
@@ -42,8 +48,10 @@ Item {
     readonly property bool frameClockNeeded: _inertiaRunning
             || _keyboardPanRunning || zoomActive || _panRunning
 
-    property real _zoomAnchorX: 0
-    property real _zoomAnchorY: 0
+    property double _zoomAnchorOriginX: 0.0
+    property double _zoomAnchorOriginY: 0.0
+    property double _zoomAnchorRenderX: 0.0
+    property double _zoomAnchorRenderY: 0.0
     property real _zoomMouseX: 0
     property real _zoomMouseY: 0
     property real _zoomFrom: 1.0
@@ -59,10 +67,16 @@ Item {
     readonly property real zoomDuration: 0.12
     readonly property real continuousZoomIdleDuration: 0.08
 
-    property real _panFromX: 0.0
-    property real _panFromY: 0.0
-    property real _panToX: 0.0
-    property real _panToY: 0.0
+    property double _panFromOriginX: 0.0
+    property double _panFromOriginY: 0.0
+    property double _panFromRenderX: 0.0
+    property double _panFromRenderY: 0.0
+    property double _panToOriginX: 0.0
+    property double _panToOriginY: 0.0
+    property double _panToRenderX: 0.0
+    property double _panToRenderY: 0.0
+    property real _panScreenX: 0.0
+    property real _panScreenY: 0.0
     property real _panElapsed: 0.0
     property var _panFinishedCallback: null
     readonly property real panDuration: 0.20
@@ -70,6 +84,7 @@ Item {
     signal zoomChanged(real scale)
     signal zoomFinished(real scale)
     signal viewportCenterShifted(real deltaX, real deltaY)
+    signal renderOriginRebased(double deltaX, double deltaY)
 
     // The camera contract is deliberately kept in one place.  All canvas
     // coordinates are logical scene units, while callers pass viewport pixel
@@ -79,22 +94,65 @@ Item {
     readonly property real safeScale: Math.max(contentScale, 0.0001)
     readonly property real cameraOffsetX: contentLayer ? contentLayer.x : 0.0
     readonly property real cameraOffsetY: contentLayer ? contentLayer.y : 0.0
+    readonly property double cameraCenterX: renderOriginX
+            + (width / 2.0 - cameraOffsetX) / safeScale
+    readonly property double cameraCenterY: renderOriginY
+            + (height / 2.0 - cameraOffsetY) / safeScale
 
-    function screenToCanvas(screenX, screenY) {
+    function worldToRender(worldX, worldY) {
+        return Qt.point(
+            Number(worldX) - renderOriginX,
+            Number(worldY) - renderOriginY
+        )
+    }
+
+    function renderToWorld(renderX, renderY) {
+        return Qt.point(
+            renderOriginX + Number(renderX),
+            renderOriginY + Number(renderY)
+        )
+    }
+
+    function screenToRender(screenX, screenY) {
         return Qt.point(
             (Number(screenX) - cameraOffsetX) / safeScale,
             (Number(screenY) - cameraOffsetY) / safeScale
         )
     }
 
-    function canvasToScreen(canvasX, canvasY) {
+    function renderToScreen(renderX, renderY) {
         return Qt.point(
-            cameraOffsetX + Number(canvasX) * safeScale,
-            cameraOffsetY + Number(canvasY) * safeScale
+            cameraOffsetX + Number(renderX) * safeScale,
+            cameraOffsetY + Number(renderY) * safeScale
         )
     }
 
-    function visibleCanvasRect(margin) {
+    function screenToCanvas(screenX, screenY) {
+        var local = screenToRender(screenX, screenY)
+        return renderToWorld(local.x, local.y)
+    }
+
+    function canvasToScreen(canvasX, canvasY) {
+        var local = worldToRender(canvasX, canvasY)
+        return renderToScreen(local.x, local.y)
+    }
+
+    function captureCameraState(screenX, screenY) {
+        screenX = screenX === undefined ? width / 2.0 : Number(screenX)
+        screenY = screenY === undefined ? height / 2.0 : Number(screenY)
+        if (!isFinite(screenX) || !isFinite(screenY)) return null
+        var local = screenToRender(screenX, screenY)
+        return {
+            "originX": renderOriginX,
+            "originY": renderOriginY,
+            "renderX": local.x,
+            "renderY": local.y,
+            "screenOffsetX": screenX - width / 2.0,
+            "screenOffsetY": screenY - height / 2.0
+        }
+    }
+
+    function visibleRenderRect(margin) {
         var extra = Number(margin)
         if (!isFinite(extra)) extra = 0.0
         return Qt.rect(
@@ -102,6 +160,147 @@ Item {
             -cameraOffsetY / safeScale - extra,
             width / safeScale + extra * 2.0,
             height / safeScale + extra * 2.0
+        )
+    }
+
+    function visibleCanvasRect(margin) {
+        var localRect = visibleRenderRect(margin)
+        return Qt.rect(
+            renderOriginX + localRect.x,
+            renderOriginY + localRect.y,
+            localRect.width,
+            localRect.height
+        )
+    }
+
+    function _quantizedOrigin(value) {
+        value = Number(value)
+        if (!isFinite(value)) return 0.0
+        var quantized = Math.round(value / renderOriginQuantum)
+                * renderOriginQuantum
+        return isFinite(quantized) ? quantized : value
+    }
+
+    function _replaceRenderOrigin(nextX, nextY, preserveView) {
+        nextX = Number(nextX)
+        nextY = Number(nextY)
+        if (!isFinite(nextX) || !isFinite(nextY)) return false
+        var deltaX = nextX - renderOriginX
+        var deltaY = nextY - renderOriginY
+        if (Math.abs(deltaX) + Math.abs(deltaY) <= 0.0001) return false
+
+        var nextLayerX = cameraOffsetX
+        var nextLayerY = cameraOffsetY
+        var transformScale = Math.max(contentScale, 0.0001)
+        if (preserveView && contentLayer) {
+            nextLayerX += deltaX * transformScale
+            nextLayerY += deltaY * transformScale
+        }
+        renderOriginX = nextX
+        renderOriginY = nextY
+        if (preserveView && contentLayer) {
+            contentLayer.x = nextLayerX
+            contentLayer.y = nextLayerY
+        }
+        renderOriginRebased(deltaX, deltaY)
+        return true
+    }
+
+    function _maybeRebase() {
+        if (!contentLayer || !_initialized) return false
+        var centerLocalX = (width / 2.0 - cameraOffsetX) / safeScale
+        var centerLocalY = (height / 2.0 - cameraOffsetY) / safeScale
+        var nextX = renderOriginX
+        var nextY = renderOriginY
+        if (Math.abs(centerLocalX) >= renderRebaseThreshold) {
+            var shiftedX = renderOriginX + _quantizedOrigin(centerLocalX)
+            if (shiftedX !== renderOriginX) nextX = shiftedX
+        }
+        if (Math.abs(centerLocalY) >= renderRebaseThreshold) {
+            var shiftedY = renderOriginY + _quantizedOrigin(centerLocalY)
+            if (shiftedY !== renderOriginY) nextY = shiftedY
+        }
+        return _replaceRenderOrigin(nextX, nextY, true)
+    }
+
+    function _cameraStateForWorld(worldX, worldY, screenX, screenY) {
+        worldX = Number(worldX)
+        worldY = Number(worldY)
+        if (!isFinite(worldX) || !isFinite(worldY)) return null
+        var originX = renderOriginX
+        var originY = renderOriginY
+        if (Math.abs(worldX - originX) >= renderRebaseThreshold)
+            originX = _quantizedOrigin(worldX)
+        if (Math.abs(worldY - originY) >= renderRebaseThreshold)
+            originY = _quantizedOrigin(worldY)
+        return {
+            "originX": originX,
+            "originY": originY,
+            "renderX": worldX - originX,
+            "renderY": worldY - originY,
+            "screenOffsetX": Number(screenX) - width / 2.0,
+            "screenOffsetY": Number(screenY) - height / 2.0
+        }
+    }
+
+    function _cameraStateIsValid(state) {
+        return state
+                && isFinite(Number(state.originX))
+                && isFinite(Number(state.originY))
+                && isFinite(Number(state.renderX))
+                && isFinite(Number(state.renderY))
+    }
+
+    function _placeCameraComponentsAtScreen(originX, originY, renderX, renderY,
+                                            screenX, screenY) {
+        originX = Number(originX)
+        originY = Number(originY)
+        renderX = Number(renderX)
+        renderY = Number(renderY)
+        screenX = Number(screenX)
+        screenY = Number(screenY)
+        if (!contentLayer
+                || !isFinite(originX) || !isFinite(originY)
+                || !isFinite(renderX) || !isFinite(renderY)
+                || !isFinite(screenX) || !isFinite(screenY)) return false
+
+        if (Math.abs(renderX) >= renderRebaseThreshold) {
+            var shiftX = _quantizedOrigin(renderX)
+            var shiftedOriginX = originX + shiftX
+            if (shiftedOriginX !== originX) {
+                originX = shiftedOriginX
+                renderX -= shiftX
+            }
+        }
+        if (Math.abs(renderY) >= renderRebaseThreshold) {
+            var shiftY = _quantizedOrigin(renderY)
+            var shiftedOriginY = originY + shiftY
+            if (shiftedOriginY !== originY) {
+                originY = shiftedOriginY
+                renderY -= shiftY
+            }
+        }
+
+        var deltaX = originX - renderOriginX
+        var deltaY = originY - renderOriginY
+        renderOriginX = originX
+        renderOriginY = originY
+        contentLayer.x = screenX - renderX * safeScale
+        contentLayer.y = screenY - renderY * safeScale
+        if (Math.abs(deltaX) + Math.abs(deltaY) > 0.0001)
+            renderOriginRebased(deltaX, deltaY)
+        return true
+    }
+
+    function _placeCameraStateAtScreen(state, screenX, screenY) {
+        if (!_cameraStateIsValid(state)) return false
+        return _placeCameraComponentsAtScreen(
+            state.originX,
+            state.originY,
+            state.renderX,
+            state.renderY,
+            screenX,
+            screenY
         )
     }
 
@@ -139,10 +338,8 @@ Item {
         // Keep in-flight camera motion in the resized viewport's coordinate
         // system, otherwise the next animation frame would undo this shift.
         if (_panRunning) {
-            _panFromX += deltaX
-            _panFromY += deltaY
-            _panToX += deltaX
-            _panToY += deltaY
+            _panScreenX += deltaX
+            _panScreenY += deltaY
         }
         if (_zoomRunning) {
             _zoomMouseX += deltaX
@@ -187,6 +384,7 @@ Item {
         if (updateVelocity === undefined) updateVelocity = true
         contentLayer.x += dx
         contentLayer.y += dy
+        _maybeRebase()
         if (updateVelocity) {
             var now = Date.now()
             if (_lastPointerPanTime > 0
@@ -222,6 +420,30 @@ Item {
         zoomByFactor(mouseX, mouseY, zoomIn ? zoomFactor : (1.0 / zoomFactor))
     }
 
+    function _applyAnchoredScale(nextScale) {
+        contentScale = nextScale
+        if (_zoomAnchorValid) {
+            _placeCameraComponentsAtScreen(
+                _zoomAnchorOriginX,
+                _zoomAnchorOriginY,
+                _zoomAnchorRenderX,
+                _zoomAnchorRenderY,
+                _zoomMouseX,
+                _zoomMouseY
+            )
+        }
+    }
+
+    function _captureZoomAnchor(mouseX, mouseY) {
+        var anchor = screenToRender(mouseX, mouseY)
+        _zoomAnchorOriginX = renderOriginX
+        _zoomAnchorOriginY = renderOriginY
+        _zoomAnchorRenderX = anchor.x
+        _zoomAnchorRenderY = anchor.y
+        _zoomMouseX = Number(mouseX)
+        _zoomMouseY = Number(mouseY)
+    }
+
     function zoomByFactor(mouseX, mouseY, factor) {
         if (!contentLayer) return
         factor = Number(factor)
@@ -235,10 +457,7 @@ Item {
                 ? _zoomTo
                 : contentScale * pendingFactor
         var newScale = Math.max(minScale, Math.min(maxScale, baseScale * factor))
-        _zoomAnchorX = (Number(mouseX) - contentLayer.x) / safeScale
-        _zoomAnchorY = (Number(mouseY) - contentLayer.y) / safeScale
-        _zoomMouseX = Number(mouseX)
-        _zoomMouseY = Number(mouseY)
+        _captureZoomAnchor(mouseX, mouseY)
         _zoomFrom = contentScale
         _zoomTo = newScale
         _zoomElapsed = 0.0
@@ -280,11 +499,12 @@ Item {
             return
         }
 
-        var anchor = screenToCanvas(mouseX, mouseY)
         stopMotion()
-        contentScale = targetScale
-        contentLayer.x = Number(mouseX) - anchor.x * contentScale
-        contentLayer.y = Number(mouseY) - anchor.y * contentScale
+        _captureZoomAnchor(mouseX, mouseY)
+        _zoomAnchorValid = true
+        _applyAnchoredScale(targetScale)
+        _zoomAnchorValid = false
+        _maybeRebase()
         zoomFinished(contentScale)
     }
 
@@ -356,38 +576,110 @@ Item {
             return false
         }
 
+        var state = _cameraStateForWorld(
+            targetX,
+            targetY,
+            screenCenterX,
+            screenCenterY
+        )
+        return _setCameraStateOnScreen(
+            state,
+            screenCenterX,
+            screenCenterY,
+            animated,
+            onFinished
+        )
+    }
+
+    function restoreCameraState(state, animated, onFinished) {
+        if (!_cameraStateIsValid(state)) return false
+        var offsetX = Number(state.screenOffsetX)
+        var offsetY = Number(state.screenOffsetY)
+        if (!isFinite(offsetX)) offsetX = 0.0
+        if (!isFinite(offsetY)) offsetY = 0.0
+        return _setCameraStateOnScreen(
+            state,
+            width / 2.0 + offsetX,
+            height / 2.0 + offsetY,
+            Boolean(animated),
+            onFinished
+        )
+    }
+
+    function _setCameraStateOnScreen(state, screenX, screenY, animated,
+                                     onFinished) {
+        screenX = Number(screenX)
+        screenY = Number(screenY)
+        if (!_cameraStateIsValid(state)
+                || !isFinite(screenX) || !isFinite(screenY)) return false
         stopMotion()
-        var layerX = screenCenterX - targetX * contentScale
-        var layerY = screenCenterY - targetY * contentScale
         if (animated) {
-            _startPan(layerX, layerY, onFinished)
+            _startPanState(state, screenX, screenY, onFinished)
         } else {
-            contentLayer.x = layerX
-            contentLayer.y = layerY
+            _placeCameraStateAtScreen(state, screenX, screenY)
             if (typeof onFinished === "function") onFinished()
         }
         return true
     }
 
     function smoothMoveTo(layerX, layerY, onFinished) {
-        stopMotion()
-        _startPan(layerX, layerY, onFinished)
+        layerX = Number(layerX)
+        layerY = Number(layerY)
+        if (!isFinite(layerX) || !isFinite(layerY)) return false
+        return _setCameraStateOnScreen({
+            "originX": renderOriginX,
+            "originY": renderOriginY,
+            "renderX": (width / 2.0 - layerX) / safeScale,
+            "renderY": (height / 2.0 - layerY) / safeScale
+        }, width / 2.0, height / 2.0, true, onFinished)
     }
 
-    function _startPan(layerX, layerY, onFinished) {
-        if (!contentLayer) return
-        _panFromX = contentLayer.x
-        _panFromY = contentLayer.y
-        _panToX = layerX
-        _panToY = layerY
+    function smoothPanByScreen(deltaX, deltaY, onFinished) {
+        deltaX = Number(deltaX)
+        deltaY = Number(deltaY)
+        if (!isFinite(deltaX) || !isFinite(deltaY)) return false
+        var target = screenToRender(
+            width / 2.0 - deltaX,
+            height / 2.0 - deltaY
+        )
+        return _setCameraStateOnScreen({
+            "originX": renderOriginX,
+            "originY": renderOriginY,
+            "renderX": target.x,
+            "renderY": target.y
+        }, width / 2.0, height / 2.0, true, onFinished)
+    }
+
+    function _startPanState(state, screenX, screenY, onFinished) {
+        if (!contentLayer || !_cameraStateIsValid(state)) return
+        var current = captureCameraState(screenX, screenY)
+        _panFromOriginX = current.originX
+        _panFromOriginY = current.originY
+        _panFromRenderX = current.renderX
+        _panFromRenderY = current.renderY
+        _panToOriginX = Number(state.originX)
+        _panToOriginY = Number(state.originY)
+        _panToRenderX = Number(state.renderX)
+        _panToRenderY = Number(state.renderY)
+        _panScreenX = screenX
+        _panScreenY = screenY
         _panElapsed = 0.0
         _panFinishedCallback = typeof onFinished === "function"
                 ? onFinished : null
-        _panRunning = Math.abs(_panToX - _panFromX)
-                + Math.abs(_panToY - _panFromY) > 0.01
+        var distanceX = (_panToOriginX - _panFromOriginX)
+                + (_panToRenderX - _panFromRenderX)
+        var distanceY = (_panToOriginY - _panFromOriginY)
+                + (_panToRenderY - _panFromRenderY)
+        _panRunning = Math.abs(distanceX) + Math.abs(distanceY) > 0.0001
         if (!_panRunning) {
-            contentLayer.x = _panToX
-            contentLayer.y = _panToY
+            _placeCameraComponentsAtScreen(
+                _panToOriginX,
+                _panToOriginY,
+                _panToRenderX,
+                _panToRenderY,
+                _panScreenX,
+                _panScreenY
+            )
             _finishPan()
         }
     }
@@ -477,16 +769,13 @@ Item {
         _continuousZoomPending = false
         if (Math.abs(step) <= 0.0001 || !contentLayer) return false
 
-        _zoomAnchorX = (_pendingZoomMouseX - contentLayer.x) / safeScale
-        _zoomAnchorY = (_pendingZoomMouseY - contentLayer.y) / safeScale
-        _zoomMouseX = _pendingZoomMouseX
-        _zoomMouseY = _pendingZoomMouseY
+        _captureZoomAnchor(_pendingZoomMouseX, _pendingZoomMouseY)
         var newScale = Math.max(
             minScale,
             Math.min(maxScale, contentScale * Math.exp(step))
         )
         _zoomAnchorValid = Math.abs(newScale - contentScale) > 0.0001
-        if (_zoomAnchorValid) contentScale = newScale
+        if (_zoomAnchorValid) _applyAnchoredScale(newScale)
         _zoomAnchorValid = false
         _zoomFrom = contentScale
         _zoomTo = contentScale
@@ -528,6 +817,7 @@ Item {
         }
         contentLayer.x += previousVelocityX * distanceScale
         contentLayer.y += previousVelocityY * distanceScale
+        _maybeRebase()
     }
 
     function _advanceKeyboardPan(dt) {
@@ -566,6 +856,7 @@ Item {
         }
         contentLayer.x += keyboardVelocityX * dt
         contentLayer.y += keyboardVelocityY * dt
+        _maybeRebase()
     }
 
     function _advanceZoom(dt) {
@@ -598,9 +889,9 @@ Item {
                           + (3.0 * progress2 - 4.0 * progress + 1.0) * tangent
                           + (-6.0 * progress2 + 6.0 * progress) * toLog)
         _zoomVelocity = zoomDuration > 0 ? derivative / zoomDuration : 0.0
-        contentScale = Math.exp(nextLog)
+        _applyAnchoredScale(Math.exp(nextLog))
         if (progress >= 1.0) {
-            contentScale = _zoomTo
+            _applyAnchoredScale(_zoomTo)
             _zoomStartVelocity = 0.0
             _zoomVelocity = 0.0
             _zoomAnchorValid = false
@@ -617,14 +908,36 @@ Item {
         _panElapsed = Math.min(panDuration, _panElapsed + dt)
         var progress = panDuration > 0 ? _panElapsed / panDuration : 1.0
         var eased = 1.0 - Math.pow(1.0 - progress, 3)
-        contentLayer.x = _panFromX + (_panToX - _panFromX) * eased
-        contentLayer.y = _panFromY + (_panToY - _panFromY) * eased
+        var distanceX = (_panToOriginX - _panFromOriginX)
+                + (_panToRenderX - _panFromRenderX)
+        var distanceY = (_panToOriginY - _panFromOriginY)
+                + (_panToRenderY - _panFromRenderY)
         if (progress >= 1.0) {
-            contentLayer.x = _panToX
-            contentLayer.y = _panToY
+            _placeCameraComponentsAtScreen(
+                _panToOriginX,
+                _panToOriginY,
+                _panToRenderX,
+                _panToRenderY,
+                _panScreenX,
+                _panScreenY
+            )
             _panRunning = false
             _finishPan()
+            return
         }
+        // Rebase the interpolated world point before it reaches item-space.
+        // Keeping the start origin for a very long pan would put ~1e14 into
+        // contentLayer.x/y for intermediate frames and overflow Qt Quick's
+        // single-precision transform.
+        var worldX = _panFromOriginX + _panFromRenderX + distanceX * eased
+        var worldY = _panFromOriginY + _panFromRenderY + distanceY * eased
+        var state = _cameraStateForWorld(
+            worldX,
+            worldY,
+            _panScreenX,
+            _panScreenY
+        )
+        _placeCameraStateAtScreen(state, _panScreenX, _panScreenY)
     }
 
     function _wheelComponent(event, propertyName) {
@@ -744,10 +1057,7 @@ Item {
 
     onContentScaleChanged: {
         if (!contentLayer) return
-        if (_zoomAnchorValid) {
-            contentLayer.x = _zoomMouseX - _zoomAnchorX * contentScale
-            contentLayer.y = _zoomMouseY - _zoomAnchorY * contentScale
-        }
+        _maybeRebase()
         zoomChanged(contentScale)
     }
 

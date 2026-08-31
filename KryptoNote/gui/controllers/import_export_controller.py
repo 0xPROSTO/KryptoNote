@@ -16,6 +16,7 @@ from ...config import Config
 from ...core.constants import (
     AUDIO_EXTENSIONS,
     IMAGE_EXTENSIONS,
+    is_interactive_canvas_position,
     MEDIA_NODE_TYPES,
     VIDEO_EXTENSIONS,
 )
@@ -76,6 +77,15 @@ class ImportExportController(QObject):
             return parent.get_viewport_center()
         return [0.0, 0.0]
 
+    def _ensure_interactive_import_origin(self, center_x, center_y):
+        if is_interactive_canvas_position(center_x, center_y):
+            return True
+        self.status_message.emit(
+            "Media cannot be created outside the interactive canvas range.",
+            "warning",
+        )
+        return False
+
     @staticmethod
     def _format_file_size(size):
         gib = size / (1024 ** 3)
@@ -131,6 +141,8 @@ class ImportExportController(QObject):
 
         center = viewport_center or self.get_viewport_center_func()
         center_x, center_y = center[0], center[1]
+        if not self._ensure_interactive_import_origin(center_x, center_y):
+            return
 
         paths, _ = QFileDialog.getOpenFileNames(
             None,
@@ -162,6 +174,8 @@ class ImportExportController(QObject):
         )
 
     def _start_media_import(self, jobs, center_x, center_y):
+        if not self._ensure_interactive_import_origin(center_x, center_y):
+            return
         if self.has_active_media_import():
             QMessageBox.information(
                 None, "Import", "A media import is already running."
@@ -945,6 +959,8 @@ class ImportExportController(QObject):
     @Slot(list, float, float)
     def import_files_by_paths(self, file_paths, center_x, center_y):
         """Import files dropped onto the canvas. Supports mixed types."""
+        if not self._ensure_interactive_import_origin(center_x, center_y):
+            return
         if self._operations.is_busy:
             QMessageBox.information(None, "Import", "Another database operation is active.")
             return

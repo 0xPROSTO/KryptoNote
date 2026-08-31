@@ -34,6 +34,7 @@ class ConnectionListModel(QAbstractListModel):
     geometry_batch_changed = Signal(bool)
 
     _HIT_GRID_SIZE = 128.0
+    _MAX_INDEXED_CELLS_PER_SEGMENT = 4096
     _MAX_SEGMENT_LENGTH = 24.0
     _MAX_CURVE_SEGMENTS = 64
 
@@ -47,6 +48,7 @@ class ConnectionListModel(QAbstractListModel):
         self._hit_grid = {}
         self._conn_segments = {}
         self._conn_hit_memberships = {}
+        self._long_hit_segments = set()
         self._connection_style = "curved"
         self._connection_curve_formula = DEFAULT_CONNECTION_CURVE_FORMULA
         self._connection_corner_style = DEFAULT_CONNECTION_CORNER_STYLE
@@ -266,6 +268,7 @@ class ConnectionListModel(QAbstractListModel):
         for cell_x in range(min_cell_x, max_cell_x + 1):
             for cell_y in range(min_cell_y, max_cell_y + 1):
                 candidates.update(self._hit_grid.get((cell_x, cell_y), ()))
+        candidates.update(self._long_hit_segments)
 
         best_id = 0
         best_dist_sq = radius_sq
@@ -377,6 +380,7 @@ class ConnectionListModel(QAbstractListModel):
         self._hit_grid.clear()
         self._conn_segments.clear()
         self._conn_hit_memberships.clear()
+        self._long_hit_segments.clear()
 
     def _unindex_connection(self, conn_id):
         for cell_key, segment_index in self._conn_hit_memberships.pop(conn_id, ()):
@@ -387,6 +391,9 @@ class ConnectionListModel(QAbstractListModel):
             if not bucket:
                 self._hit_grid.pop(cell_key, None)
         self._conn_segments.pop(conn_id, None)
+        self._long_hit_segments = {
+            entry for entry in self._long_hit_segments if entry[0] != conn_id
+        }
 
     def _index_connection(self, conn):
         conn_id = conn["conn_id"]
@@ -405,18 +412,88 @@ class ConnectionListModel(QAbstractListModel):
         memberships = []
         grid_size = self._HIT_GRID_SIZE
         for segment_index, (x1, y1, x2, y2) in enumerate(segments):
-            min_cell_x = math.floor(min(x1, x2) / grid_size)
-            max_cell_x = math.floor(max(x1, x2) / grid_size)
-            min_cell_y = math.floor(min(y1, y2) / grid_size)
-            max_cell_y = math.floor(max(y1, y2) / grid_size)
-            for cell_x in range(min_cell_x, max_cell_x + 1):
-                for cell_y in range(min_cell_y, max_cell_y + 1):
-                    cell_key = (cell_x, cell_y)
-                    self._hit_grid.setdefault(cell_key, set()).add(
-                        (conn_id, segment_index)
-                    )
-                    memberships.append((cell_key, segment_index))
+            start_cell_x = math.floor(x1 / grid_size)
+            start_cell_y = math.floor(y1 / grid_size)
+            end_cell_x = math.floor(x2 / grid_size)
+            end_cell_y = math.floor(y2 / grid_size)
+            crossed_span = (
+                abs(end_cell_x - start_cell_x)
+                + abs(end_cell_y - start_cell_y)
+                + 1
+            )
+            if crossed_span > self._MAX_INDEXED_CELLS_PER_SEGMENT:
+                self._long_hit_segments.add((conn_id, segment_index))
+                continue
+            for cell_key in self._segment_grid_cells(
+                x1, y1, x2, y2, grid_size
+            ):
+                self._hit_grid.setdefault(cell_key, set()).add(
+                    (conn_id, segment_index)
+                )
+                memberships.append((cell_key, segment_index))
         self._conn_hit_memberships[conn_id] = memberships
+
+    @staticmethod
+    def _segment_grid_cells(x1, y1, x2, y2, grid_size):
+        """Return only spatial cells crossed by a segment.
+
+        Bounding-box indexing explodes quadratically for links whose endpoints
+        are far apart. This grid traversal stays linear in the crossed distance
+        while preserving the same world-space hit-test candidates.
+        """
+        cell_x = math.floor(x1 / grid_size)
+        cell_y = math.floor(y1 / grid_size)
+        end_x = math.floor(x2 / grid_size)
+        end_y = math.floor(y2 / grid_size)
+        cells = {(cell_x, cell_y)}
+        if cell_x == end_x and cell_y == end_y:
+            return cells
+
+        dx = x2 - x1
+        dy = y2 - y1
+        step_x = 1 if dx > 0.0 else -1 if dx < 0.0 else 0
+        step_y = 1 if dy > 0.0 else -1 if dy < 0.0 else 0
+        t_delta_x = grid_size / abs(dx) if step_x else math.inf
+        t_delta_y = grid_size / abs(dy) if step_y else math.inf
+
+        if step_x > 0:
+            next_boundary_x = (cell_x + 1) * grid_size
+            t_max_x = (next_boundary_x - x1) / dx
+        elif step_x < 0:
+            next_boundary_x = cell_x * grid_size
+            t_max_x = (next_boundary_x - x1) / dx
+        else:
+            t_max_x = math.inf
+
+        if step_y > 0:
+            next_boundary_y = (cell_y + 1) * grid_size
+            t_max_y = (next_boundary_y - y1) / dy
+        elif step_y < 0:
+            next_boundary_y = cell_y * grid_size
+            t_max_y = (next_boundary_y - y1) / dy
+        else:
+            t_max_y = math.inf
+
+        while cell_x != end_x or cell_y != end_y:
+            if t_max_x < t_max_y:
+                cell_x += step_x
+                t_max_x += t_delta_x
+            elif t_max_y < t_max_x:
+                cell_y += step_y
+                t_max_y += t_delta_y
+            else:
+                next_x = cell_x + step_x
+                next_y = cell_y + step_y
+                # A segment through a grid corner is close to both adjacent
+                # cells; retain them for radius-based queries at that corner.
+                cells.add((next_x, cell_y))
+                cells.add((cell_x, next_y))
+                cell_x = next_x
+                cell_y = next_y
+                t_max_x += t_delta_x
+                t_max_y += t_delta_y
+            cells.add((cell_x, cell_y))
+        return cells
 
     @staticmethod
     def _straight_segments(p0x, p0y, p3x, p3y):

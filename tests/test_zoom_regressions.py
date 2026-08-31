@@ -1,3 +1,4 @@
+import math
 import os
 from pathlib import Path
 
@@ -5,6 +6,21 @@ import pytest
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlComponent, QQmlEngine
+
+from KryptoNote.core.constants import CANVAS_INTERACTIVE_COORDINATE_LIMIT
+from KryptoNote.core.crypto import CryptoManager
+from KryptoNote.core.database.connection import DatabaseConnection
+from KryptoNote.core.database.repository import NodeRepository
+from KryptoNote.gui.models.connection_list_model import ConnectionListModel
+from KryptoNote.gui.models.node_list_model import NodeListModel
+from KryptoNote.gui.models.viewport_proxy_model import (
+    ConnectionViewportProxyModel,
+    NodeViewportProxyModel,
+)
+from KryptoNote.gui.services.media_import_service import (
+    prepare_media_import_positions,
+)
+from KryptoNote.services.graph_clipboard_service import GraphClipboardService
 
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -24,6 +40,8 @@ import "{qml_dir}" as App
 Item {{
     id: root
     property int terminalCount: 0
+    property int rebaseCount: 0
+    property var savedCameraState: null
 
     App.CanvasViewport {{
         id: viewport
@@ -35,7 +53,11 @@ Item {{
     Connections {{
         target: viewport
         function onZoomFinished(scale) {{ root.terminalCount += 1 }}
+        function onRenderOriginRebased(deltaX, deltaY) {{
+            root.rebaseCount += 1
+        }}
     }}
+    Component.onCompleted: viewport.initialize()
 
     function mouseWheel(x, y, angle) {{
         return viewport.handleWheel({{
@@ -82,6 +104,7 @@ Item {{
         return viewport.inertiaReleaseWindowMs
     }}
     function layerX() {{ return viewport.contentLayer.x }}
+    function layerY() {{ return viewport.contentLayer.y }}
     function pointerVelocityX() {{ return viewport.velocityX }}
     function contentScale() {{ return viewport.contentScale }}
     function targetScale() {{ return viewport._zoomTo }}
@@ -93,6 +116,21 @@ Item {{
     function continuousPending() {{ return viewport._continuousZoomPending }}
     function finishedCount() {{ return root.terminalCount }}
     function canvasAt(x, y) {{ return viewport.screenToCanvas(x, y) }}
+    function screenAt(x, y) {{ return viewport.canvasToScreen(x, y) }}
+    function originX() {{ return viewport.renderOriginX }}
+    function originY() {{ return viewport.renderOriginY }}
+    function rebaseTo(x, y) {{
+        return viewport._replaceRenderOrigin(x, y, true)
+    }}
+    function captureState(x, y) {{
+        root.savedCameraState = viewport.captureCameraState(x, y)
+    }}
+    function savedRenderX() {{ return root.savedCameraState.renderX }}
+    function savedRenderY() {{ return root.savedCameraState.renderY }}
+    function restoreState(animated) {{
+        return viewport.restoreCameraState(root.savedCameraState, animated)
+    }}
+    function rebases() {{ return root.rebaseCount }}
 }}
 '''.encode()
     component = QQmlComponent(engine)
@@ -123,6 +161,9 @@ Item {{
     property real contentScale: 1.0
     property real visualDetailScale: 1.0
     readonly property real minimumScale: 0.1
+    property double renderOriginX: 0.0
+    property double renderOriginY: 0.0
+    property rect renderViewportRect: Qt.rect(-1000, -1000, 2000, 2000)
     property int hoveredConnectionId: 0
     function visibleCanvasRect(margin) {{
         return Qt.rect(-1000, -1000, 2000, 2000)
@@ -177,6 +218,16 @@ Item {{
     function setVisualDetailScale(scale) {{
         root.visualDetailScale = scale
     }}
+    function setRenderOrigin(x, y) {{
+        root.renderOriginX = x
+        root.renderOriginY = y
+    }}
+    function setEndpoints(x1, y1, x2, y2) {{
+        connectionModel.connStartEdgeX = x1
+        connectionModel.connStartEdgeY = y1
+        connectionModel.connEndEdgeX = x2
+        connectionModel.connEndEdgeY = y2
+    }}
     function geometry() {{
         return [
             connection.x,
@@ -187,6 +238,7 @@ Item {{
         ]
     }}
     function strokeWidth() {{ return connection.effectiveStrokeWidth }}
+    function viewportClipped() {{ return connection.usesViewportClip }}
 }}
 '''.encode()
     component = QQmlComponent(engine)
@@ -352,6 +404,213 @@ def test_exact_center_preserves_zoom_for_animated_and_immediate_motion():
     assert viewport.contentScale() == pytest.approx(1.75)
 
 
+@pytest.mark.parametrize("scale", [0.05, 1.0, 5.0])
+@pytest.mark.parametrize("target", [20_000_000.25, -20_000_000.25])
+def test_floating_origin_centers_large_world_coordinates_at_every_zoom(
+    scale, target
+):
+    viewport, _engine, _component = _load_viewport()
+    viewport.setExactZoom(400, 300, scale, False)
+
+    assert viewport.centerOn(target, -target, 400, 300, False)
+
+    centered = viewport.canvasAt(400, 300)
+    assert centered.x() == pytest.approx(target)
+    assert centered.y() == pytest.approx(-target)
+    assert viewport.originX() % 32768 == pytest.approx(0.0)
+    assert viewport.originY() % 32768 == pytest.approx(0.0)
+    assert abs(viewport.layerX()) < 100_000
+
+
+@pytest.mark.parametrize("scale", [0.05, 1.0, 5.0])
+def test_animated_navigation_rebases_every_intermediate_large_world_frame(scale):
+    viewport, _engine, _component = _load_viewport()
+    target_x = CANVAS_INTERACTIVE_COORDINATE_LIMIT - 599.0
+    target_y = CANVAS_INTERACTIVE_COORDINATE_LIMIT - 23.0
+    viewport.setExactZoom(400, 300, scale, False)
+
+    assert viewport.centerOn(target_x, target_y, 400, 300, True)
+    for _ in range(30):
+        if not viewport.panRunning():
+            break
+        viewport.advance(1.0 / 120.0)
+        assert abs(viewport.layerX()) < 100_000
+        assert abs(viewport.layerY()) < 100_000
+
+    assert not viewport.panRunning()
+    centered = viewport.canvasAt(400, 300)
+    assert centered.x() == pytest.approx(target_x, abs=0.0625)
+    assert centered.y() == pytest.approx(target_y, abs=0.0625)
+
+
+def test_render_origin_rebase_preserves_screen_position_in_the_same_turn():
+    viewport, _engine, _component = _load_viewport()
+    viewport.centerOn(20_000_000, -20_000_000, 400, 300, False)
+    world_x = 20_000_123.25
+    world_y = -19_999_543.75
+    before = viewport.screenAt(world_x, world_y)
+
+    assert viewport.rebaseTo(viewport.originX() + 32768, viewport.originY() - 32768)
+
+    after = viewport.screenAt(world_x, world_y)
+    assert after.x() == pytest.approx(before.x(), abs=0.001)
+    assert after.y() == pytest.approx(before.y(), abs=0.001)
+    assert viewport.rebases() >= 2
+
+
+@pytest.mark.parametrize(
+    "target",
+    [CANVAS_INTERACTIVE_COORDINATE_LIMIT - 1024.0, 1e38],
+)
+def test_camera_snapshot_restores_origin_and_render_local_offset(target):
+    viewport, _engine, _component = _load_viewport()
+    viewport.setExactZoom(400, 300, 2.0, False)
+    assert viewport.centerOn(target, -target, 400, 300, False)
+    before_layer_x = viewport.layerX()
+    before_layer_y = viewport.layerY()
+
+    viewport.captureState(520, 350)
+    assert abs(viewport.savedRenderX()) < 65536.0
+    assert abs(viewport.savedRenderY()) < 65536.0
+
+    assert viewport.centerOn(0, 0, 400, 300, False)
+    assert viewport.restoreState(False)
+
+    centered = viewport.canvasAt(400, 300)
+    assert centered.x() == target
+    assert centered.y() == -target
+    assert abs(target - viewport.originX()) < 65536.0
+    assert abs(-target - viewport.originY()) < 65536.0
+    assert viewport.layerX() == pytest.approx(before_layer_x, abs=0.001)
+    assert viewport.layerY() == pytest.approx(before_layer_y, abs=0.001)
+
+
+@pytest.mark.parametrize("coordinate", [1e38, -1e38])
+def test_viewport_proxies_keep_extreme_world_delegates(coordinate):
+    nodes = NodeListModel()
+    nodes.add_node(1, "text", coordinate, -coordinate, 200, 120)
+    nodes.add_node(2, "text", coordinate, -coordinate, 160, 90)
+    connections = ConnectionListModel(nodes)
+    assert connections.add_connection(1, 1, 2)
+
+    node_proxy = NodeViewportProxyModel(nodes)
+    connection_proxy = ConnectionViewportProxyModel(connections)
+    node_proxy.updateViewportCentered(
+        coordinate, -coordinate, 800.0, 600.0
+    )
+    connection_proxy.updateViewportCentered(
+        coordinate, -coordinate, 800.0, 600.0
+    )
+
+    assert node_proxy.rowCount() == 2
+    assert connection_proxy.rowCount() == 1
+    assert nodes.get_nodes_bounds([1]) == [
+        coordinate,
+        -coordinate,
+        200.0,
+        120.0,
+    ]
+
+
+def test_render_relative_rubber_band_selects_legacy_geometry():
+    nodes = NodeListModel()
+    nodes.add_node(1, "text", 1e38, -1e38, 200, 120)
+    nodes.add_node(2, "text", 0, 0, 200, 120)
+
+    assert nodes.get_nodes_in_render_rect(
+        1e38,
+        -1e38,
+        -10,
+        -10,
+        210,
+        130,
+    ) == [1]
+
+    rubber_source = (QML_DIR / "RubberBandSelection.qml").read_text(
+        encoding="utf-8"
+    )
+    assert "viewport.screenToRender(" in rubber_source
+    assert "get_nodes_in_render_rect(" in rubber_source
+
+
+def test_graph_clipboard_keeps_legacy_node_size_and_clamps_paste_origin():
+    database = DatabaseConnection(":memory:")
+    crypto = CryptoManager()
+    crypto.load_data_key(bytes(range(32)))
+    repository = NodeRepository(database, crypto)
+    try:
+        node_id = repository.add_item(
+            "text",
+            1e38,
+            -1e38,
+            200,
+            120,
+            title="Legacy",
+        )
+        blueprint = repository.build_graph_copy_blueprint([node_id])
+        assert blueprint["bounds"] == {"width": 200.0, "height": 120.0}
+        assert blueprint["nodes"][0]["relative_x"] == pytest.approx(0.0)
+        assert blueprint["nodes"][0]["relative_y"] == pytest.approx(0.0)
+
+        clipboard = GraphClipboardService(repository)
+        preparation = clipboard.prepare_duplicate(
+            [node_id],
+            offset=(
+                CANVAS_INTERACTIVE_COORDINATE_LIMIT + 1000.0,
+                -CANVAS_INTERACTIVE_COORDINATE_LIMIT - 1000.0,
+            ),
+        )
+        assert preparation["offset_x"] == pytest.approx(
+            CANVAS_INTERACTIVE_COORDINATE_LIMIT
+        )
+        assert preparation["offset_y"] == pytest.approx(
+            -CANVAS_INTERACTIVE_COORDINATE_LIMIT
+        )
+    finally:
+        repository.close()
+        database.close()
+
+
+def test_media_import_positions_are_clamped_as_one_group():
+    limit = CANVAS_INTERACTIVE_COORDINATE_LIMIT
+    positions = prepare_media_import_positions(
+        [("image", "a.png"), ("audio", "b.wav")],
+        limit,
+        -limit,
+    )
+
+    first_x, first_y, first_width, first_height = positions[0]
+    second_x, second_y, second_width, second_height = positions[1]
+    assert max(first_x, second_x) <= limit
+    assert min(first_y, second_y) >= -limit
+    assert second_x - first_x == pytest.approx(
+        25.0 + first_width / 2.0 - second_width / 2.0
+    )
+    assert second_y - first_y == pytest.approx(
+        25.0 + first_height / 2.0 - second_height / 2.0
+    )
+
+    with pytest.raises(ValueError, match="interactive canvas range"):
+        prepare_media_import_positions(
+            [("image", "legacy.png")],
+            1e38,
+            0,
+        )
+
+
+def test_far_world_zoom_preserves_the_cursor_anchor():
+    viewport, _engine, _component = _load_viewport()
+    viewport.centerOn(25_000_000, -25_000_000, 400, 300, False)
+    anchor_before = viewport.canvasAt(240, 175)
+
+    viewport.mouseWheel(240, 175, 120)
+    _advance_until_finished(viewport)
+
+    anchor_after = viewport.canvasAt(240, 175)
+    assert anchor_after.x() == pytest.approx(anchor_before.x(), abs=0.001)
+    assert anchor_after.y() == pytest.approx(anchor_before.y(), abs=0.001)
+
+
 def test_pointer_pan_inertia_requires_recent_movement():
     viewport, _engine, _component = _load_viewport()
 
@@ -396,10 +655,9 @@ def test_visual_detail_and_connection_geometry_do_not_follow_tween_frames():
         "property real renderPadding", 1
     )[1].split("property var pathGeometry", 1)[0]
     assert "contentScale" not in bounds_source
-    assert "visibleCanvasRect" not in connection_source
-    assert "isInViewport" not in connection_source
-    assert "segments:" not in connection_source
-    assert "appendSegment" not in connection_source
+    assert "usesViewportClip" in connection_source
+    assert "clipSegmentToRect" in connection_source
+    assert "canvasRoot.renderViewportRect" in connection_source
 
 
 def test_zoom_overlay_bridge_is_only_called_after_motion_finishes():
@@ -426,8 +684,31 @@ def test_canvas_exposes_exact_zoom_and_coordinate_navigation_bridge():
     assert "viewport.setCenterOnScreen(" in canvas_source
 
 
+def test_grid_uses_wrapped_world_phase_instead_of_large_world_uniforms():
+    canvas_source = (QML_DIR / "Canvas.qml").read_text(encoding="utf-8")
+    grid_source = (QML_DIR / "grid.frag").read_text(encoding="utf-8")
+
+    assert "positiveModulo(root.renderOriginX, root.gridSize)" in canvas_source
+    assert "positiveModulo(root.renderOriginY, root.gridMain)" in canvas_source
+    assert "renderPos + gridPhase" in grid_source
+    assert "renderPos + mainGridPhase" in grid_source
+
+
 def test_viewport_models_are_flushed_once_zoom_finishes():
     canvas_source = (QML_DIR / "Canvas.qml").read_text(encoding="utf-8")
+
+    render_rect_source = canvas_source.split(
+        "function refreshRenderViewportRect()", 1
+    )[1].split("function updateViewportModels()", 1)[0]
+    assert "viewport.visibleRenderRect(" in render_rect_source
+    assert "root.renderViewportRect = visible" in render_rect_source
+
+    update_source = canvas_source.split(
+        "function updateViewportModels()", 1
+    )[1].split("function retainTransformNodes", 1)[0]
+    assert "root.refreshRenderViewportRect()" in update_source
+    assert update_source.count("updateViewportCentered(") == 2
+    assert "visible.x + visible.width" not in update_source
 
     scheduler_source = canvas_source.split(
         "function scheduleViewportUpdate()", 1
@@ -444,6 +725,11 @@ def test_viewport_models_are_flushed_once_zoom_finishes():
         "onZoomFinished: function(scale)", 1
     )[1].split("onZoomActiveChanged", 1)[0]
     assert "root.scheduleViewportUpdate()" in zoom_finished_source
+    rebase_source = canvas_source.split(
+        "onRenderOriginRebased:", 1
+    )[1].split("CanvasInputLayer {", 1)[0]
+    assert "root.refreshRenderViewportRect()" in rebase_source
+    assert "root.scheduleViewportUpdate()" in rebase_source
 
 
 def test_connection_bounds_and_path_ignore_intermediate_content_scale():
@@ -459,6 +745,58 @@ def test_connection_bounds_and_path_ignore_intermediate_content_scale():
     connection.setVisualDetailScale(1.37)
     assert connection.geometry().toVariant() == geometry_before
     assert connection.strokeWidth() != pytest.approx(stroke_before)
+
+
+def test_connection_geometry_is_local_and_distant_links_are_viewport_clipped():
+    connection, _engine, _component = _load_connection()
+    near_geometry = connection.geometry().toVariant()
+
+    connection.setRenderOrigin(20_000_000, -20_000_000)
+    connection.setEndpoints(
+        20_000_020,
+        -19_999_970,
+        20_000_420,
+        -19_999_740,
+    )
+    local_geometry = connection.geometry().toVariant()
+    assert local_geometry == near_geometry
+    assert not connection.viewportClipped()
+
+    connection.setRenderOrigin(0, 0)
+    connection.setEndpoints(-20_000_000, 0, 20_000_000, 0)
+    clipped_geometry = connection.geometry().toVariant()
+    assert connection.viewportClipped()
+    assert clipped_geometry[2] < 10_000
+    assert clipped_geometry[3] < 10_000
+    assert "20000000" not in clipped_geometry[4]
+
+    extreme = 1e38
+    next_extreme = math.nextafter(extreme, math.inf)
+    connection.setRenderOrigin(extreme, -extreme)
+    connection.setEndpoints(
+        extreme,
+        -extreme,
+        next_extreme,
+        -extreme,
+    )
+    extreme_geometry = connection.geometry().toVariant()
+    assert connection.viewportClipped()
+    assert all(abs(value) < 10_000 for value in extreme_geometry[:4])
+
+
+def test_long_connection_hit_index_stays_bounded_and_hits_in_world_space():
+    nodes = NodeListModel()
+    nodes.add_node(1, "text", -20_000_000, 0, 100, 100)
+    nodes.add_node(2, "text", 20_000_000, 0, 100, 100)
+    connections = ConnectionListModel(nodes)
+    connections.set_connection_appearance(
+        "straight", "horizontal", "smooth", "perimeter"
+    )
+
+    assert connections.add_connection(1, 1, 2)
+    assert connections._long_hit_segments
+    assert len(connections._hit_grid) < 100
+    assert connections.hit_test_connection(50, 50, 10) == 1
 
 
 def test_connection_context_menu_uses_the_shared_spatial_hit_test():

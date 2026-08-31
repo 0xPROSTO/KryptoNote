@@ -36,6 +36,15 @@ Rectangle {
     readonly property real visualDetailScale: _visualDetailScale
     readonly property real cameraOffsetX: viewport.cameraOffsetX
     readonly property real cameraOffsetY: viewport.cameraOffsetY
+    readonly property double renderOriginX: viewport.renderOriginX
+    readonly property double renderOriginY: viewport.renderOriginY
+    readonly property double cameraCenterX: viewport.cameraCenterX
+    readonly property double cameraCenterY: viewport.cameraCenterY
+    readonly property double interactiveCoordinateLimit:
+            root.canvasController
+            && isFinite(Number(root.canvasController.interactiveCoordinateLimit))
+            ? Number(root.canvasController.interactiveCoordinateLimit)
+            : 281474976710656.0
     readonly property point navigationCenter: viewport.screenToCanvas(
         root._availableScreenCenterX(),
         root.height / 2
@@ -95,6 +104,7 @@ Rectangle {
     property real _pendingConnectionRadius: 0
     property bool _connectionHitPending: false
     property bool _viewportUpdatePending: false
+    property rect renderViewportRect: Qt.rect(0, 0, 0, 0)
     property var _pendingConnectionRevealIds: []
     readonly property bool frameClockNeeded: _connectionHitPending
             || viewport.frameClockNeeded
@@ -102,11 +112,9 @@ Rectangle {
 
     property alias _contentLayerX: contentLayer.x
     property alias _contentLayerY: contentLayer.y
-    property real _editorReturnX: 0
-    property real _editorReturnY: 0
+    property var _editorReturnState: null
     property bool _hasEditorReturn: false
-    property real _mediaReturnX: 0
-    property real _mediaReturnY: 0
+    property var _mediaReturnState: null
     property bool _hasMediaReturn: false
     property bool _suppressEditorCameraReturn: false
     property bool _suppressMediaCameraReturn: false
@@ -168,6 +176,14 @@ Rectangle {
         appTheme: root.appTheme
         anchors.fill: parent
         offset: Qt.vector2d(viewport.cameraOffsetX, viewport.cameraOffsetY)
+        gridPhase: Qt.vector2d(
+            root.positiveModulo(root.renderOriginX, root.gridSize),
+            root.positiveModulo(root.renderOriginY, root.gridSize)
+        )
+        mainGridPhase: Qt.vector2d(
+            root.positiveModulo(root.renderOriginX, root.gridMain),
+            root.positiveModulo(root.renderOriginY, root.gridMain)
+        )
         viewScale: viewport.contentScale
         viewportSize: Qt.vector2d(root.width, root.height)
         gridSize: root.gridSize
@@ -243,8 +259,8 @@ Rectangle {
                     (2 + (root.appTheme.motionEnabled ? 6 * progress : 0))
                     / Math.max(root.visualDetailScale, 0.12)
 
-            x: targetBounds.x - expansion
-            y: targetBounds.y - expansion
+            x: targetBounds.x - root.renderOriginX - expansion
+            y: targetBounds.y - root.renderOriginY - expansion
             width: targetBounds.width + expansion * 2
             height: targetBounds.height + expansion * 2
             radius: 6 / Math.max(root.visualDetailScale, 0.12)
@@ -327,15 +343,13 @@ Rectangle {
         onZoomActiveChanged: {
             if (viewport.zoomActive) viewportUpdateTimer.stop()
         }
-        onViewportCenterShifted: function(deltaX, deltaY) {
-            if (root._hasEditorReturn) {
-                root._editorReturnX += deltaX
-                root._editorReturnY += deltaY
-            }
-            if (root._hasMediaReturn) {
-                root._mediaReturnX += deltaX
-                root._mediaReturnY += deltaY
-            }
+        onRenderOriginRebased: {
+            // Clipped links consume render-local viewport geometry directly.
+            // Refresh that boundary in this turn so a rebase cannot expose
+            // one frame built against the previous origin. Python proxies
+            // remain coalesced through the normal scheduler below.
+            root.refreshRenderViewportRect()
+            root.scheduleViewportUpdate()
         }
     }
 
@@ -473,6 +487,8 @@ Rectangle {
         nodeModel: root.nodeModel
         contentLayer: contentLayer
         contentScale: root.contentScale
+        renderOriginX: root.renderOriginX
+        renderOriginY: root.renderOriginY
 
         onClosed: root.forceActiveFocus()
     }
@@ -702,20 +718,28 @@ Rectangle {
         viewport.stopKeyboardPan()
     }
 
+    function refreshRenderViewportRect() {
+        var visible = viewport.visibleRenderRect(
+            480 / Math.max(root.contentScale, 0.12)
+        )
+        root.renderViewportRect = visible
+        return visible
+    }
+
     function updateViewportModels() {
         if (!root.nodeViewportModel || !root.connectionViewportModel) return
-        var visible = viewport.visibleCanvasRect(480 / Math.max(root.contentScale, 0.12))
-        root.nodeViewportModel.updateViewport(
-            visible.x,
-            visible.y,
-            visible.x + visible.width,
-            visible.y + visible.height
+        var visible = root.refreshRenderViewportRect()
+        root.nodeViewportModel.updateViewportCentered(
+            viewport.cameraCenterX,
+            viewport.cameraCenterY,
+            visible.width,
+            visible.height
         )
-        root.connectionViewportModel.updateViewport(
-            visible.x,
-            visible.y,
-            visible.x + visible.width,
-            visible.y + visible.height
+        root.connectionViewportModel.updateViewportCentered(
+            viewport.cameraCenterX,
+            viewport.cameraCenterY,
+            visible.width,
+            visible.height
         )
     }
 
@@ -886,12 +910,54 @@ Rectangle {
         return viewport.screenToCanvas(screenX, screenY)
     }
 
+    function screenToRender(screenX, screenY) {
+        return viewport.screenToRender(screenX, screenY)
+    }
+
     function canvasToScreen(canvasX, canvasY) {
         return viewport.canvasToScreen(canvasX, canvasY)
     }
 
+    function worldToRender(worldX, worldY) {
+        return viewport.worldToRender(worldX, worldY)
+    }
+
+    function renderToWorld(renderX, renderY) {
+        return viewport.renderToWorld(renderX, renderY)
+    }
+
+    function renderToScreen(renderX, renderY) {
+        return viewport.renderToScreen(renderX, renderY)
+    }
+
+    function positiveModulo(value, divisor) {
+        value = Number(value)
+        divisor = Number(divisor)
+        if (!isFinite(value) || !isFinite(divisor) || divisor <= 0.0)
+            return 0.0
+        var remainder = value % divisor
+        return remainder < 0.0 ? remainder + divisor : remainder
+    }
+
+    function snapWorldCoordinate(value, origin, spacing) {
+        value = Number(value)
+        origin = Number(origin)
+        spacing = Number(spacing)
+        if (!isFinite(value) || !isFinite(origin)
+                || !isFinite(spacing) || spacing <= 0.0) return value
+        var phase = positiveModulo(origin, spacing)
+        var local = value - origin
+        var snappedLocal = Math.round((local + phase) / spacing)
+                * spacing - phase
+        return origin + snappedLocal
+    }
+
     function visibleCanvasRect(margin) {
         return viewport.visibleCanvasRect(margin)
+    }
+
+    function visibleRenderRect(margin) {
+        return viewport.visibleRenderRect(margin)
     }
 
     function resetZoom() {
@@ -918,7 +984,11 @@ Rectangle {
     function goToCoordinates(targetX, targetY) {
         targetX = Number(targetX)
         targetY = Number(targetY)
-        if (!isFinite(targetX) || !isFinite(targetY)) return false
+        if (!isFinite(targetX) || !isFinite(targetY)
+                || Math.abs(targetX) > root.interactiveCoordinateLimit
+                || Math.abs(targetY) > root.interactiveCoordinateLimit) {
+            return false
+        }
         return viewport.setCenterOnScreen(
             targetX,
             targetY,
@@ -957,8 +1027,7 @@ Rectangle {
             }
             root.beginArrayListHandoff()
             if (root._hasMediaReturn && !root._hasEditorReturn) {
-                root._editorReturnX = root._mediaReturnX
-                root._editorReturnY = root._mediaReturnY
+                root._editorReturnState = root._mediaReturnState
                 root._hasEditorReturn = true
             }
             root._suppressMediaCameraReturn = true
@@ -966,9 +1035,11 @@ Rectangle {
             root._suppressMediaCameraReturn = false
         }
         if (!_hasEditorReturn) {
-            _editorReturnX = contentLayer.x
-            _editorReturnY = contentLayer.y
-            _hasEditorReturn = true
+            _editorReturnState = viewport.captureCameraState(
+                root.width / 2.0,
+                root.height / 2.0
+            )
+            _hasEditorReturn = _editorReturnState !== null
         }
         textEditorPanel.openForNode(nodeId)
         root.finishArrayListHandoff()
@@ -999,8 +1070,7 @@ Rectangle {
             root.beginArrayListHandoff()
         if (textEditorPanel.open) {
             if (root._hasEditorReturn && !root._hasMediaReturn) {
-                root._mediaReturnX = root._editorReturnX
-                root._mediaReturnY = root._editorReturnY
+                root._mediaReturnState = root._editorReturnState
                 root._hasMediaReturn = true
             }
             root._suppressEditorCameraReturn = true
@@ -1016,9 +1086,11 @@ Rectangle {
     function beginMediaViewer(nodeId) {
         var firstOpen = !root._hasMediaReturn
         if (firstOpen) {
-            root._mediaReturnX = contentLayer.x
-            root._mediaReturnY = contentLayer.y
-            root._hasMediaReturn = true
+            root._mediaReturnState = viewport.captureCameraState(
+                root.width / 2.0,
+                root.height / 2.0
+            )
+            root._hasMediaReturn = root._mediaReturnState !== null
             mediaViewerPanel.resetExpanded()
         }
         root.centerOnNodeForMedia(nodeId)
@@ -1029,21 +1101,19 @@ Rectangle {
         if (!bounds || bounds.length < 4) {
             return
         }
-
-        var targetX = bounds[0] + bounds[2] / 2
-        var targetY = bounds[1] + bounds[3] / 2
-        viewport.smoothCenterOnScreen(targetX, targetY, _availableScreenCenterX(), root.height / 2)
+        _smoothCenterBoundsOnScreen(
+            bounds,
+            _availableScreenCenterX(),
+            root.height / 2
+        )
     }
 
     function centerOnNodeForMedia(nodeId) {
         if (mediaViewerPanel.expanded) return
         var bounds = root.nodeModel.get_node_bounds(nodeId)
         if (!bounds || bounds.length < 4) return
-        var targetX = bounds[0] + bounds[2] / 2
-        var targetY = bounds[1] + bounds[3] / 2
-        viewport.smoothCenterOnScreen(
-            targetX,
-            targetY,
+        _smoothCenterBoundsOnScreen(
+            bounds,
             _availableScreenCenterX(),
             root.height / 2
         )
@@ -1055,20 +1125,30 @@ Rectangle {
         }
         if (root._suppressEditorCameraReturn) {
             root._hasEditorReturn = false
+            root._editorReturnState = null
             return
         }
-        viewport.smoothMoveTo(_editorReturnX, _editorReturnY)
+        viewport.restoreCameraState(
+            root._editorReturnState,
+            root.appTheme.motionEnabled
+        )
         _hasEditorReturn = false
+        _editorReturnState = null
     }
 
     function returnFromMediaViewer() {
         if (!root._hasMediaReturn) return
         if (root._suppressMediaCameraReturn) {
             root._hasMediaReturn = false
+            root._mediaReturnState = null
             return
         }
-        viewport.smoothMoveTo(root._mediaReturnX, root._mediaReturnY)
+        viewport.restoreCameraState(
+            root._mediaReturnState,
+            root.appTheme.motionEnabled
+        )
         root._hasMediaReturn = false
+        root._mediaReturnState = null
     }
 
     function centerOnNodeFromSearch(nodeId) {
@@ -1079,15 +1159,24 @@ Rectangle {
 
         root.nodeModel.set_selection([nodeId])
 
-        var targetX = bounds[0] + bounds[2] / 2
-        var targetY = bounds[1] + bounds[3] / 2
         _searchCameraOffsetActive = true
-        viewport.smoothCenterOnScreen(
-            targetX,
-            targetY,
+        _smoothCenterBoundsOnScreen(
+            bounds,
             _availableScreenCenterX(),
             root.height / 2,
             function() { focusPulse.showForBounds(bounds) }
+        )
+    }
+
+    function _smoothCenterBoundsOnScreen(bounds, screenCenterX, screenCenterY,
+                                         onFinished) {
+        var scale = Math.max(root.contentScale, 0.0001)
+        viewport.smoothCenterOnScreen(
+            Number(bounds[0]),
+            Number(bounds[1]),
+            Number(screenCenterX) - Number(bounds[2]) * scale / 2.0,
+            Number(screenCenterY) - Number(bounds[3]) * scale / 2.0,
+            onFinished
         )
     }
 
@@ -1096,7 +1185,7 @@ Rectangle {
             return
         }
         _searchCameraOffsetActive = false
-        viewport.smoothMoveTo(contentLayer.x - panelWidth / 2, contentLayer.y)
+        viewport.smoothPanByScreen(-panelWidth / 2, 0)
     }
 
     function _availableScreenCenterX() {
@@ -1208,9 +1297,13 @@ Rectangle {
                 transformBadge._displayAnchorX,
                 transformBadge._displayAnchorY
             )
-        return viewport.canvasToScreen(
-            controller.delegateItem.x + controller.delegateItem.width / 2,
-            controller.delegateItem.y + controller.delegateItem.height / 2
+        // Keep x/y as explicit binding dependencies. An opaque mapping call
+        // hides item movement from QML and leaves the badge at the start point.
+        return viewport.renderToScreen(
+            controller.delegateItem.x
+                    + controller.delegateItem.width / 2.0,
+            controller.delegateItem.y
+                    + controller.delegateItem.height / 2.0
         )
     }
 

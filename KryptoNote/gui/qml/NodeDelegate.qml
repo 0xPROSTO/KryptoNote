@@ -14,8 +14,15 @@ Item {
     required property var appTheme
     required property bool renderFrames
     signal contextMenuRequested(int nodeId, string nodeType, var sourceItem, real localX, real localY)
-    x: delegateRoot.model.nodeX
-    y: delegateRoot.model.nodeY
+    readonly property double worldX: Number(delegateRoot.model.nodeX)
+    readonly property double worldY: Number(delegateRoot.model.nodeY)
+    readonly property bool geometryInteractive:
+            Math.abs(delegateRoot.worldX)
+                <= delegateRoot.canvasRoot.interactiveCoordinateLimit
+            && Math.abs(delegateRoot.worldY)
+                <= delegateRoot.canvasRoot.interactiveCoordinateLimit
+    x: delegateRoot.worldX - delegateRoot.canvasRoot.renderOriginX
+    y: delegateRoot.worldY - delegateRoot.canvasRoot.renderOriginY
     width: delegateRoot.model.nodeWidth
     height: delegateRoot.model.nodeHeight
     z: delegateRoot.visuallySelected ? 10 : 1
@@ -56,7 +63,7 @@ Item {
                                 ? delegateRoot.model.nodeType === "frame"
                                 : delegateRoot.model.nodeType !== "frame"
     property real _viewportMargin: 320 / Math.max(delegateRoot.canvasRoot.contentScale, 0.12)
-    property var _visibleRect: delegateRoot.canvasRoot.visibleCanvasRect(_viewportMargin)
+    property var _visibleRect: delegateRoot.canvasRoot.visibleRenderRect(_viewportMargin)
     property real _visibleLeft: _visibleRect.x
     property real _visibleTop: _visibleRect.y
     property real _visibleRight: _visibleRect.x + _visibleRect.width
@@ -230,6 +237,9 @@ Item {
         contentLayer: delegateRoot.contentLayer
         anchors.fill: parent
         delegateItem: delegateRoot
+        nodeWorldX: delegateRoot.worldX
+        nodeWorldY: delegateRoot.worldY
+        geometryInteractive: delegateRoot.geometryInteractive
         nodeId: delegateRoot.model.nodeId
         nodeType: delegateRoot.model.nodeType
         nodeIsSelected: delegateRoot.model.nodeIsSelected
@@ -282,6 +292,7 @@ Item {
         z: 6
         anchors.fill: parent
         active: delegateRoot.matchesLayer
+                && delegateRoot.geometryInteractive
                 && !delegateRoot.model.nodeIsDeleting
                 && ((delegateRoot.isInViewport
                      && (delegateRoot.model.nodeIsHovered
@@ -301,6 +312,9 @@ Item {
             appTheme: delegateRoot.appTheme
             nodeId: delegateRoot.model.nodeId
             delegateItem: delegateRoot
+            nodeWorldX: delegateRoot.worldX
+            nodeWorldY: delegateRoot.worldY
+            geometryInteractive: delegateRoot.geometryInteractive
             nodeHovered: delegateRoot.model.nodeIsHovered
             nodeSelected: delegateRoot.model.nodeIsSelected
             passiveSurfaceHovered: delegateRoot._frameSurfaceHovered

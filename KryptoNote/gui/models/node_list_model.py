@@ -1,5 +1,6 @@
 from enum import IntEnum
 from datetime import datetime
+import math
 
 from PySide6.QtCore import (
     QAbstractListModel,
@@ -12,7 +13,13 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import QImage
 
-from ...core.constants import MEDIA_NODE_TYPES
+from ...core.constants import (
+    CANVAS_INTERACTIVE_COORDINATE_LIMIT,
+    MEDIA_NODE_TYPES,
+    clamp_interactive_canvas_coordinate,
+    fit_canvas_group_origin,
+    is_interactive_canvas_position,
+)
 from ...utils.media_proc import decode_audio_waveform
 from ...utils.text_utils import process_markdown_for_pyside
 
@@ -369,12 +376,19 @@ class NodeListModel(QAbstractListModel):
     def _set_position(self, node_id, x, y, persist=False):
         idx = self._id_to_index.get(node_id)
         if idx is None:
-            return
+            return False
 
         node = self._nodes[idx]
+        if not is_interactive_canvas_position(node["x"], node["y"]):
+            return False
+        try:
+            x = clamp_interactive_canvas_coordinate(x)
+            y = clamp_interactive_canvas_coordinate(y)
+        except (TypeError, ValueError, OverflowError):
+            return False
         changed = node["x"] != x or node["y"] != y
         if not changed and not persist:
-            return
+            return False
 
         if changed:
             node["x"] = x
@@ -395,6 +409,7 @@ class NodeListModel(QAbstractListModel):
             self.positions_batch_changed.emit([node_id], bool(persist))
         if persist:
             self.node_position_changed.emit(node_id, x, y)
+        return changed or persist
 
     @property
     def position_batch_active(self):
@@ -411,8 +426,44 @@ class NodeListModel(QAbstractListModel):
                 y = float(update["y"])
             except (KeyError, TypeError, ValueError):
                 continue
-            if node_id in self._id_to_index:
-                normalized[node_id] = {"id": node_id, "x": x, "y": y}
+            idx = self._id_to_index.get(node_id)
+            if idx is None:
+                continue
+            current = self._nodes[idx]
+            if not is_interactive_canvas_position(
+                current["x"], current["y"]
+            ):
+                return []
+            if not is_interactive_canvas_position(x, y):
+                if not all(map(math.isfinite, (x, y))):
+                    continue
+            normalized[node_id] = {"id": node_id, "x": x, "y": y}
+        if not normalized:
+            return []
+        normalized_values = list(normalized.values())
+        base_x = normalized_values[0]["x"]
+        base_y = normalized_values[0]["y"]
+        try:
+            fitted_x, fitted_y = fit_canvas_group_origin(
+                base_x,
+                base_y,
+                [
+                    (update["x"] - base_x, update["y"] - base_y)
+                    for update in normalized_values
+                ],
+            )
+        except (TypeError, ValueError, OverflowError):
+            return []
+        for update in normalized_values:
+            try:
+                update["x"] = clamp_interactive_canvas_coordinate(
+                    fitted_x + (update["x"] - base_x)
+                )
+                update["y"] = clamp_interactive_canvas_coordinate(
+                    fitted_y + (update["y"] - base_y)
+                )
+            except (TypeError, ValueError, OverflowError):
+                continue
         return list(normalized.values())
 
     def _emit_rows_changed(self, rows, roles):
@@ -502,15 +553,27 @@ class NodeListModel(QAbstractListModel):
             return self._nodes[row]
         return None
 
+    @Slot(int, result=bool)
+    def is_geometry_interactive(self, node_id):
+        """Return whether a node may mutate its durable position or size."""
+
+        node = self.get_node_data(node_id)
+        return bool(
+            node
+            and is_interactive_canvas_position(node["x"], node["y"])
+        )
+
     def _set_size(self, node_id, w, h, persist=False):
         idx = self._id_to_index.get(node_id)
         if idx is None:
-            return
+            return False
 
         node = self._nodes[idx]
+        if not is_interactive_canvas_position(node["x"], node["y"]):
+            return False
         changed = node["width"] != w or node["height"] != h
         if not changed and not persist:
-            return
+            return False
 
         if changed:
             node["width"] = w
@@ -528,6 +591,7 @@ class NodeListModel(QAbstractListModel):
             self.sizes_batch_changed.emit([node_id], bool(persist))
         if persist:
             self.node_size_changed.emit(node_id, w, h)
+        return changed or persist
 
     @property
     def size_batch_active(self):
@@ -969,16 +1033,43 @@ class NodeListModel(QAbstractListModel):
 
     @staticmethod
     def _node_center_inside_frame(node, frame):
-        center_x = node["x"] + node["width"] / 2.0
-        center_y = node["y"] + node["height"] / 2.0
+        center_x = node["x"] - frame["x"] + node["width"] / 2.0
+        center_y = node["y"] - frame["y"] + node["height"] / 2.0
         return (
-            frame["x"] <= center_x <= frame["x"] + frame["width"]
-            and frame["y"] <= center_y <= frame["y"] + frame["height"]
+            0.0 <= center_x <= frame["width"]
+            and 0.0 <= center_y <= frame["height"]
         )
 
     @Slot(float, float, float, float, result=list)
     def get_nodes_in_rect(self, x1, y1, x2, y2):
         """Return node IDs intersecting a content-space rectangle."""
+        return self._get_nodes_in_relative_rect(
+            float(x1),
+            float(y1),
+            0.0,
+            0.0,
+            float(x2) - float(x1),
+            float(y2) - float(y1),
+        )
+
+    @Slot(float, float, float, float, float, float, result=list)
+    def get_nodes_in_render_rect(
+        self, origin_x, origin_y, x1, y1, x2, y2
+    ):
+        """Return nodes intersecting a render-local rectangle at an origin."""
+
+        return self._get_nodes_in_relative_rect(
+            float(origin_x),
+            float(origin_y),
+            float(x1),
+            float(y1),
+            float(x2),
+            float(y2),
+        )
+
+    def _get_nodes_in_relative_rect(
+        self, origin_x, origin_y, x1, y1, x2, y2
+    ):
         left = min(x1, x2)
         right = max(x1, x2)
         top = min(y1, y2)
@@ -987,10 +1078,10 @@ class NodeListModel(QAbstractListModel):
             node["id"]
             for node in self._nodes
             if (
-                node["x"] + node["width"] > left
-                and node["x"] < right
-                and node["y"] + node["height"] > top
-                and node["y"] < bottom
+                node["x"] - origin_x + node["width"] > left
+                and node["x"] - origin_x < right
+                and node["y"] - origin_y + node["height"] > top
+                and node["y"] - origin_y < bottom
             )
         ]
 
@@ -1017,11 +1108,22 @@ class NodeListModel(QAbstractListModel):
         ]
         if not nodes:
             return []
-        left = min(node["x"] for node in nodes)
-        top = min(node["y"] for node in nodes)
-        right = max(node["x"] + node["width"] for node in nodes)
-        bottom = max(node["y"] + node["height"] for node in nodes)
-        return [left, top, right - left, bottom - top]
+        origin_x = min(node["x"] for node in nodes)
+        origin_y = min(node["y"] for node in nodes)
+        local_left = min(node["x"] - origin_x for node in nodes)
+        local_top = min(node["y"] - origin_y for node in nodes)
+        local_right = max(
+            node["x"] - origin_x + node["width"] for node in nodes
+        )
+        local_bottom = max(
+            node["y"] - origin_y + node["height"] for node in nodes
+        )
+        return [
+            origin_x + local_left,
+            origin_y + local_top,
+            local_right - local_left,
+            local_bottom - local_top,
+        ]
 
     def get_node_rect(self, node_id):
         """Return (x, y, w, h) tuple for a node. Used for connection edge calculation."""
@@ -1206,7 +1308,9 @@ class NodeListModel(QAbstractListModel):
             f"Title: {node.get('title', '') or '(untitled)'}",
             f"Created: {node.get('created_at_display', '-')}",
             f"Updated: {node.get('updated_at_display', '-')}",
-            f"Position: {int(node.get('x', 0))}, {int(node.get('y', 0))}",
+            "Position: "
+            f"{self._format_canvas_coordinate(node.get('x', 0))}, "
+            f"{self._format_canvas_coordinate(node.get('y', 0))}",
             f"Node size: {int(node.get('width', 0))} x {int(node.get('height', 0))}",
         ]
         if node.get("type") in MEDIA_NODE_TYPES:
@@ -1272,6 +1376,13 @@ class NodeListModel(QAbstractListModel):
                 + f"{round(float(node.get('frame_opacity', 0.21)) * 100)}%"
             )
         return lines
+
+    @staticmethod
+    def _format_canvas_coordinate(value):
+        coordinate = float(value or 0.0)
+        if abs(coordinate) > CANVAS_INTERACTIVE_COORDINATE_LIMIT:
+            return format(coordinate, ".0e")
+        return str(int(coordinate))
 
     def _refresh_metadata_fields(self, node):
         title = node.get("title") or ""

@@ -15,10 +15,18 @@ Item {
     property bool _revealActive: false
     signal revealAccepted(int connectionId)
 
-    property real minX: Math.min(connectionItem.model.connStartEdgeX, connectionItem.model.connEndEdgeX)
-    property real minY: Math.min(connectionItem.model.connStartEdgeY, connectionItem.model.connEndEdgeY)
-    property real maxX: Math.max(connectionItem.model.connStartEdgeX, connectionItem.model.connEndEdgeX)
-    property real maxY: Math.max(connectionItem.model.connStartEdgeY, connectionItem.model.connEndEdgeY)
+    property real localStartX: connectionItem.model.connStartEdgeX
+            - connectionItem.canvasRoot.renderOriginX
+    property real localStartY: connectionItem.model.connStartEdgeY
+            - connectionItem.canvasRoot.renderOriginY
+    property real localEndX: connectionItem.model.connEndEdgeX
+            - connectionItem.canvasRoot.renderOriginX
+    property real localEndY: connectionItem.model.connEndEdgeY
+            - connectionItem.canvasRoot.renderOriginY
+    property real localMinX: Math.min(localStartX, localEndX)
+    property real localMinY: Math.min(localStartY, localEndY)
+    property real localMaxX: Math.max(localStartX, localEndX)
+    property real localMaxY: Math.max(localStartY, localEndY)
 
     property bool isHighlighted: connectionItem.model.connIsHighlighted
     property bool isDeleting: connectionItem.model.connIsDeleting || false
@@ -41,8 +49,8 @@ Item {
         0.12
     )
     property real endpointDistance: Math.sqrt(
-        Math.pow(connectionItem.model.connEndEdgeX - connectionItem.model.connStartEdgeX, 2)
-        + Math.pow(connectionItem.model.connEndEdgeY - connectionItem.model.connStartEdgeY, 2)
+        Math.pow(localEndX - localStartX, 2)
+        + Math.pow(localEndY - localStartY, 2)
     )
     property real curveOverflow: connectionItem.appTheme.connectionStyle !== "curved"
             ? 0
@@ -57,14 +65,33 @@ Item {
     property real renderPadding: curveOverflow
             + (maximumStrokeWidth / 2.0 + 2.0)
               / Math.max(connectionItem.canvasRoot.minimumScale, 0.01)
-    // The viewport proxy already limits delegates. A scale-bound visibility
-    // check here would dirty every remaining connection on every zoom frame.
+    readonly property real maximumLocalConnectionSpan: 131072.0
+    readonly property bool usesViewportClip:
+            Math.max(
+                localMaxX - localMinX,
+                localMaxY - localMinY,
+                Math.abs(localStartX),
+                Math.abs(localStartY),
+                Math.abs(localEndX),
+                Math.abs(localEndY)
+            ) > maximumLocalConnectionSpan
+    property rect clipRenderRect: connectionItem.canvasRoot.renderViewportRect
+    // Normal connections keep native QML curves. Only geometry large enough
+    // to threaten scene-graph precision is flattened and clipped.
     property var pathGeometry: buildPathGeometry()
 
-    x: minX - renderPadding
-    y: minY - renderPadding
-    width: maxX - minX + renderPadding * 2
-    height: Math.max(1, maxY - minY + renderPadding * 2)
+    x: usesViewportClip
+       ? clipRenderRect.x - renderPadding
+       : localMinX - renderPadding
+    y: usesViewportClip
+       ? clipRenderRect.y - renderPadding
+       : localMinY - renderPadding
+    width: usesViewportClip
+           ? Math.max(1, clipRenderRect.width + renderPadding * 2)
+           : localMaxX - localMinX + renderPadding * 2
+    height: usesViewportClip
+            ? Math.max(1, clipRenderRect.height + renderPadding * 2)
+            : Math.max(1, localMaxY - localMinY + renderPadding * 2)
 
     onIsDeletingChanged: {
         if (isDeleting) {
@@ -129,13 +156,16 @@ Item {
     }
 
     function buildPathGeometry() {
+        if (connectionItem.usesViewportClip) {
+            return clippedPathGeometry();
+        }
         var start = [
-            connectionItem.model.connStartEdgeX - connectionItem.x,
-            connectionItem.model.connStartEdgeY - connectionItem.y
+            connectionItem.localStartX - connectionItem.x,
+            connectionItem.localStartY - connectionItem.y
         ];
         var end = [
-            connectionItem.model.connEndEdgeX - connectionItem.x,
-            connectionItem.model.connEndEdgeY - connectionItem.y
+            connectionItem.localEndX - connectionItem.x,
+            connectionItem.localEndY - connectionItem.y
         ];
         var style = connectionItem.appTheme.connectionStyle;
         if (style === "straight") {
@@ -154,6 +184,223 @@ Item {
             end,
             connectionItem.appTheme.connectionCurveFormula
         );
+    }
+
+    function clippedPathGeometry() {
+        var rect = connectionItem.clipRenderRect;
+        if (!rect || rect.width <= 0 || rect.height <= 0) {
+            return { path: "" };
+        }
+        var segments = renderPathSegments();
+        var path = "";
+        var lastX = NaN;
+        var lastY = NaN;
+        for (var index = 0; index < segments.length; index++) {
+            var clipped = clipSegmentToRect(segments[index], rect);
+            if (!clipped) continue;
+            var startX = clipped[0] - connectionItem.x;
+            var startY = clipped[1] - connectionItem.y;
+            var endX = clipped[2] - connectionItem.x;
+            var endY = clipped[3] - connectionItem.y;
+            if (!isFinite(lastX)
+                    || Math.abs(startX - lastX) + Math.abs(startY - lastY)
+                       > 0.001) {
+                path += " M " + startX + " " + startY;
+            }
+            path += " L " + endX + " " + endY;
+            lastX = endX;
+            lastY = endY;
+        }
+        return { path: path };
+    }
+
+    function renderPathSegments() {
+        var start = [
+            connectionItem.localStartX,
+            connectionItem.localStartY
+        ];
+        var end = [
+            connectionItem.localEndX,
+            connectionItem.localEndY
+        ];
+        var style = connectionItem.appTheme.connectionStyle;
+        if (style === "straight") return [[start[0], start[1], end[0], end[1]]];
+        if (style === "orthogonal" || style === "angled") {
+            return roundedPolylineSegments(
+                routePoints(style, start, end),
+                cornerRadiusForStyle(
+                    connectionItem.appTheme.connectionCornerStyle
+                )
+            );
+        }
+        return curvedSegments(
+            start,
+            end,
+            connectionItem.appTheme.connectionCurveFormula
+        );
+    }
+
+    function curvedSegments(start, end, formula) {
+        var segments = [];
+        var dx = end[0] - start[0];
+        var dy = end[1] - start[1];
+        var length = pointDistance(start, end);
+        if (formula === "arc" && length > 0.001) {
+            var arcNormal = stableNormal(dx, dy, length);
+            var arcBow = Math.min(80, length * 0.22);
+            appendQuadraticSegments(
+                segments,
+                start,
+                [
+                    (start[0] + end[0]) / 2.0 + arcNormal[0] * arcBow,
+                    (start[1] + end[1]) / 2.0 + arcNormal[1] * arcBow
+                ],
+                end
+            );
+            return segments;
+        }
+
+        var control1;
+        var control2;
+        if (formula === "s_curve" && length > 0.001) {
+            var normal = stableNormal(dx, dy, length);
+            var bow = Math.min(64, length * 0.18);
+            control1 = [
+                start[0] + dx / 3.0 + normal[0] * bow,
+                start[1] + dy / 3.0 + normal[1] * bow
+            ];
+            control2 = [
+                start[0] + dx * 2.0 / 3.0 - normal[0] * bow,
+                start[1] + dy * 2.0 / 3.0 - normal[1] * bow
+            ];
+        } else if (formula === "adaptive" && Math.abs(dy) > Math.abs(dx)) {
+            control1 = [start[0], start[1] + dy * 0.4];
+            control2 = [end[0], end[1] - dy * 0.4];
+        } else {
+            control1 = [start[0] + dx * 0.4, start[1]];
+            control2 = [end[0] - dx * 0.4, end[1]];
+        }
+        appendCubicSegments(segments, start, control1, control2, end);
+        return segments;
+    }
+
+    function roundedPolylineSegments(points, requestedRadius) {
+        var segments = [];
+        if (points.length < 2) return segments;
+        var radius = Math.max(0, Math.min(64, requestedRadius));
+        var current = points[0];
+        for (var index = 1; index < points.length - 1; index++) {
+            var previous = points[index - 1];
+            var corner = points[index];
+            var following = points[index + 1];
+            var localRadius = Math.min(
+                radius,
+                pointDistance(previous, corner) / 2.0,
+                pointDistance(corner, following) / 2.0
+            );
+            if (localRadius <= 0.001) {
+                appendLineSegment(segments, current, corner);
+                current = corner;
+                continue;
+            }
+            var entry = pointToward(corner, previous, localRadius);
+            var exitPoint = pointToward(corner, following, localRadius);
+            appendLineSegment(segments, current, entry);
+            appendQuadraticSegments(
+                segments,
+                entry,
+                corner,
+                exitPoint
+            );
+            current = exitPoint;
+        }
+        appendLineSegment(segments, current, points[points.length - 1]);
+        return segments;
+    }
+
+    function appendLineSegment(segments, start, end) {
+        if (pointDistance(start, end) <= 0.001) return;
+        segments.push([start[0], start[1], end[0], end[1]]);
+    }
+
+    function appendQuadraticSegments(segments, start, control, end) {
+        var estimated = pointDistance(start, control)
+                + pointDistance(control, end);
+        var steps = Math.max(3, Math.min(24, Math.ceil(estimated / 24.0)));
+        var previous = start;
+        for (var index = 1; index <= steps; index++) {
+            var t = index / steps;
+            var mt = 1.0 - t;
+            var point = [
+                mt * mt * start[0]
+                    + 2.0 * mt * t * control[0]
+                    + t * t * end[0],
+                mt * mt * start[1]
+                    + 2.0 * mt * t * control[1]
+                    + t * t * end[1]
+            ];
+            appendLineSegment(segments, previous, point);
+            previous = point;
+        }
+    }
+
+    function appendCubicSegments(segments, start, control1, control2, end) {
+        var estimated = pointDistance(start, control1)
+                + pointDistance(control1, control2)
+                + pointDistance(control2, end);
+        var steps = Math.max(8, Math.min(64, Math.ceil(estimated / 24.0)));
+        var previous = start;
+        for (var index = 1; index <= steps; index++) {
+            var t = index / steps;
+            var mt = 1.0 - t;
+            var point = [
+                mt * mt * mt * start[0]
+                    + 3.0 * mt * mt * t * control1[0]
+                    + 3.0 * mt * t * t * control2[0]
+                    + t * t * t * end[0],
+                mt * mt * mt * start[1]
+                    + 3.0 * mt * mt * t * control1[1]
+                    + 3.0 * mt * t * t * control2[1]
+                    + t * t * t * end[1]
+            ];
+            appendLineSegment(segments, previous, point);
+            previous = point;
+        }
+    }
+
+    function clipSegmentToRect(segment, rect) {
+        var x1 = segment[0];
+        var y1 = segment[1];
+        var dx = segment[2] - x1;
+        var dy = segment[3] - y1;
+        var p = [-dx, dx, -dy, dy];
+        var q = [
+            x1 - rect.x,
+            rect.x + rect.width - x1,
+            y1 - rect.y,
+            rect.y + rect.height - y1
+        ];
+        var enter = 0.0;
+        var leave = 1.0;
+        for (var index = 0; index < 4; index++) {
+            if (Math.abs(p[index]) <= 0.0000001) {
+                if (q[index] < 0.0) return null;
+                continue;
+            }
+            var amount = q[index] / p[index];
+            if (p[index] < 0.0) {
+                enter = Math.max(enter, amount);
+            } else {
+                leave = Math.min(leave, amount);
+            }
+            if (enter > leave) return null;
+        }
+        return [
+            x1 + enter * dx,
+            y1 + enter * dy,
+            x1 + leave * dx,
+            y1 + leave * dy
+        ];
     }
 
     function lineGeometry(start, end) {

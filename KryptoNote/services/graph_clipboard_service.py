@@ -1,3 +1,6 @@
+from ..core.constants import fit_canvas_group_origin
+
+
 class GraphClipboardService:
     """Manage deferred in-process graph copies for one database session."""
 
@@ -79,6 +82,18 @@ class GraphClipboardService:
 
     @classmethod
     def _prepare_summary(cls, blueprint, offset_x, offset_y):
+        relative_positions = [
+            (
+                float(node.get("relative_x", node.get("x", 0)) or 0),
+                float(node.get("relative_y", node.get("y", 0)) or 0),
+            )
+            for node in blueprint.get("nodes") or ()
+        ]
+        offset_x, offset_y = fit_canvas_group_origin(
+            offset_x,
+            offset_y,
+            relative_positions,
+        )
         summary = cls._copy_summary(blueprint)
         summary.update(
             {
