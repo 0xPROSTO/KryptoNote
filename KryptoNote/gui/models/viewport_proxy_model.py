@@ -218,6 +218,14 @@ class ConnectionViewportProxyModel(_ViewportProxyModel):
         int(ConnectionRoles.StartEdgeYRole),
         int(ConnectionRoles.EndEdgeXRole),
         int(ConnectionRoles.EndEdgeYRole),
+        int(ConnectionRoles.StartOriginXRole),
+        int(ConnectionRoles.StartOriginYRole),
+        int(ConnectionRoles.StartLocalXRole),
+        int(ConnectionRoles.StartLocalYRole),
+        int(ConnectionRoles.EndOriginXRole),
+        int(ConnectionRoles.EndOriginYRole),
+        int(ConnectionRoles.EndLocalXRole),
+        int(ConnectionRoles.EndLocalYRole),
     ))
     FILTER_ROLES = GEOMETRY_ROLES.union((
         int(ConnectionRoles.IsDeletingRole),
@@ -245,14 +253,22 @@ class ConnectionViewportProxyModel(_ViewportProxyModel):
             return False
         if connection.get("is_deleting"):
             return True
-        x1 = float(connection.get("start_edge_x") or 0.0)
-        y1 = float(connection.get("start_edge_y") or 0.0)
-        x2 = float(connection.get("end_edge_x") or 0.0)
-        y2 = float(connection.get("end_edge_y") or 0.0)
-        relative_x1 = x1 - self._viewport_center_x
-        relative_y1 = y1 - self._viewport_center_y
-        relative_x2 = x2 - self._viewport_center_x
-        relative_y2 = y2 - self._viewport_center_y
+        start_origin_x = float(connection.get("start_origin_x") or 0.0)
+        start_origin_y = float(connection.get("start_origin_y") or 0.0)
+        end_origin_x = float(connection.get("end_origin_x") or 0.0)
+        end_origin_y = float(connection.get("end_origin_y") or 0.0)
+        relative_x1 = (
+            start_origin_x - self._viewport_center_x
+        ) + float(connection.get("start_local_x") or 0.0)
+        relative_y1 = (
+            start_origin_y - self._viewport_center_y
+        ) + float(connection.get("start_local_y") or 0.0)
+        relative_x2 = (
+            end_origin_x - self._viewport_center_x
+        ) + float(connection.get("end_local_x") or 0.0)
+        relative_y2 = (
+            end_origin_y - self._viewport_center_y
+        ) + float(connection.get("end_local_y") or 0.0)
         left = min(relative_x1, relative_x2)
         right = max(relative_x1, relative_x2)
         top = min(relative_y1, relative_y2)

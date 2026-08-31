@@ -176,6 +176,14 @@ Item {{
         property real connStartEdgeY: 30
         property real connEndEdgeX: 420
         property real connEndEdgeY: 260
+        property double connStartOriginX: 0
+        property double connStartOriginY: 0
+        property real connStartLocalX: 20
+        property real connStartLocalY: 30
+        property double connEndOriginX: 0
+        property double connEndOriginY: 0
+        property real connEndLocalX: 420
+        property real connEndLocalY: 260
         property bool connIsHighlighted: false
         property bool connIsDeleting: false
         property bool connDeleteFinalizes: true
@@ -227,7 +235,16 @@ Item {{
         connectionModel.connStartEdgeY = y1
         connectionModel.connEndEdgeX = x2
         connectionModel.connEndEdgeY = y2
+        connectionModel.connStartOriginX = x1
+        connectionModel.connStartOriginY = y1
+        connectionModel.connStartLocalX = 0
+        connectionModel.connStartLocalY = 0
+        connectionModel.connEndOriginX = x2
+        connectionModel.connEndOriginY = y2
+        connectionModel.connEndLocalX = 0
+        connectionModel.connEndLocalY = 0
     }}
+    function setStyle(style) {{ theme.connectionStyle = style }}
     function geometry() {{
         return [
             connection.x,
@@ -483,6 +500,30 @@ def test_camera_snapshot_restores_origin_and_render_local_offset(target):
     assert abs(-target - viewport.originY()) < 65536.0
     assert viewport.layerX() == pytest.approx(before_layer_x, abs=0.001)
     assert viewport.layerY() == pytest.approx(before_layer_y, abs=0.001)
+
+
+def test_animated_camera_restore_preserves_extreme_render_local_motion():
+    viewport, _engine, _component = _load_viewport()
+    target = 1e38
+    assert viewport.centerOn(target, -target, 400, 300, False)
+    viewport.pan(1000, -500)
+    expected_x = viewport.layerX()
+    expected_y = viewport.layerY()
+    viewport.captureState(400, 300)
+
+    assert viewport.centerOn(target, -target, 400, 300, False)
+    assert viewport.restoreState(True)
+    viewport.advance(1.0 / 120.0)
+
+    assert 400 < viewport.layerX() < expected_x
+    assert expected_y < viewport.layerY() < 300
+    for _ in range(30):
+        if not viewport.panRunning():
+            break
+        viewport.advance(1.0 / 120.0)
+    assert not viewport.panRunning()
+    assert viewport.layerX() == pytest.approx(expected_x, abs=0.001)
+    assert viewport.layerY() == pytest.approx(expected_y, abs=0.001)
 
 
 @pytest.mark.parametrize("coordinate", [1e38, -1e38])
@@ -784,6 +825,44 @@ def test_connection_geometry_is_local_and_distant_links_are_viewport_clipped():
     assert all(abs(value) < 10_000 for value in extreme_geometry[:4])
 
 
+def test_extreme_straight_connection_clips_to_both_viewport_edges():
+    connection, _engine, _component = _load_connection()
+    connection.setStyle("straight")
+    connection.setRenderOrigin(0, 0)
+    connection.setEndpoints(-1e38, 0, 1e38, 0)
+
+    geometry = connection.geometry().toVariant()
+    coordinates = geometry[4].replace("M", "").replace("L", "").split()
+    x_coordinates = [float(value) for value in coordinates[0::2]]
+
+    assert connection.viewportClipped()
+    assert min(x_coordinates) < 100
+    assert max(x_coordinates) > 1900
+
+
+def test_connection_anchors_and_hit_test_keep_extreme_local_precision():
+    origin = float(2**60)
+    nodes = NodeListModel()
+    nodes.add_node(1, "text", origin, 0, 200, 100)
+    nodes.add_node(2, "text", origin + 1024, 0, 200, 100)
+    connections = ConnectionListModel(nodes)
+    connections.set_connection_appearance(
+        "straight", "horizontal", "smooth", "perimeter"
+    )
+
+    assert connections.add_connection(1, 1, 2)
+    data = connections.get_connection_data_at_row(0)
+    assert data["start_origin_x"] == origin
+    assert data["start_local_x"] == pytest.approx(192.0)
+    assert data["start_local_y"] == pytest.approx(50.0)
+    assert data["end_origin_x"] == origin + 1024
+    assert data["end_local_x"] == pytest.approx(8.0)
+    assert data["end_local_y"] == pytest.approx(50.0)
+    assert connections.hit_test_connection_render(
+        origin, 0, 512, 50, 10
+    ) == 1
+
+
 def test_long_connection_hit_index_stays_bounded_and_hits_in_world_space():
     nodes = NodeListModel()
     nodes.add_node(1, "text", -20_000_000, 0, 100, 100)
@@ -795,8 +874,12 @@ def test_long_connection_hit_index_stays_bounded_and_hits_in_world_space():
 
     assert connections.add_connection(1, 1, 2)
     assert connections._long_hit_segments
+    assert connections._conn_long_hit_memberships[1]
     assert len(connections._hit_grid) < 100
     assert connections.hit_test_connection(50, 50, 10) == 1
+    connections.remove_connection(1)
+    assert not connections._long_hit_segments
+    assert 1 not in connections._conn_long_hit_memberships
 
 
 def test_connection_context_menu_uses_the_shared_spatial_hit_test():
@@ -811,6 +894,6 @@ def test_connection_context_menu_uses_the_shared_spatial_hit_test():
     assert "MouseArea" not in connection_source
     assert "contextMenuRequested" not in connection_source
     assert "contextMenuRequested" not in layer_source
-    assert "root.connectionModel.hit_test_connection(" in canvas_source
+    assert "root.connectionModel.hit_test_connection_render(" in canvas_source
     assert "canvasContextMenu.openForConnection(" in canvas_source
     assert "canvasContextMenu.openForCanvas(" in canvas_source

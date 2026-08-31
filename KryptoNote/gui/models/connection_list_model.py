@@ -28,6 +28,14 @@ class ConnectionRoles(IntEnum):
     IsHighlightedRole = Qt.ItemDataRole.UserRole + 107
     IsDeletingRole = Qt.ItemDataRole.UserRole + 108
     DeleteFinalizesRole = Qt.ItemDataRole.UserRole + 109
+    StartOriginXRole = Qt.ItemDataRole.UserRole + 110
+    StartOriginYRole = Qt.ItemDataRole.UserRole + 111
+    StartLocalXRole = Qt.ItemDataRole.UserRole + 112
+    StartLocalYRole = Qt.ItemDataRole.UserRole + 113
+    EndOriginXRole = Qt.ItemDataRole.UserRole + 114
+    EndOriginYRole = Qt.ItemDataRole.UserRole + 115
+    EndLocalXRole = Qt.ItemDataRole.UserRole + 116
+    EndLocalYRole = Qt.ItemDataRole.UserRole + 117
 
 
 class ConnectionListModel(QAbstractListModel):
@@ -37,6 +45,25 @@ class ConnectionListModel(QAbstractListModel):
     _MAX_INDEXED_CELLS_PER_SEGMENT = 4096
     _MAX_SEGMENT_LENGTH = 24.0
     _MAX_CURVE_SEGMENTS = 64
+    _GEOMETRY_KEYS = (
+        "start_edge_x", "start_edge_y", "end_edge_x", "end_edge_y",
+        "start_origin_x", "start_origin_y", "start_local_x", "start_local_y",
+        "end_origin_x", "end_origin_y", "end_local_x", "end_local_y",
+    )
+    _GEOMETRY_ROLES = (
+        ConnectionRoles.StartEdgeXRole,
+        ConnectionRoles.StartEdgeYRole,
+        ConnectionRoles.EndEdgeXRole,
+        ConnectionRoles.EndEdgeYRole,
+        ConnectionRoles.StartOriginXRole,
+        ConnectionRoles.StartOriginYRole,
+        ConnectionRoles.StartLocalXRole,
+        ConnectionRoles.StartLocalYRole,
+        ConnectionRoles.EndOriginXRole,
+        ConnectionRoles.EndOriginYRole,
+        ConnectionRoles.EndLocalXRole,
+        ConnectionRoles.EndLocalYRole,
+    )
 
     def __init__(self, node_model, parent=None):
         super().__init__(parent)
@@ -47,8 +74,10 @@ class ConnectionListModel(QAbstractListModel):
         self._conn_pairs = set()
         self._hit_grid = {}
         self._conn_segments = {}
+        self._conn_segment_origins = {}
         self._conn_hit_memberships = {}
         self._long_hit_segments = set()
+        self._conn_long_hit_memberships = {}
         self._connection_style = "curved"
         self._connection_curve_formula = DEFAULT_CONNECTION_CURVE_FORMULA
         self._connection_corner_style = DEFAULT_CONNECTION_CORNER_STYLE
@@ -93,6 +122,14 @@ class ConnectionListModel(QAbstractListModel):
             ConnectionRoles.IsHighlightedRole: "is_highlighted",
             ConnectionRoles.IsDeletingRole: "is_deleting",
             ConnectionRoles.DeleteFinalizesRole: "delete_finalizes",
+            ConnectionRoles.StartOriginXRole: "start_origin_x",
+            ConnectionRoles.StartOriginYRole: "start_origin_y",
+            ConnectionRoles.StartLocalXRole: "start_local_x",
+            ConnectionRoles.StartLocalYRole: "start_local_y",
+            ConnectionRoles.EndOriginXRole: "end_origin_x",
+            ConnectionRoles.EndOriginYRole: "end_origin_y",
+            ConnectionRoles.EndLocalXRole: "end_local_x",
+            ConnectionRoles.EndLocalYRole: "end_local_y",
         }
         key = role_map.get(role)
         return conn.get(key) if key else None
@@ -109,6 +146,14 @@ class ConnectionListModel(QAbstractListModel):
             ConnectionRoles.IsHighlightedRole: QByteArray(b"connIsHighlighted"),
             ConnectionRoles.IsDeletingRole: QByteArray(b"connIsDeleting"),
             ConnectionRoles.DeleteFinalizesRole: QByteArray(b"connDeleteFinalizes"),
+            ConnectionRoles.StartOriginXRole: QByteArray(b"connStartOriginX"),
+            ConnectionRoles.StartOriginYRole: QByteArray(b"connStartOriginY"),
+            ConnectionRoles.StartLocalXRole: QByteArray(b"connStartLocalX"),
+            ConnectionRoles.StartLocalYRole: QByteArray(b"connStartLocalY"),
+            ConnectionRoles.EndOriginXRole: QByteArray(b"connEndOriginX"),
+            ConnectionRoles.EndOriginYRole: QByteArray(b"connEndOriginY"),
+            ConnectionRoles.EndLocalXRole: QByteArray(b"connEndLocalX"),
+            ConnectionRoles.EndLocalYRole: QByteArray(b"connEndLocalY"),
         }
 
     # Data Loading
@@ -131,6 +176,18 @@ class ConnectionListModel(QAbstractListModel):
         self._clear_hit_index()
         self.endResetModel()
 
+    def _build_connection_data(self, conn_id, start_id, end_id):
+        data = {
+            "conn_id": conn_id,
+            "start_id": start_id,
+            "end_id": end_id,
+            "is_highlighted": False,
+            "is_deleting": False,
+            "delete_finalizes": True,
+        }
+        data.update(self._compute_edge_geometry(start_id, end_id))
+        return data
+
     def append_connection_batch(self, connections):
         connections = list(connections)
         if not connections:
@@ -139,21 +196,9 @@ class ConnectionListModel(QAbstractListModel):
         last_row = first_row + len(connections) - 1
         self.beginInsertRows(QModelIndex(), first_row, last_row)
         for connection in connections:
-            edge = self._compute_edge_points(
-                connection.start_id, connection.end_id
+            data = self._build_connection_data(
+                connection.id, connection.start_id, connection.end_id
             )
-            data = {
-                "conn_id": connection.id,
-                "start_id": connection.start_id,
-                "end_id": connection.end_id,
-                "start_edge_x": edge[0],
-                "start_edge_y": edge[1],
-                "end_edge_x": edge[2],
-                "end_edge_y": edge[3],
-                "is_highlighted": False,
-                "is_deleting": False,
-                "delete_finalizes": True,
-            }
             self._id_to_index[connection.id] = len(self._connections)
             self._connections.append(data)
             self._add_to_node_map(
@@ -173,18 +218,12 @@ class ConnectionListModel(QAbstractListModel):
     def add_connection(self, conn_id, start_id, end_id):
         if conn_id in self._id_to_index:
             return False
-        edge = self._compute_edge_points(start_id, end_id)
         row = len(self._connections)
         self.beginInsertRows(QModelIndex(), row, row)
         self._id_to_index[conn_id] = row
-        self._connections.append({
-            "conn_id": conn_id, "start_id": start_id, "end_id": end_id,
-            "start_edge_x": edge[0], "start_edge_y": edge[1],
-            "end_edge_x": edge[2], "end_edge_y": edge[3],
-            "is_highlighted": False,
-            "is_deleting": False,
-            "delete_finalizes": True,
-        })
+        self._connections.append(
+            self._build_connection_data(conn_id, start_id, end_id)
+        )
         self._add_to_node_map(conn_id, start_id, end_id)
         self._conn_pairs.add((min(start_id, end_id), max(start_id, end_id)))
         self._index_connection(self._connections[-1])
@@ -254,15 +293,41 @@ class ConnectionListModel(QAbstractListModel):
     @Slot(float, float, float, result=int)
     def hit_test_connection(self, x, y, radius):
         """Return the nearest connection under a content-space point, or 0."""
-        x = float(x)
-        y = float(y)
-        radius = max(float(radius or 0), 0.0)
+        return self._hit_test_connection_components(
+            float(x), float(y), 0.0, 0.0, radius
+        )
+
+    @Slot(float, float, float, float, float, result=int)
+    def hit_test_connection_render(
+        self, origin_x, origin_y, render_x, render_y, radius
+    ):
+        """Hit-test a render-local point without collapsing its world offset."""
+        return self._hit_test_connection_components(
+            float(origin_x),
+            float(origin_y),
+            float(render_x),
+            float(render_y),
+            radius,
+        )
+
+    def _hit_test_connection_components(
+        self, origin_x, origin_y, render_x, render_y, radius
+    ):
+        radius = float(radius or 0)
+        values = (origin_x, origin_y, render_x, render_y, radius)
+        if not all(math.isfinite(value) for value in values):
+            return 0
+        radius = max(radius, 0.0)
+        world_x = origin_x + render_x
+        world_y = origin_y + render_y
+        if not math.isfinite(world_x) or not math.isfinite(world_y):
+            return 0
         radius_sq = radius * radius
         grid_size = self._HIT_GRID_SIZE
-        min_cell_x = math.floor((x - radius) / grid_size)
-        max_cell_x = math.floor((x + radius) / grid_size)
-        min_cell_y = math.floor((y - radius) / grid_size)
-        max_cell_y = math.floor((y + radius) / grid_size)
+        min_cell_x = math.floor((world_x - radius) / grid_size)
+        max_cell_x = math.floor((world_x + radius) / grid_size)
+        min_cell_y = math.floor((world_y - radius) / grid_size)
+        max_cell_y = math.floor((world_y + radius) / grid_size)
 
         candidates = set()
         for cell_x in range(min_cell_x, max_cell_x + 1):
@@ -276,8 +341,15 @@ class ConnectionListModel(QAbstractListModel):
             segments = self._conn_segments.get(conn_id)
             if not segments or segment_index >= len(segments):
                 continue
+            segment_origin = self._conn_segment_origins.get(conn_id)
+            if segment_origin is None:
+                continue
+            local_x = (origin_x - segment_origin[0]) + render_x
+            local_y = (origin_y - segment_origin[1]) + render_y
             x1, y1, x2, y2 = segments[segment_index]
-            dist_sq = self._distance_to_segment_squared(x, y, x1, y1, x2, y2)
+            dist_sq = self._distance_to_segment_squared(
+                local_x, local_y, x1, y1, x2, y2
+            )
             if dist_sq < best_dist_sq or (
                 dist_sq == best_dist_sq and conn_id > best_id
             ):
@@ -349,15 +421,9 @@ class ConnectionListModel(QAbstractListModel):
     def _recompute_all_edge_points(self):
         self._clear_hit_index()
         for connection in self._connections:
-            edge = self._compute_edge_points(
+            connection.update(self._compute_edge_geometry(
                 connection["start_id"], connection["end_id"]
-            )
-            (
-                connection["start_edge_x"],
-                connection["start_edge_y"],
-                connection["end_edge_x"],
-                connection["end_edge_y"],
-            ) = edge
+            ))
             self._index_connection(connection)
         if self._connections:
             self._geometry_batch_active = True
@@ -365,12 +431,7 @@ class ConnectionListModel(QAbstractListModel):
                 self.dataChanged.emit(
                     self.index(0, 0),
                     self.index(len(self._connections) - 1, 0),
-                    [
-                        ConnectionRoles.StartEdgeXRole,
-                        ConnectionRoles.StartEdgeYRole,
-                        ConnectionRoles.EndEdgeXRole,
-                        ConnectionRoles.EndEdgeYRole,
-                    ],
+                    list(self._GEOMETRY_ROLES),
                 )
             finally:
                 self._geometry_batch_active = False
@@ -379,8 +440,10 @@ class ConnectionListModel(QAbstractListModel):
     def _clear_hit_index(self):
         self._hit_grid.clear()
         self._conn_segments.clear()
+        self._conn_segment_origins.clear()
         self._conn_hit_memberships.clear()
         self._long_hit_segments.clear()
+        self._conn_long_hit_memberships.clear()
 
     def _unindex_connection(self, conn_id):
         for cell_key, segment_index in self._conn_hit_memberships.pop(conn_id, ()):
@@ -391,16 +454,21 @@ class ConnectionListModel(QAbstractListModel):
             if not bucket:
                 self._hit_grid.pop(cell_key, None)
         self._conn_segments.pop(conn_id, None)
-        self._long_hit_segments = {
-            entry for entry in self._long_hit_segments if entry[0] != conn_id
-        }
+        self._conn_segment_origins.pop(conn_id, None)
+        self._long_hit_segments.difference_update(
+            self._conn_long_hit_memberships.pop(conn_id, ())
+        )
 
     def _index_connection(self, conn):
         conn_id = conn["conn_id"]
         self._unindex_connection(conn_id)
+        origin_x = conn["start_origin_x"]
+        origin_y = conn["start_origin_y"]
         points = (
-            conn["start_edge_x"], conn["start_edge_y"],
-            conn["end_edge_x"], conn["end_edge_y"],
+            conn["start_local_x"],
+            conn["start_local_y"],
+            (conn["end_origin_x"] - origin_x) + conn["end_local_x"],
+            (conn["end_origin_y"] - origin_y) + conn["end_local_y"],
         )
         segments = connection_segments(
             self._connection_style,
@@ -409,29 +477,45 @@ class ConnectionListModel(QAbstractListModel):
             self._connection_corner_style,
         )
         self._conn_segments[conn_id] = segments
+        self._conn_segment_origins[conn_id] = (origin_x, origin_y)
         memberships = []
+        long_memberships = []
         grid_size = self._HIT_GRID_SIZE
         for segment_index, (x1, y1, x2, y2) in enumerate(segments):
-            start_cell_x = math.floor(x1 / grid_size)
-            start_cell_y = math.floor(y1 / grid_size)
-            end_cell_x = math.floor(x2 / grid_size)
-            end_cell_y = math.floor(y2 / grid_size)
+            world_x1 = origin_x + x1
+            world_y1 = origin_y + y1
+            world_x2 = origin_x + x2
+            world_y2 = origin_y + y2
+            if not all(math.isfinite(value) for value in (
+                world_x1, world_y1, world_x2, world_y2
+            )):
+                entry = (conn_id, segment_index)
+                self._long_hit_segments.add(entry)
+                long_memberships.append(entry)
+                continue
+            start_cell_x = math.floor(world_x1 / grid_size)
+            start_cell_y = math.floor(world_y1 / grid_size)
+            end_cell_x = math.floor(world_x2 / grid_size)
+            end_cell_y = math.floor(world_y2 / grid_size)
             crossed_span = (
                 abs(end_cell_x - start_cell_x)
                 + abs(end_cell_y - start_cell_y)
                 + 1
             )
             if crossed_span > self._MAX_INDEXED_CELLS_PER_SEGMENT:
-                self._long_hit_segments.add((conn_id, segment_index))
+                entry = (conn_id, segment_index)
+                self._long_hit_segments.add(entry)
+                long_memberships.append(entry)
                 continue
             for cell_key in self._segment_grid_cells(
-                x1, y1, x2, y2, grid_size
+                world_x1, world_y1, world_x2, world_y2, grid_size
             ):
                 self._hit_grid.setdefault(cell_key, set()).add(
                     (conn_id, segment_index)
                 )
                 memberships.append((cell_key, segment_index))
         self._conn_hit_memberships[conn_id] = memberships
+        self._conn_long_hit_memberships[conn_id] = long_memberships
 
     @staticmethod
     def _segment_grid_cells(x1, y1, x2, y2, grid_size):
@@ -505,16 +589,18 @@ class ConnectionListModel(QAbstractListModel):
 
     # Edge Point Computation
 
-    def _compute_edge_points(self, start_id, end_id):
-        """Same algorithm as ConnectionLine._calculate_edge_point()."""
+    def _compute_edge_geometry(self, start_id, end_id):
+        """Return world origins plus precision-preserving local anchors."""
         r1 = self._node_model.get_node_rect(start_id)
         r2 = self._node_model.get_node_rect(end_id)
         if r1 is None or r2 is None:
-            return (0.0, 0.0, 0.0, 0.0)
+            return {key: 0.0 for key in self._GEOMETRY_KEYS}
         x1, y1, w1, h1 = r1
         x2, y2, w2, h2 = r2
-        c1x, c1y = x1 + w1 / 2, y1 + h1 / 2
-        c2x, c2y = x2 + w2 / 2, y2 + h2 / 2
+        c1x, c1y = w1 / 2, h1 / 2
+        c2x, c2y = w2 / 2, h2 / 2
+        center_delta_x = (x2 - x1) + (w2 - w1) / 2
+        center_delta_y = (y2 - y1) + (h2 - h1) / 2
         n1 = self._node_model.get_node_data(start_id)
         n2 = self._node_model.get_node_data(end_id)
         inset1 = 0.0 if n1 and n1.get("type") == "frame" else 8.0
@@ -524,9 +610,53 @@ class ConnectionListModel(QAbstractListModel):
             if self._connection_anchor_mode == "side_centers"
             else self._clip_to_rect
         )
-        p1 = anchor(c1x, c1y, c2x, c2y, w1 / 2, h1 / 2, inset1)
-        p2 = anchor(c2x, c2y, c1x, c1y, w2 / 2, h2 / 2, inset2)
-        return (p1[0], p1[1], p2[0], p2[1])
+        p1 = anchor(
+            c1x,
+            c1y,
+            c1x + center_delta_x,
+            c1y + center_delta_y,
+            w1 / 2,
+            h1 / 2,
+            inset1,
+        )
+        p2 = anchor(
+            c2x,
+            c2y,
+            c2x - center_delta_x,
+            c2y - center_delta_y,
+            w2 / 2,
+            h2 / 2,
+            inset2,
+        )
+        return {
+            "start_edge_x": x1 + p1[0],
+            "start_edge_y": y1 + p1[1],
+            "end_edge_x": x2 + p2[0],
+            "end_edge_y": y2 + p2[1],
+            "start_origin_x": x1,
+            "start_origin_y": y1,
+            "start_local_x": p1[0],
+            "start_local_y": p1[1],
+            "end_origin_x": x2,
+            "end_origin_y": y2,
+            "end_local_x": p2[0],
+            "end_local_y": p2[1],
+        }
+
+    def _compute_edge_points(self, start_id, end_id):
+        geometry = self._compute_edge_geometry(start_id, end_id)
+        return tuple(geometry[key] for key in self._GEOMETRY_KEYS[:4])
+
+    def _update_edge_geometry(self, connection):
+        geometry = self._compute_edge_geometry(
+            connection["start_id"], connection["end_id"]
+        )
+        changed = any(
+            connection.get(key) != value for key, value in geometry.items()
+        )
+        if changed:
+            connection.update(geometry)
+        return changed
 
     @staticmethod
     def _clip_to_rect(cx, cy, tx, ty, hw, hh, endpoint_inset=8.0):
@@ -601,12 +731,7 @@ class ConnectionListModel(QAbstractListModel):
     def _emit_geometry_rows_changed(self, rows):
         self._geometry_batch_active = True
         try:
-            self._emit_rows_changed(rows, [
-                ConnectionRoles.StartEdgeXRole,
-                ConnectionRoles.StartEdgeYRole,
-                ConnectionRoles.EndEdgeXRole,
-                ConnectionRoles.EndEdgeYRole,
-            ])
+            self._emit_rows_changed(rows, list(self._GEOMETRY_ROLES))
         finally:
             self._geometry_batch_active = False
 
@@ -627,16 +752,7 @@ class ConnectionListModel(QAbstractListModel):
             if row is None:
                 continue
             conn = self._connections[row]
-            edge = self._compute_edge_points(conn["start_id"], conn["end_id"])
-            previous = (
-                conn["start_edge_x"], conn["start_edge_y"],
-                conn["end_edge_x"], conn["end_edge_y"],
-            )
-            if edge != previous:
-                (
-                    conn["start_edge_x"], conn["start_edge_y"],
-                    conn["end_edge_x"], conn["end_edge_y"],
-                ) = edge
+            if self._update_edge_geometry(conn):
                 changed_rows.append(row)
             if rebuild_hit_index:
                 self._index_connection(conn)
@@ -729,20 +845,9 @@ class ConnectionListModel(QAbstractListModel):
             changed_roles = []
 
             if geometry_changed:
-                edge = self._compute_edge_points(conn["start_id"], conn["end_id"])
-                previous = (
-                    conn["start_edge_x"], conn["start_edge_y"],
-                    conn["end_edge_x"], conn["end_edge_y"],
-                )
-                if edge != previous:
-                    conn["start_edge_x"], conn["start_edge_y"],                         conn["end_edge_x"], conn["end_edge_y"] = edge
+                if self._update_edge_geometry(conn):
                     self._index_connection(conn)
-                    changed_roles.extend((
-                        ConnectionRoles.StartEdgeXRole,
-                        ConnectionRoles.StartEdgeYRole,
-                        ConnectionRoles.EndEdgeXRole,
-                        ConnectionRoles.EndEdgeYRole,
-                    ))
+                    changed_roles.extend(self._GEOMETRY_ROLES)
 
             if highlight_changed:
                 highlighted = self._is_connection_highlighted(conn)

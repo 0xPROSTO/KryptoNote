@@ -87,9 +87,12 @@ Item {
             if (input.isEraserMode) {
                 mouse.accepted = true
                 var hitRadius = 10 / Math.max(input.contentScale, 0.12)
-                var connectionId = input.connectionModel.hit_test_connection(
-                    contentPos.x,
-                    contentPos.y,
+                var renderPos = input.viewport.screenToRender(mouse.x, mouse.y)
+                var connectionId = input.connectionModel.hit_test_connection_render(
+                    input.viewport.renderOriginX,
+                    input.viewport.renderOriginY,
+                    renderPos.x,
+                    renderPos.y,
                     hitRadius
                 )
                 if (connectionId > 0) {

@@ -666,11 +666,11 @@ Item {
         _panElapsed = 0.0
         _panFinishedCallback = typeof onFinished === "function"
                 ? onFinished : null
-        var distanceX = (_panToOriginX - _panFromOriginX)
-                + (_panToRenderX - _panFromRenderX)
-        var distanceY = (_panToOriginY - _panFromOriginY)
-                + (_panToRenderY - _panFromRenderY)
-        _panRunning = Math.abs(distanceX) + Math.abs(distanceY) > 0.0001
+        var originChanged = _panToOriginX !== _panFromOriginX
+                || _panToOriginY !== _panFromOriginY
+        var renderDistance = Math.abs(_panToRenderX - _panFromRenderX)
+                + Math.abs(_panToRenderY - _panFromRenderY)
+        _panRunning = originChanged || renderDistance > 0.0001
         if (!_panRunning) {
             _placeCameraComponentsAtScreen(
                 _panToOriginX,
@@ -908,10 +908,6 @@ Item {
         _panElapsed = Math.min(panDuration, _panElapsed + dt)
         var progress = panDuration > 0 ? _panElapsed / panDuration : 1.0
         var eased = 1.0 - Math.pow(1.0 - progress, 3)
-        var distanceX = (_panToOriginX - _panFromOriginX)
-                + (_panToRenderX - _panFromRenderX)
-        var distanceY = (_panToOriginY - _panFromOriginY)
-                + (_panToRenderY - _panFromRenderY)
         if (progress >= 1.0) {
             _placeCameraComponentsAtScreen(
                 _panToOriginX,
@@ -925,19 +921,33 @@ Item {
             _finishPan()
             return
         }
-        // Rebase the interpolated world point before it reaches item-space.
-        // Keeping the start origin for a very long pan would put ~1e14 into
-        // contentLayer.x/y for intermediate frames and overflow Qt Quick's
-        // single-precision transform.
-        var worldX = _panFromOriginX + _panFromRenderX + distanceX * eased
-        var worldY = _panFromOriginY + _panFromRenderY + distanceY * eased
-        var state = _cameraStateForWorld(
-            worldX,
-            worldY,
+        // Interpolate the double-precision origin and the small render-local
+        // offset independently. Collapsing them into one world coordinate
+        // discards sub-ULP camera motion at legacy coordinates such as 1e38.
+        _placeCameraComponentsAtScreen(
+            _interpolateComponent(
+                _panFromOriginX, _panToOriginX, eased
+            ),
+            _interpolateComponent(
+                _panFromOriginY, _panToOriginY, eased
+            ),
+            _interpolateComponent(
+                _panFromRenderX, _panToRenderX, eased
+            ),
+            _interpolateComponent(
+                _panFromRenderY, _panToRenderY, eased
+            ),
             _panScreenX,
             _panScreenY
         )
-        _placeCameraStateAtScreen(state, _panScreenX, _panScreenY)
+    }
+
+    function _interpolateComponent(fromValue, toValue, amount) {
+        if (fromValue === toValue || amount <= 0.0) return fromValue
+        if (amount >= 1.0) return toValue
+        // Weighted endpoints avoid overflowing `to - from` for long pans
+        // between very large finite coordinates.
+        return fromValue * (1.0 - amount) + toValue * amount
     }
 
     function _wheelComponent(event, propertyName) {

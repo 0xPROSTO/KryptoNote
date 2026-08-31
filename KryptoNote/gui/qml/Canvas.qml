@@ -101,6 +101,8 @@ Rectangle {
     readonly property bool isNodeTransforming:
             root.isNodeDragging || root.isNodeResizing
     property point _pendingConnectionHit: Qt.point(0, 0)
+    property double _pendingConnectionOriginX: 0.0
+    property double _pendingConnectionOriginY: 0.0
     property real _pendingConnectionRadius: 0
     property bool _connectionHitPending: false
     property bool _viewportUpdatePending: false
@@ -372,9 +374,12 @@ Rectangle {
         ) {
             var connectionId = 0
             if (root.connectionModel) {
-                connectionId = root.connectionModel.hit_test_connection(
-                    contentX,
-                    contentY,
+                var renderPos = viewport.screenToRender(localX, localY)
+                connectionId = root.connectionModel.hit_test_connection_render(
+                    viewport.renderOriginX,
+                    viewport.renderOriginY,
+                    renderPos.x,
+                    renderPos.y,
                     10 / Math.max(root.contentScale, 0.12)
                 )
             }
@@ -637,7 +642,13 @@ Rectangle {
                 point.position.y
             )
             if (!root.isNodeTransforming) {
-                root._pendingConnectionHit = Qt.point(contentPos.x, contentPos.y)
+                var renderPos = viewport.screenToRender(
+                    point.position.x,
+                    point.position.y
+                )
+                root._pendingConnectionHit = Qt.point(renderPos.x, renderPos.y)
+                root._pendingConnectionOriginX = viewport.renderOriginX
+                root._pendingConnectionOriginY = viewport.renderOriginY
                 root._pendingConnectionRadius = 10 / Math.max(root.contentScale, 0.12)
                 root._connectionHitPending = true
             }
@@ -655,7 +666,9 @@ Rectangle {
             if (root._connectionHitPending && !root.isNodeTransforming) {
                 root._connectionHitPending = false
                 if (globalHover.hovered) {
-                    root.hoveredConnectionId = root.connectionModel.hit_test_connection(
+                    root.hoveredConnectionId = root.connectionModel.hit_test_connection_render(
+                        root._pendingConnectionOriginX,
+                        root._pendingConnectionOriginY,
                         root._pendingConnectionHit.x,
                         root._pendingConnectionHit.y,
                         root._pendingConnectionRadius

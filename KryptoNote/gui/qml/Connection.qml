@@ -15,14 +15,22 @@ Item {
     property bool _revealActive: false
     signal revealAccepted(int connectionId)
 
-    property real localStartX: connectionItem.model.connStartEdgeX
-            - connectionItem.canvasRoot.renderOriginX
-    property real localStartY: connectionItem.model.connStartEdgeY
-            - connectionItem.canvasRoot.renderOriginY
-    property real localEndX: connectionItem.model.connEndEdgeX
-            - connectionItem.canvasRoot.renderOriginX
-    property real localEndY: connectionItem.model.connEndEdgeY
-            - connectionItem.canvasRoot.renderOriginY
+    property real localStartX:
+            (Number(connectionItem.model.connStartOriginX)
+             - connectionItem.canvasRoot.renderOriginX)
+            + Number(connectionItem.model.connStartLocalX)
+    property real localStartY:
+            (Number(connectionItem.model.connStartOriginY)
+             - connectionItem.canvasRoot.renderOriginY)
+            + Number(connectionItem.model.connStartLocalY)
+    property real localEndX:
+            (Number(connectionItem.model.connEndOriginX)
+             - connectionItem.canvasRoot.renderOriginX)
+            + Number(connectionItem.model.connEndLocalX)
+    property real localEndY:
+            (Number(connectionItem.model.connEndOriginY)
+             - connectionItem.canvasRoot.renderOriginY)
+            + Number(connectionItem.model.connEndLocalY)
     property real localMinX: Math.min(localStartX, localEndX)
     property real localMinY: Math.min(localStartY, localEndY)
     property real localMaxX: Math.max(localStartX, localEndX)
@@ -371,8 +379,10 @@ Item {
     function clipSegmentToRect(segment, rect) {
         var x1 = segment[0];
         var y1 = segment[1];
-        var dx = segment[2] - x1;
-        var dy = segment[3] - y1;
+        var x2 = segment[2];
+        var y2 = segment[3];
+        var dx = x2 - x1;
+        var dy = y2 - y1;
         var p = [-dx, dx, -dy, dy];
         var q = [
             x1 - rect.x,
@@ -382,6 +392,9 @@ Item {
         ];
         var enter = 0.0;
         var leave = 1.0;
+        var enterEdges = [];
+        var leaveEdges = [];
+        var epsilon = Number.EPSILON * 4.0;
         for (var index = 0; index < 4; index++) {
             if (Math.abs(p[index]) <= 0.0000001) {
                 if (q[index] < 0.0) return null;
@@ -389,18 +402,54 @@ Item {
             }
             var amount = q[index] / p[index];
             if (p[index] < 0.0) {
-                enter = Math.max(enter, amount);
+                if (amount > enter + epsilon) {
+                    enter = amount;
+                    enterEdges = [index];
+                } else if (Math.abs(amount - enter) <= epsilon) {
+                    enterEdges.push(index);
+                }
             } else {
-                leave = Math.min(leave, amount);
+                if (amount < leave - epsilon) {
+                    leave = amount;
+                    leaveEdges = [index];
+                } else if (Math.abs(amount - leave) <= epsilon) {
+                    leaveEdges.push(index);
+                }
             }
             if (enter > leave) return null;
         }
+        var clippedStart = clippedPoint(
+            x1, y1, x2, y2, enter, enterEdges, rect
+        );
+        var clippedEnd = clippedPoint(
+            x1, y1, x2, y2, leave, leaveEdges, rect
+        );
         return [
-            x1 + enter * dx,
-            y1 + enter * dy,
-            x1 + leave * dx,
-            y1 + leave * dy
+            clippedStart[0], clippedStart[1], clippedEnd[0], clippedEnd[1]
         ];
+    }
+
+    function clippedPoint(x1, y1, x2, y2, amount, edges, rect) {
+        var point = [
+            stableInterpolation(x1, x2, amount),
+            stableInterpolation(y1, y2, amount)
+        ];
+        // At extreme spans both intersections can round to the same parameter.
+        // Preserve the boundary that produced each parameter instead of trying
+        // to recover a small viewport coordinate from huge endpoint products.
+        for (var index = 0; index < edges.length; index++) {
+            if (edges[index] === 0) point[0] = rect.x;
+            else if (edges[index] === 1) point[0] = rect.x + rect.width;
+            else if (edges[index] === 2) point[1] = rect.y;
+            else if (edges[index] === 3) point[1] = rect.y + rect.height;
+        }
+        return point;
+    }
+
+    function stableInterpolation(fromValue, toValue, amount) {
+        if (fromValue === toValue || amount <= 0.0) return fromValue;
+        if (amount >= 1.0) return toValue;
+        return fromValue * (1.0 - amount) + toValue * amount;
     }
 
     function lineGeometry(start, end) {
